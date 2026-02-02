@@ -3,7 +3,8 @@
 Hệ thống giám sát thông minh hỗ trợ nhận diện hành vi ADL (Activity of Daily Living), phát hiện sự cố và cảnh báo an ninh bằng AI.
 
 ### Demo Hoạt Động
-![Demo HAVEN](demo.mp4)
+### Demo Hoạt Động
+<!-- Demo video removed for lightweight repo -->
 
 ### Bảng Phân Tích Dữ Liệu
 ![Dashboard Analytics](backend/outputs/output1.png)

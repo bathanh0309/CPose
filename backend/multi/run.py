@@ -142,8 +142,9 @@ class SequentialRunner:
         orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         print(f"   {total_frames} frames, {fps:.1f} FPS, {orig_w}x{orig_h}")
         
-        # Master logic: Only cam1 creates new IDs
-        is_master = (cam_index == 0)
+        # Master logic: Only master_camera creates new IDs
+        master_camera = self.config.get('master_camera', 'cam2')  # Default cam2
+        is_master = (cam_id == master_camera)
         if is_master:
             print(f"   MASTER mode - Creating new IDs")
             self.reid_db.new_ids_allowed = True

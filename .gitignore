@@ -172,6 +172,11 @@ dist/
 # Test recordings
 test_recordings/
 *.avi
+*.mp4
+*.gif
+
+# Recordings
+recordings/
 
 # Coverage reports
 .coverage.*

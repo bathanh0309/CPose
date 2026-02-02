@@ -8,14 +8,19 @@
 # ============================================================
 
 # ============================================================
+# MASTER CAMERA - CHỈ CAMERA NÀY TẠO GLOBAL ID MỚI
+# ============================================================
+master_camera: "cam2"  # Cam2 là master, cam3/4 chỉ match
+
+# ============================================================
 # CAMERAS - MI VIDEO L 1 CAMERA ENTRY
 # Th t x l: phu1 -> phu2 -> unk1 -> phu3 -> unk2 -> phu4 -> phu5 -> unk3
 # ============================================================
 cameras:
-  # --- CAM1---
+  # --- CAM1 (DISABLED - Cam2 is Master now) ---
   - id: "cam1"
     name: "Camera 1 - Phu 1"
-    enabled: true
+    enabled: false  # Cam1 disabled, Cam2 is master
     source_type: "video"
     video_path: "D:/HAVEN/backend/data/multi-camera/cam1/phu1.mp4"
     rtsp_url: ""

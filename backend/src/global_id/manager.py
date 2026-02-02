@@ -1,386 +1,646 @@
-﻿"""
-HAVEN GlobalIDManager - Dual-Master Logic for Multi-Camera ReID
+"""
+Global ID Manager - Cam2 Master Edition
 
 Key Features:
-- Dual-master cameras can create new Global IDs
-- Non-master cameras can only MATCH or assign TEMP IDs
-- Shared gallery across all cameras
-- Two-threshold decision logic
-- Spatiotemporal filtering
-- Multi-prototype memory with EMA update
-
-Author: HAVEN Team
-Version: 2.0
+1. ONLY Camera 2 creates new Global IDs (sequential: 1, 2, 3...)
+2. Camera 3/4 can only MATCH existing IDs or return UNKNOWN
+3. Anti-flicker: stabilization + cooldown for re-attachment
+4. Open-set: Two-threshold association (strong/weak/pending)
+5. Spatiotemporal gating using camera graph
+6. Gallery update (EMA) for domain shift adaptation
+7. Persistent storage (SQLite)
 """
+
 import numpy as np
+import time
+import sqlite3
+import pickle
+import logging
+from typing import Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
-from enum import Enum
-from collections import defaultdict
+from collections import defaultdict, deque
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
-class MatchReason(Enum):
-    """Reason for global ID assignment."""
-    MATCHED = "MATCHED"              # Matched existing ID
-    MASTER_NEW = "MASTER_NEW"        # Master camera created new ID
-    NON_MASTER_TEMP = "NON_MASTER_TEMP"  # Non-master assigned temp
-    REJECTED = "REJECTED"            # Below reject threshold
-    UNCERTAIN = "UNCERTAIN"          # In uncertain zone
+@dataclass
+class Track:
+    """Represents a local track in a camera"""
+    track_id: int
+    camera_id: str
+    first_seen: float
+    last_seen: float
+    embeddings: List[np.ndarray] = field(default_factory=list)
+    bboxes: List[List[float]] = field(default_factory=list)
+    confidences: List[float] = field(default_factory=list)
+    frame_count: int = 0
+    is_stable: bool = False
+    quality_frames: int = 0
 
 
 @dataclass
 class GlobalIdentity:
-    """Represents a global identity in the gallery."""
+    """Represents a global identity across cameras"""
     global_id: int
-    embeddings: List[np.ndarray] = field(default_factory=list)
-    prototype: Optional[np.ndarray] = None
-    created_by_camera: int = 0
-    created_at_frame: int = 0
-    last_seen_camera: int = 0
-    last_seen_frame: int = 0
-    match_count: int = 0
-    quality_scores: List[float] = field(default_factory=list)
-    
-    def update_prototype(self, new_embedding: np.ndarray, alpha: float = 0.3, max_prototypes: int = 5):
-        """Update prototype with EMA and maintain top-K embeddings."""
-        # Add new embedding
-        self.embeddings.append(new_embedding)
-        
-        # Keep only top-K by quality (FIFO if quality not available)
-        if len(self.embeddings) > max_prototypes:
-            self.embeddings = self.embeddings[-max_prototypes:]
-        
-        # EMA update for prototype
-        if self.prototype is None:
-            self.prototype = new_embedding.copy()
-        else:
-            self.prototype = alpha * new_embedding + (1 - alpha) * self.prototype
-            # Normalize
-            norm = np.linalg.norm(self.prototype)
-            if norm > 0:
-                self.prototype = self.prototype / norm
+    gallery_embedding: np.ndarray
+    camera_history: Dict[str, float] = field(default_factory=dict)  # camera_id -> last_seen_time
+    creation_time: float = 0.0
+    creation_camera: str = ""
+    total_appearances: int = 0
+    update_count: int = 0
 
 
 @dataclass
-class MatchResult:
-    """Result of global ID assignment."""
-    global_id: int
-    reason: MatchReason
+class PendingMatch:
+    """Pending match decision"""
+    track_id: int
+    camera_id: str
+    candidate_global_id: Optional[int]
     score: float
-    matched_id: Optional[int] = None
+    start_time: float
+    frame_count: int
+    embeddings: List[np.ndarray] = field(default_factory=list)
+
+
+class CameraGraph:
+    """Camera graph for spatiotemporal gating"""
+    
+    def __init__(self, edges: List[dict]):
+        self.edges = {}
+        for edge in edges:
+            key = (edge['from'], edge['to'])
+            self.edges[key] = {
+                'min_time': edge['min_time'],
+                'max_time': edge['max_time']
+            }
+    
+    def is_valid_transition(
+        self,
+        from_camera: str,
+        to_camera: str,
+        time_diff: float
+    ) -> bool:
+        """Check if transition time is valid"""
+        key = (from_camera, to_camera)
+        if key not in self.edges:
+            # No constraint defined, allow
+            return True
+        
+        edge = self.edges[key]
+        return edge['min_time'] <= time_diff <= edge['max_time']
 
 
 class GlobalIDManager:
     """
-    Manages global ID assignment for multi-camera person ReID.
+    Global ID Manager with Cam2 as Master
     
-    Dual-Master Logic:
-    - Master cameras (e.g., cam1, cam2) can create NEW global IDs
-    - Non-master cameras can only MATCH or assign TEMP ID = 0
-    - Gallery is SHARED across all cameras
-    
-    Two-Threshold Decision:
-    - score >= accept_threshold: MATCH (confident)
-    - score < reject_threshold: NEW or TEMP (confident new person)
-    - else: UNCERTAIN zone (need more evidence)
+    Architecture:
+    - Master camera (cam2): Creates sequential Global IDs (1, 2, 3...)
+    - Slave cameras (cam3, cam4): Only match or return UNKNOWN
     """
     
-    TEMP_ID = 0  # Temporary ID for non-master cameras
+    def __init__(self, config: dict):
+        self.config = config
+        
+        # Master camera
+        self.master_camera = config.get('master_camera', 'cam2')
+        
+        # Thresholds
+        self.strong_threshold = config.get('global_id', {}).get('strong_threshold', 0.65)
+        self.weak_threshold = config.get('global_id', {}).get('weak_threshold', 0.45)
+        
+        # Anti-flicker
+        self.min_frames_stable = config.get('global_id', {}).get('min_frames_stable', 15)
+        self.min_quality_frames = config.get('global_id', {}).get('min_quality_frames', 10)
+        self.cooldown_seconds = config.get('global_id', {}).get('cooldown_seconds', 10)
+        self.max_cooldown_tracks = config.get('global_id', {}).get('max_cooldown_tracks', 50)
+        
+        # Gallery update
+        self.enable_gallery_update = config.get('global_id', {}).get('enable_gallery_update', True)
+        self.gallery_update_alpha = config.get('global_id', {}).get('gallery_update_alpha', 0.3)
+        self.update_threshold = config.get('global_id', {}).get('update_threshold', 0.70)
+        
+        # Pending state
+        self.max_pending_frames = config.get('global_id', {}).get('max_pending_frames', 30)
+        self.pending_decision_frames = config.get('global_id', {}).get('pending_decision_frames', 10)
+        
+        # Camera graph
+        camera_graph_edges = config.get('camera_graph', {}).get('edges', [])
+        self.camera_graph = CameraGraph(camera_graph_edges)
+        
+        # Storage
+        self.storage_path = config.get('global_id', {}).get('storage_path', 'backend/data/global_id_state.db')
+        
+        # State
+        self.next_global_id = 1
+        self.global_identities: Dict[int, GlobalIdentity] = {}
+        
+        # Active tracks per camera
+        self.active_tracks: Dict[str, Dict[int, Track]] = defaultdict(dict)
+        
+        # Cooldown tracks (recently lost, for re-attachment)
+        self.cooldown_tracks: Dict[str, deque] = defaultdict(lambda: deque(maxlen=self.max_cooldown_tracks))
+        
+        # Pending matches
+        self.pending_matches: Dict[Tuple[str, int], PendingMatch] = {}
+        
+        # Unknown counter per camera
+        self.unknown_counters: Dict[str, int] = defaultdict(int)
+        
+        # Track to global ID mapping
+        self.track_to_global: Dict[Tuple[str, int], int] = {}
+        
+        # Load state if exists
+        self._load_state()
+        
+        logger.info(f"GlobalIDManager initialized. Master: {self.master_camera}, Next ID: {self.next_global_id}")
     
-    def __init__(
+    def update_track(
         self,
-        master_camera_ids: List[int],
-        accept_threshold: float = 0.75,
-        reject_threshold: float = 0.50,
-        camera_graph: Optional[Dict[int, List[int]]] = None,
-        max_prototypes: int = 5,
-        ema_alpha: float = 0.3,
-        min_bbox_size: int = 50,
-        min_track_frames: int = 3
-    ):
-        """
-        Initialize GlobalIDManager.
-        
-        Args:
-            master_camera_ids: List of camera IDs that can create new global IDs
-            accept_threshold: Above this = confident match
-            reject_threshold: Below this = confident new person
-            camera_graph: Dict mapping camera_id -> list of adjacent camera IDs
-            max_prototypes: Max embeddings to store per identity
-            ema_alpha: EMA weight for prototype update
-            min_bbox_size: Minimum bbox dimension for quality
-            min_track_frames: Minimum frames before creating new ID
-        """
-        self.master_camera_ids = set(master_camera_ids)
-        self.accept_threshold = accept_threshold
-        self.reject_threshold = reject_threshold
-        self.camera_graph = camera_graph or {}
-        self.max_prototypes = max_prototypes
-        self.ema_alpha = ema_alpha
-        self.min_bbox_size = min_bbox_size
-        self.min_track_frames = min_track_frames
-        
-        # Gallery: global_id -> GlobalIdentity
-        self.gallery: Dict[int, GlobalIdentity] = {}
-        
-        # Track mapping: (camera_id, local_track_id) -> global_id
-        self.track_to_global: Dict[Tuple[int, int], int] = {}
-        
-        # Next global ID counter
-        self._next_global_id = 1
-        
-        # Metrics
-        self.metrics = {
-            'total_ids_created': 0,
-            'ids_by_master': defaultdict(int),
-            'total_matches': 0,
-            'total_rejections': 0,
-            'spatiotemporal_filtered': 0,
-            'non_master_temp': 0,
-            'total_tracks': 0
-        }
-    
-    def is_master_camera(self, camera_id: int) -> bool:
-        """Check if camera is a master camera."""
-        return camera_id in self.master_camera_ids
-    
-    def _compute_similarity(self, embedding: np.ndarray, identity: GlobalIdentity) -> float:
-        """Compute cosine similarity between embedding and identity prototype."""
-        if identity.prototype is None:
-            return 0.0
-        
-        # Normalize
-        emb_norm = embedding / (np.linalg.norm(embedding) + 1e-8)
-        proto_norm = identity.prototype / (np.linalg.norm(identity.prototype) + 1e-8)
-        
-        return float(np.dot(emb_norm, proto_norm))
-    
-    def _filter_by_spatiotemporal(
-        self, 
-        camera_id: int, 
-        candidates: List[Tuple[int, float]]
-    ) -> List[Tuple[int, float]]:
-        """
-        Filter candidates by spatiotemporal constraints.
-        
-        Only keep candidates that were last seen in adjacent cameras.
-        """
-        if not self.camera_graph or camera_id not in self.camera_graph:
-            return candidates
-        
-        adjacent_cameras = set(self.camera_graph.get(camera_id, []))
-        adjacent_cameras.add(camera_id)  # Same camera is always valid
-        
-        filtered = []
-        for gid, score in candidates:
-            identity = self.gallery.get(gid)
-            if identity and identity.last_seen_camera in adjacent_cameras:
-                filtered.append((gid, score))
-            else:
-                self.metrics['spatiotemporal_filtered'] += 1
-        
-        return filtered
-    
-    def _find_best_match(
-        self, 
-        embedding: np.ndarray, 
-        camera_id: int
-    ) -> Tuple[Optional[int], float]:
-        """
-        Find best matching global ID for embedding.
-        
-        Returns:
-            (global_id, score) or (None, 0.0) if no match
-        """
-        if not self.gallery:
-            return None, 0.0
-        
-        # Compute similarity to all identities
-        candidates = []
-        for gid, identity in self.gallery.items():
-            score = self._compute_similarity(embedding, identity)
-            candidates.append((gid, score))
-        
-        # Filter by spatiotemporal constraints
-        candidates = self._filter_by_spatiotemporal(camera_id, candidates)
-        
-        if not candidates:
-            return None, 0.0
-        
-        # Sort by score descending
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        
-        # Deterministic tie-breaking: if equal scores, pick lower ID
-        best_score = candidates[0][1]
-        tied = [c for c in candidates if abs(c[1] - best_score) < 1e-6]
-        if len(tied) > 1:
-            tied.sort(key=lambda x: x[0])  # Sort by ID ascending
-        
-        return tied[0]
-    
-    def _create_new_identity(
-        self, 
-        camera_id: int, 
-        embedding: np.ndarray, 
-        frame_idx: int
-    ) -> int:
-        """Create a new global identity."""
-        gid = self._next_global_id
-        self._next_global_id += 1
-        
-        identity = GlobalIdentity(
-            global_id=gid,
-            embeddings=[embedding.copy()],
-            prototype=embedding.copy(),
-            created_by_camera=camera_id,
-            created_at_frame=frame_idx,
-            last_seen_camera=camera_id,
-            last_seen_frame=frame_idx,
-            match_count=1
-        )
-        
-        self.gallery[gid] = identity
-        
-        # Update metrics
-        self.metrics['total_ids_created'] += 1
-        self.metrics['ids_by_master'][camera_id] += 1
-        
-        return gid
-    
-    def assign_global_id(
-        self,
-        camera_id: int,
-        local_track_id: int,
+        camera_id: str,
+        track_id: int,
         embedding: np.ndarray,
-        quality: float = 1.0,
-        timestamp: float = 0.0,
-        frame_idx: int = 0,
-        num_frames: int = 1,
-        bbox_size: int = 100
-    ) -> Tuple[int, MatchReason, float]:
+        bbox: List[float],
+        confidence: float,
+        timestamp: float
+    ) -> Tuple[Optional[int], str, float]:
         """
-        Assign a global ID to a local track.
+        Update track and get global ID assignment
         
-        Args:
-            camera_id: Camera ID
-            local_track_id: Local track ID from tracker
-            embedding: Feature embedding (normalized)
-            quality: Quality score (0-1)
-            timestamp: Current timestamp
-            frame_idx: Current frame index
-            num_frames: Number of frames this track has been seen
-            bbox_size: Min(width, height) of bounding box
-            
         Returns:
-            (global_id, reason, score)
-            - global_id: Assigned global ID (0 = TEMP)
-            - reason: MatchReason enum
-            - score: Match score (0-1)
+            (global_id, status, confidence)
+            - global_id: int or None (for UNKNOWN)
+            - status: 'known', 'unknown', 'pending', 'new'
+            - confidence: match confidence (0-1)
         """
-        self.metrics['total_tracks'] += 1
+        # Get or create track
+        if track_id not in self.active_tracks[camera_id]:
+            self.active_tracks[camera_id][track_id] = Track(
+                track_id=track_id,
+                camera_id=camera_id,
+                first_seen=timestamp,
+                last_seen=timestamp
+            )
+        
+        track = self.active_tracks[camera_id][track_id]
+        
+        # Update track
+        track.last_seen = timestamp
+        track.embeddings.append(embedding)
+        track.bboxes.append(bbox)
+        track.confidences.append(confidence)
+        track.frame_count += 1
+        
+        # Check quality
+        if self._is_high_quality(bbox, confidence):
+            track.quality_frames += 1
+        
+        # Check stability
+        if track.frame_count >= self.min_frames_stable and track.quality_frames >= self.min_quality_frames:
+            track.is_stable = True
         
         # Check if already assigned
-        track_key = (camera_id, local_track_id)
-        if track_key in self.track_to_global:
-            existing_gid = self.track_to_global[track_key]
-            if existing_gid in self.gallery:
-                # Update prototype
-                self.gallery[existing_gid].update_prototype(
-                    embedding, self.ema_alpha, self.max_prototypes
+        key = (camera_id, track_id)
+        if key in self.track_to_global:
+            global_id = self.track_to_global[key]
+            # Update last seen in global identity
+            if global_id in self.global_identities:
+                self.global_identities[global_id].camera_history[camera_id] = timestamp
+                
+                # Gallery update if confident match
+                if self.enable_gallery_update:
+                    self._maybe_update_gallery(global_id, embedding, 1.0)  # Existing assignment = 1.0
+            
+            return global_id, 'known', 1.0
+        
+        # Try to assign global ID
+        return self._assign_global_id(track, timestamp)
+    
+    def _assign_global_id(
+        self,
+        track: Track,
+        timestamp: float
+    ) -> Tuple[Optional[int], str, float]:
+        """
+        Assign global ID to a track
+        
+        Logic:
+        - Master camera (cam2): Can create new IDs after stabilization
+        - Slave cameras (cam3/cam4): Only match existing IDs or UNKNOWN
+        """
+        # Get average embedding
+        avg_embedding = np.mean(track.embeddings[-10:], axis=0)  # Use last 10 embeddings
+        avg_embedding = avg_embedding / (np.linalg.norm(avg_embedding) + 1e-8)
+        
+        # Step 1: Try cooldown re-attachment (anti-flicker)
+        cooldown_result = self._try_cooldown_reattach(track, avg_embedding, timestamp)
+        if cooldown_result is not None:
+            global_id, score = cooldown_result
+            self.track_to_global[(track.camera_id, track.track_id)] = global_id
+            logger.info(f"[{track.camera_id}] T{track.track_id} re-attached to G{global_id} (cooldown, score={score:.3f})")
+            return global_id, 'known', score
+        
+        # Step 2: Try gallery matching
+        best_match_id, best_score = self._match_gallery(avg_embedding, track.camera_id, timestamp)
+        
+        # Step 3: Decision based on threshold
+        if best_score >= self.strong_threshold:
+            # Strong match
+            if self._validate_spatiotemporal(best_match_id, track.camera_id, timestamp):
+                self.track_to_global[(track.camera_id, track.track_id)] = best_match_id
+                self.global_identities[best_match_id].camera_history[track.camera_id] = timestamp
+                self.global_identities[best_match_id].total_appearances += 1
+                
+                # Gallery update
+                if self.enable_gallery_update and best_score >= self.update_threshold:
+                    self._maybe_update_gallery(best_match_id, avg_embedding, best_score)
+                
+                logger.info(f"[{track.camera_id}] T{track.track_id} matched to G{best_match_id} (score={best_score:.3f})")
+                return best_match_id, 'known', best_score
+            else:
+                logger.warning(f"[{track.camera_id}] T{track.track_id} failed spatiotemporal check for G{best_match_id}")
+                best_match_id = None
+                best_score = 0.0
+        
+        elif best_score > self.weak_threshold:
+            # Pending - need more frames
+            key = (track.camera_id, track.track_id)
+            if key not in self.pending_matches:
+                self.pending_matches[key] = PendingMatch(
+                    track_id=track.track_id,
+                    camera_id=track.camera_id,
+                    candidate_global_id=best_match_id,
+                    score=best_score,
+                    start_time=timestamp,
+                    frame_count=1,
+                    embeddings=[avg_embedding]
                 )
-                self.gallery[existing_gid].last_seen_camera = camera_id
-                self.gallery[existing_gid].last_seen_frame = frame_idx
-                self.gallery[existing_gid].match_count += 1
-                return existing_gid, MatchReason.MATCHED, 1.0
-        
-        # Quality check
-        if bbox_size < self.min_bbox_size:
-            return self.TEMP_ID, MatchReason.NON_MASTER_TEMP, 0.0
-        
-        # Find best match
-        best_gid, best_score = self._find_best_match(embedding, camera_id)
-        
-        is_master = self.is_master_camera(camera_id)
-        
-        # Decision logic
-        if best_gid is not None and best_score >= self.accept_threshold:
-            # MATCH - confident
-            self.track_to_global[track_key] = best_gid
-            self.gallery[best_gid].update_prototype(
-                embedding, self.ema_alpha, self.max_prototypes
-            )
-            self.gallery[best_gid].last_seen_camera = camera_id
-            self.gallery[best_gid].last_seen_frame = frame_idx
-            self.gallery[best_gid].match_count += 1
-            self.metrics['total_matches'] += 1
-            return best_gid, MatchReason.MATCHED, best_score
-        
-        elif best_score < self.reject_threshold:
-            # Below reject threshold - confident new person
-            if is_master:
-                # Master can create new ID
-                if num_frames >= self.min_track_frames:
-                    new_gid = self._create_new_identity(camera_id, embedding, frame_idx)
-                    self.track_to_global[track_key] = new_gid
-                    return new_gid, MatchReason.MASTER_NEW, best_score
-                else:
-                    # Wait for more frames
-                    return self.TEMP_ID, MatchReason.NON_MASTER_TEMP, best_score
+                logger.debug(f"[{track.camera_id}] T{track.track_id} pending for G{best_match_id} (score={best_score:.3f})")
             else:
-                # Non-master: assign TEMP
-                self.metrics['non_master_temp'] += 1
-                return self.TEMP_ID, MatchReason.NON_MASTER_TEMP, best_score
+                pending = self.pending_matches[key]
+                pending.embeddings.append(avg_embedding)
+                pending.frame_count += 1
+                
+                # Decision time
+                if pending.frame_count >= self.pending_decision_frames:
+                    # Re-evaluate with more embeddings
+                    combined_emb = np.mean(pending.embeddings, axis=0)
+                    combined_emb = combined_emb / (np.linalg.norm(combined_emb) + 1e-8)
+                    
+                    new_id, new_score = self._match_gallery(combined_emb, track.camera_id, timestamp)
+                    
+                    if new_score >= self.strong_threshold and self._validate_spatiotemporal(new_id, track.camera_id, timestamp):
+                        # Upgrade to known
+                        self.track_to_global[key] = new_id
+                        self.global_identities[new_id].camera_history[track.camera_id] = timestamp
+                        del self.pending_matches[key]
+                        logger.info(f"[{track.camera_id}] T{track.track_id} upgraded to G{new_id} (score={new_score:.3f})")
+                        return new_id, 'known', new_score
+                    else:
+                        # Downgrade to unknown
+                        del self.pending_matches[key]
+                        return self._handle_unknown(track)
+                
+                elif (timestamp - pending.start_time) * 1000 > self.max_pending_frames * (1000 / 30):
+                    # Timeout
+                    del self.pending_matches[key]
+                    return self._handle_unknown(track)
+            
+            return None, 'pending', best_score
         
+        # Step 4: Weak or no match
         else:
-            # UNCERTAIN zone
-            if is_master and num_frames >= self.min_track_frames * 2:
-                # Master with enough evidence - create new
-                new_gid = self._create_new_identity(camera_id, embedding, frame_idx)
-                self.track_to_global[track_key] = new_gid
-                return new_gid, MatchReason.MASTER_NEW, best_score
+            # Master camera: create new ID if stable
+            if track.camera_id == self.master_camera:
+                if track.is_stable:
+                    return self._create_new_global_id(track, avg_embedding, timestamp)
+                else:
+                    # Not stable yet
+                    return None, 'pending', 0.0
+            
+            # Slave cameras: UNKNOWN
             else:
-                # Wait for more evidence
-                self.metrics['non_master_temp'] += 1
-                return self.TEMP_ID, MatchReason.UNCERTAIN, best_score
+                return self._handle_unknown(track)
     
-    def get_global_id(self, camera_id: int, local_track_id: int) -> Optional[int]:
-        """Get global ID for a track if already assigned."""
-        return self.track_to_global.get((camera_id, local_track_id))
+    def _create_new_global_id(
+        self,
+        track: Track,
+        embedding: np.ndarray,
+        timestamp: float
+    ) -> Tuple[int, str, float]:
+        """Create new global ID (only for master camera)"""
+        if track.camera_id != self.master_camera:
+            raise ValueError(f"Only master camera ({self.master_camera}) can create new IDs!")
+        
+        global_id = self.next_global_id
+        self.next_global_id += 1
+        
+        # Create global identity
+        identity = GlobalIdentity(
+            global_id=global_id,
+            gallery_embedding=embedding.copy(),
+            camera_history={track.camera_id: timestamp},
+            creation_time=timestamp,
+            creation_camera=track.camera_id,
+            total_appearances=1
+        )
+        
+        self.global_identities[global_id] = identity
+        self.track_to_global[(track.camera_id, track.track_id)] = global_id
+        
+        logger.info(f"[{track.camera_id}] T{track.track_id} created new G{global_id}")
+        
+        return global_id, 'new', 1.0
     
-    def get_identity(self, global_id: int) -> Optional[GlobalIdentity]:
-        """Get identity by global ID."""
-        return self.gallery.get(global_id)
+    def _handle_unknown(self, track: Track) -> Tuple[None, str, float]:
+        """Handle unknown person (slave cameras only)"""
+        # Assign UNKNOWN label (not a global ID)
+        # We don't store this in track_to_global to keep generating UNK labels
+        logger.debug(f"[{track.camera_id}] T{track.track_id} marked as UNKNOWN")
+        return None, 'unknown', 0.0
     
-    def get_all_global_ids(self) -> List[int]:
-        """Get all active global IDs."""
-        return list(self.gallery.keys())
+    def _match_gallery(
+        self,
+        embedding: np.ndarray,
+        camera_id: str,
+        timestamp: float
+    ) -> Tuple[Optional[int], float]:
+        """Match embedding against gallery"""
+        if not self.global_identities:
+            return None, 0.0
+        
+        best_id = None
+        best_score = 0.0
+        
+        for global_id, identity in self.global_identities.items():
+            # Compute cosine similarity
+            score = np.dot(embedding, identity.gallery_embedding)
+            
+            if score > best_score:
+                best_score = score
+                best_id = global_id
+        
+        return best_id, best_score
     
-    def summary(self) -> Dict:
-        """Get summary metrics."""
+    def _validate_spatiotemporal(
+        self,
+        global_id: int,
+        target_camera: str,
+        timestamp: float
+    ) -> bool:
+        """Validate spatiotemporal constraints"""
+        if global_id not in self.global_identities:
+            return False
+        
+        identity = self.global_identities[global_id]
+        
+        # Check each previous camera appearance
+        for prev_camera, prev_time in identity.camera_history.items():
+            if prev_camera == target_camera:
+                continue
+            
+            time_diff = timestamp - prev_time
+            
+            if not self.camera_graph.is_valid_transition(prev_camera, target_camera, time_diff):
+                logger.debug(
+                    f"Spatiotemporal violation: G{global_id} {prev_camera}->{target_camera} "
+                    f"time={time_diff:.1f}s"
+                )
+                return False
+        
+        return True
+    
+    def _try_cooldown_reattach(
+        self,
+        track: Track,
+        embedding: np.ndarray,
+        timestamp: float
+    ) -> Optional[Tuple[int, float]]:
+        """Try to re-attach to recently lost tracks (anti-flicker)"""
+        cooldown_list = self.cooldown_tracks[track.camera_id]
+        
+        best_match = None
+        best_score = 0.0
+        
+        for old_track in cooldown_list:
+            # Check time constraint
+            time_diff = timestamp - old_track.last_seen
+            if time_diff > self.cooldown_seconds:
+                continue
+            
+            # Check if old track had global ID
+            old_key = (old_track.camera_id, old_track.track_id)
+            if old_key not in self.track_to_global:
+                continue
+            
+            # Compute IoU with last bbox
+            if track.bboxes and old_track.bboxes:
+                iou = self._compute_iou(track.bboxes[-1], old_track.bboxes[-1])
+            else:
+                iou = 0.0
+            
+            # Compute embedding similarity
+            if old_track.embeddings:
+                old_emb = np.mean(old_track.embeddings[-5:], axis=0)
+                old_emb = old_emb / (np.linalg.norm(old_emb) + 1e-8)
+                emb_sim = np.dot(embedding, old_emb)
+            else:
+                emb_sim = 0.0
+            
+            # Combined score
+            score = 0.7 * emb_sim + 0.3 * iou
+            
+            if score > best_score and score > self.strong_threshold:
+                best_score = score
+                best_match = self.track_to_global[old_key]
+        
+        if best_match is not None:
+            return best_match, best_score
+        
+        return None
+    
+    def _maybe_update_gallery(self, global_id: int, embedding: np.ndarray, score: float):
+        """Update gallery embedding using EMA"""
+        if score < self.update_threshold:
+            return
+        
+        identity = self.global_identities[global_id]
+        
+        # EMA update
+        old_emb = identity.gallery_embedding
+        new_emb = self.gallery_update_alpha * embedding + (1 - self.gallery_update_alpha) * old_emb
+        new_emb = new_emb / (np.linalg.norm(new_emb) + 1e-8)
+        
+        identity.gallery_embedding = new_emb
+        identity.update_count += 1
+        
+        logger.debug(f"Gallery updated for G{global_id} (count={identity.update_count})")
+    
+    def _is_high_quality(self, bbox: List[float], confidence: float) -> bool:
+        """Check if detection is high quality"""
+        x1, y1, x2, y2 = bbox
+        width = x2 - x1
+        height = y2 - y1
+        
+        min_height = self.config.get('reid', {}).get('min_bbox_height', 40)
+        min_width = self.config.get('reid', {}).get('min_bbox_width', 20)
+        min_conf = self.config.get('detection', {}).get('conf_threshold', 0.3)
+        
+        return height >= min_height and width >= min_width and confidence >= min_conf
+    
+    def _compute_iou(self, bbox1: List[float], bbox2: List[float]) -> float:
+        """Compute IoU between two bboxes"""
+        x1_min, y1_min, x1_max, y1_max = bbox1
+        x2_min, y2_min, x2_max, y2_max = bbox2
+        
+        inter_xmin = max(x1_min, x2_min)
+        inter_ymin = max(y1_min, y2_min)
+        inter_xmax = min(x1_max, x2_max)
+        inter_ymax = min(y1_max, y2_max)
+        
+        inter_width = max(0, inter_xmax - inter_xmin)
+        inter_height = max(0, inter_ymax - inter_ymin)
+        inter_area = inter_width * inter_height
+        
+        area1 = (x1_max - x1_min) * (y1_max - y1_min)
+        area2 = (x2_max - x2_min) * (y2_max - y2_min)
+        union_area = area1 + area2 - inter_area
+        
+        if union_area == 0:
+            return 0.0
+        
+        return inter_area / union_area
+    
+    def remove_track(self, camera_id: str, track_id: int):
+        """Remove track and add to cooldown"""
+        if track_id in self.active_tracks[camera_id]:
+            track = self.active_tracks[camera_id][track_id]
+            
+            # Add to cooldown if has global ID
+            key = (camera_id, track_id)
+            if key in self.track_to_global:
+                self.cooldown_tracks[camera_id].append(track)
+                logger.debug(f"[{camera_id}] T{track_id} moved to cooldown")
+            
+            del self.active_tracks[camera_id][track_id]
+    
+    def get_global_label(self, camera_id: str, track_id: int) -> str:
+        """Get display label for a track"""
+        key = (camera_id, track_id)
+        
+        if key in self.track_to_global:
+            global_id = self.track_to_global[key]
+            return f"G{global_id}"
+        
+        if key in self.pending_matches:
+            return "PENDING"
+        
+        # Unknown
+        return "UNKNOWN"
+    
+    def _save_state(self):
+        """Save state to SQLite"""
+        try:
+            Path(self.storage_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            conn = sqlite3.connect(self.storage_path)
+            cursor = conn.cursor()
+            
+            # Create tables
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS identities (
+                    global_id INTEGER PRIMARY KEY,
+                    embedding BLOB,
+                    creation_time REAL,
+                    creation_camera TEXT,
+                    total_appearances INTEGER,
+                    update_count INTEGER
+                )
+            ''')
+            
+            # Save metadata
+            cursor.execute('INSERT OR REPLACE INTO metadata VALUES (?, ?)', ('next_global_id', self.next_global_id))
+            
+            # Save identities
+            cursor.execute('DELETE FROM identities')
+            for global_id, identity in self.global_identities.items():
+                cursor.execute(
+                    'INSERT INTO identities VALUES (?, ?, ?, ?, ?, ?)',
+                    (
+                        global_id,
+                        pickle.dumps(identity.gallery_embedding),
+                        identity.creation_time,
+                        identity.creation_camera,
+                        identity.total_appearances,
+                        identity.update_count
+                    )
+                )
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"State saved: {len(self.global_identities)} identities, next_id={self.next_global_id}")
+        
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+    
+    def _load_state(self):
+        """Load state from SQLite"""
+        if not Path(self.storage_path).exists():
+            logger.info("No saved state found. Starting fresh.")
+            return
+        
+        try:
+            conn = sqlite3.connect(self.storage_path)
+            cursor = conn.cursor()
+            
+            # Load metadata
+            cursor.execute('SELECT value FROM metadata WHERE key = ?', ('next_global_id',))
+            row = cursor.fetchone()
+            if row:
+                self.next_global_id = row[0]
+            
+            # Load identities
+            cursor.execute('SELECT * FROM identities')
+            for row in cursor.fetchall():
+                global_id, embedding_blob, creation_time, creation_camera, total_appearances, update_count = row
+                
+                identity = GlobalIdentity(
+                    global_id=global_id,
+                    gallery_embedding=pickle.loads(embedding_blob),
+                    creation_time=creation_time,
+                    creation_camera=creation_camera,
+                    total_appearances=total_appearances,
+                    update_count=update_count
+                )
+                
+                self.global_identities[global_id] = identity
+            
+            conn.close()
+            
+            logger.info(f"State loaded: {len(self.global_identities)} identities, next_id={self.next_global_id}")
+        
+        except Exception as e:
+            logger.error(f"Failed to load state: {e}")
+    
+    def save_checkpoint(self):
+        """Manual checkpoint save"""
+        self._save_state()
+    
+    def get_statistics(self) -> dict:
+        """Get statistics for logging"""
         return {
-            'total_global_ids': len(self.gallery),
-            'total_ids_created': self.metrics['total_ids_created'],
-            'ids_by_master': dict(self.metrics['ids_by_master']),
-            'total_matches': self.metrics['total_matches'],
-            'total_rejections': self.metrics['total_rejections'],
-            'spatiotemporal_filtered': self.metrics['spatiotemporal_filtered'],
-            'non_master_temp': self.metrics['non_master_temp'],
-            'total_tracks': self.metrics['total_tracks']
+            'next_global_id': self.next_global_id,
+            'total_identities': len(self.global_identities),
+            'active_tracks': {cam: len(tracks) for cam, tracks in self.active_tracks.items()},
+            'cooldown_tracks': {cam: len(tracks) for cam, tracks in self.cooldown_tracks.items()},
+            'pending_matches': len(self.pending_matches)
         }
-    
-    def print_summary(self):
-        """Print summary to console."""
-        print("\n" + "=" * 60)
-        print("GLOBAL ID MANAGER METRICS")
-        print("=" * 60)
-        s = self.summary()
-        print(f"Total Global IDs Created: {s['total_ids_created']}")
-        print(f"  - By Master Cameras: {s['ids_by_master']}")
-        print(f"  - Active: {s['total_global_ids']}")
-        print(f"Total Matches: {s['total_matches']}")
-        print(f"Total Rejections: {s['total_rejections']}")
-        print(f"Spatiotemporal Filtered: {s['spatiotemporal_filtered']}")
-        print(f"Non-Master Temp IDs: {s['non_master_temp']}")
-        print(f"Total Tracks Assigned: {s['total_tracks']}")
-        print("=" * 60)
-

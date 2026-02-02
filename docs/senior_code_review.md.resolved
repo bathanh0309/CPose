@@ -1,0 +1,194 @@
+# 🔴 HAVEN PROJECT - SENIOR CODE REVIEW
+> **Reviewer**: Senior Engineer (khó tính nhất thế giới)  
+> **Date**: 2026-02-02  
+> **Severity Scale**: 🔴 Critical | 🟠 Major | 🟡 Minor | ⚪ Info
+
+---
+
+## 🔴 CRITICAL BUGS - ĐÃ XẢY RA TRONG DỰ ÁN
+
+### 1. DUPLICATE ID ASSIGNMENT (Fixed)
+**File**: `run_final.py:290-320`  
+**Vấn đề**: 2 người trong cùng 1 frame được gán cùng 1 Global ID.
+```python
+# BUG: match_only() trả về cùng ID cho cả 2 tracks
+gid = self.reid_db.match_only(crop, cam_id)  # G1
+gid = self.reid_db.match_only(crop, cam_id)  # G1 again!
+```
+**Root cause**: Không có per-frame exclusive assignment.  
+**Fix**: Thêm `exclude_ids` set và [match_exclusive()](file:///d:/HAVEN/backend/multi/reid.py#111-176) method.
+
+---
+
+### 2. MOTORCYCLE DETECTED AS PERSON (Fixed)
+**File**: `run_final.py:280`  
+**Vấn đề**: Xe máy có 5-8 keypoints được gán Global ID.
+```python
+# BUG: Chỉ check có keypoints, không check số lượng
+if kpts is not None:
+    pending.append((tid, bbox, crop))
+```
+**Fix**: Yêu cầu `valid_kpts >= 12` trước khi assign ID.
+
+---
+
+### 3. ID JUMPS ON FRAME SHAKE (Fixed)
+**File**: `run_final.py:365`  
+**Vấn đề**: Khi camera rung, track_id mới được tạo → nhảy từ G1 sang UNK.
+```python
+# BUG: Không có temporal consistency
+if tid not in local_to_global:
+    # Tạo UNK ngay lập tức
+```
+**Fix**: Thêm 3-frame voting confirmation và spatial IoU check.
+
+---
+
+### 4. INFINITE UNK COUNTER (Fixed)
+**File**: `run_final.py:357`  
+**Vấn đề**: `self.unknown_counter` tăng vô hạn xuyên suốt mọi video.
+```python
+# BUG: Global counter, không reset per video
+self.unknown_counter += 1
+self.track_to_unknown[tid] = self.unknown_counter
+```
+**Fix**: Per-video `video_unk_counter` với max 10.
+
+---
+
+### 5. SLAVE CAMERA ASSIGNS ID WITHOUT FEATURE CHECK (Fixed)
+**File**: `run_final.py:295`  
+**Vấn đề**: cam3 gán ID1 cho người đầu tiên mà không check features.
+```python
+# BUG: Gán ID theo thứ tự phát hiện, không match features
+local_to_global[tid] = matched_gid  # Ngay lập tức!
+```
+**Fix**: Voting confirmation - cần 3 frames consistent match.
+
+---
+
+## 🟠 MAJOR ISSUES - DEAD CODE & ARCHITECTURE
+
+### 6. MASSIVE DEAD CODE IN `backend/src/`
+| Folder | Files | Lines | Status |
+|--------|-------|-------|--------|
+| `reid/` | 6 files | ~2500 | ❌ UNUSED |
+| `global_id/` | 3 files | ~42k bytes | ❌ UNUSED |
+| `core/` | 11 files | ~75k bytes | ❌ Chỉ cho FastAPI mode |
+| `config/` | 4 files | ~18k bytes | ❌ UNUSED by run_final |
+| `adl/` | 4 files | ~15k bytes | ❌ Dùng `multi/adl.py` thay thế |
+
+**Reality**: `run_final.py` chỉ import từ `multi/*.py`:
+```python
+from multi.reid import MasterSlaveReIDDB
+from multi.adl import TrackState, classify_posture
+from multi.visualize import draw_skeleton
+```
+
+**Kết luận**: 80% của `backend/src/` là DEAD CODE!
+
+---
+
+### 7. DUPLICATE RUNNERS
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/run_final.py` | 520 | Active runner |
+| `multi/run.py` | 486 | Old duplicate |
+| `src/main.py` | 250 | FastAPI (different use) |
+
+**Recommendation**: Xóa `multi/run.py`, chỉ giữ `run_final.py`.
+
+---
+
+### 8. FEATURES STORED IN RAM ONLY
+**File**: `multi/reid.py:83`
+```python
+self.persons = {}  # In-memory only!
+```
+**Impact**: Mất toàn bộ features khi restart.  
+**Should be**: Persist to SQLite hoặc pickle.
+
+---
+
+### 9. NO BRIGHTNESS NORMALIZATION
+**File**: `multi/reid.py:25`
+```python
+hsv = cv2.cvtColor(img_crop, cv2.COLOR_BGR2HSV)
+# No histogram equalization!
+```
+**Impact**: cam3 có ánh sáng chói → features khác hoàn toàn cam2.  
+**Fix**: Add `cv2.equalizeHist()` before feature extraction.
+
+---
+
+## 🟡 MINOR ISSUES
+
+### 10. HARDCODED VALUES
+```python
+CONFIRM_FRAMES = 3  # Should be in config
+BBOX_IOU_THRESHOLD = 0.3  # Should be in config
+valid_kpts >= 12  # Magic number
+```
+
+### 11. NO ERROR HANDLING FOR VIDEO
+```python
+cap = cv2.VideoCapture(video_path)
+# No check if cap.isOpened()!
+```
+
+### 12. UNUSED IMPORTS IN main.py
+```python
+from .api.routes import router, init_routes  # init_routes maybe unused
+```
+
+---
+
+## ⚪ RECOMMENDATIONS
+
+### Cleanup Priority:
+1. **DELETE** `backend/src/reid/` (dead code)
+2. **DELETE** `backend/src/global_id/` (dead code)
+3. **DELETE** `backend/multi/run.py` (duplicate)
+4. **KEEP** only these for multi-camera:
+   - `run_final.py`
+   - `multi/reid.py`
+   - `multi/adl.py`
+   - `multi/visualize.py`
+
+### Add Feature Persistence:
+```python
+def save_features(self, path):
+    import pickle
+    with open(path, 'wb') as f:
+        pickle.dump(self.persons, f)
+
+def load_features(self, path):
+    import pickle
+    with open(path, 'rb') as f:
+        self.persons = pickle.load(f)
+```
+
+### Add Brightness Normalization:
+```python
+def extract(self, img_crop):
+    # Normalize brightness first
+    lab = cv2.cvtColor(img_crop, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = cv2.equalizeHist(l)
+    lab = cv2.merge([l, a, b])
+    normalized = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    # Then extract features
+```
+
+---
+
+## SUMMARY
+
+| Category | Count |
+|----------|-------|
+| 🔴 Critical (Fixed) | 5 |
+| 🟠 Major (Need action) | 4 |
+| 🟡 Minor | 3 |
+| Dead code lines | ~4000+ |
+
+**Verdict**: Project có quá nhiều dead code và duplicate. Cần dọn dẹp triệt để trước khi production.

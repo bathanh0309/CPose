@@ -147,7 +147,8 @@ snapshots/
 !frontend/static/*.jpg
 !frontend/static/*.png
 !backend/outputs/*.png
-!backend/outputs/*.jpg
+!backend/outputs/*.png
+!docs/architecture/*.png
 !demo.mp4
 
 # ==================

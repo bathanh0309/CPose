@@ -17,7 +17,7 @@ master_camera: "cam2"
 # ============================================================
 data_source:
   mode: 'folder'
-  data_root: 'D:/HAVEN/backend/data/multi-camera'
+  data_root: 'D:/HavenNet/data/multi-camera'
   video_extensions: ['.mp4', '.avi', '.mkv', '.mov']
   watch_mode: false
 
@@ -51,7 +51,7 @@ cameras:
 yolo:
   pose_model: "yolo11n-pose.pt"
   detect_model: "yolo11n.pt"
-  conf_threshold: 0.6  # Tăng lên để tránh nhận nhầm xe máy
+  conf_threshold: 0.6
   iou_threshold: 0.45
   device: "cuda"
   img_size: 640
@@ -60,20 +60,13 @@ yolo:
 # ReID (Re-Identification) - ENHANCED
 # ============================================================
 reid:
-  # Matching thresholds - Đã giảm để match tốt hơn
-  threshold: 0.65            # Giảm từ 0.75 xuống 0.65
-  strong_threshold: 0.75     # Giảm từ 0.80 xuống 0.75
-  weak_threshold: 0.55       # Giảm từ 0.65 xuống 0.55
-  
-  # Feature storage - TỐI ĐA để cam2 học nhiều features
-  max_features: 1000         # Tăng lên 1000
-  min_features_before_slave: 50  # Cam2 phải có ít nhất 50 features trước khi cam3/cam4 match
-  
-  # EMA update cho domain adaptation
+  threshold: 0.65
+  strong_threshold: 0.75
+  weak_threshold: 0.55
+  max_features: 1000
+  min_features_before_slave: 50
   update_interval: 2
   ema_alpha: 0.3
-  
-  # Anti-flicker
   min_frames_stable: 15
   cooldown_seconds: 10
 
@@ -101,7 +94,7 @@ dangerous_objects:
 display:
   width: 640
   height: 480
-  window_layout: "4_windows"  # 4 cửa sổ riêng biệt
+  window_layout: "4_windows"
   show_fps: true
   show_frame_count: true
 
@@ -109,6 +102,6 @@ display:
 # OUTPUT
 # ============================================================
 output:
-  dir: "D:/HAVEN/backend/database/recordings"
-  database_path: "D:/HAVEN/backend/database/haven_reid.db"
+  dir: "D:/HavenNet/backend/database/recordings"
+  database_path: "D:/HavenNet/backend/database/haven_reid.db"
   log_level: "INFO"

@@ -3,8 +3,10 @@
 Hệ thống giám sát thông minh hỗ trợ nhận diện hành vi ADL (Activity of Daily Living), phát hiện sự cố và cảnh báo an ninh bằng AI.
 
 
-### Bảng Phân Tích Dữ Liệu
-![Dashboard Analytics](backend/outputs/output1.png)
+![Pipelined Architecture](./docs/architecture/final.png)
+
+## Demo Video
+![Demo GIF](output.gif)
 
 ---
 
@@ -54,15 +56,32 @@ Hệ thống giám sát thông minh hỗ trợ nhận diện hành vi ADL (Activ
 
 ---
 
-## Hướng Dẫn Sử Dụng
+## End-to-End Pipeline
 
-### Chạy nguồn video
-Sử dụng để kiểm thử với file video có sẵn.
+### Step 1: Đăng ký khuôn mặt (Face Enrollment)
 ```bash
-.\sequential.bat
+# Qua webcam (3 góc: front/left/right)
+python -m backend.src.reid.face_enrollment --person-id "APhu" --source webcam
+
+# Từ video file
+python -m backend.src.reid.face_enrollment --person-id "APhu" --source "data/multi-camera/cam2/video2.1.mp4"
+
+# Xem danh sách đã đăng ký
+python -m backend.src.reid.face_enrollment --person-id "x" --source webcam --list
 ```
 
-### Phím Tắt
+### Step 2: Chạy Multi-Camera Pipeline (Pose + ADL + ReID)
+```bash
+.\scripts\run_haven.bat
+```
+
+### Step 3: Dashboard
+```bash
+python -m backend.src.main
+# → http://localhost:8000
+```
+
+### Phím Tắt (khi chạy pipeline)
 | Phím | Chức năng |
 |------|-----------|
 | Q | Thoát chương trình |
@@ -75,23 +94,34 @@ Sử dụng để kiểm thử với file video có sẵn.
 ## Cấu Trúc Thư Mục
 
 ```
-D:/HAVEN/
+D:/HavenNet/
 ├── backend/
-│   ├── data/multi-camera/     # Videos đầu vào (cam1/, cam2/, cam3/, cam4/)
-│   ├── database/              # SQLite database
-│   ├── models/                # YOLO models
-│   ├── multi/                 # Core runner code
-│   └── outputs/               # Output videos, logs, screenshots
-├── configs/                   # Configuration files
-├── output.mp4                 # Video recording output
-├── sequential.bat             # Main runner script
-└── README.md                  # Documentation
+│   ├── core/                  # GlobalIDManager
+│   ├── storage/               # Persistence + VectorDB
+│   ├── multi/                 # Multi-camera runner (main entry)
+│   ├── src/                   # FastAPI backend + AI modules
+│   │   └── reid/              # ReID + Face Enrollment
+│   ├── models/                # YOLO model weights
+│   ├── database/              # SQLite database + embeddings
+│   └── tests/                 # Unit tests
+├── frontend/public/           # Dashboard (HTML/JS/CSS)
+├── data/
+│   ├── multi-camera/          # Camera videos (cam1-cam4)
+│   ├── face-db/               # Face embeddings database
+│   └── test-videos/           # Test video files
+├── docs/                      # All documentation
+├── configs/                   # Unified config (YAML)
+├── scripts/                   # Runner batch scripts
+├── .env                       # Environment variables
+├── requirements.txt           # Python dependencies
+└── README.md                  # This file
 ```
 
 ---
 
 ## Output
 
-- **CSV Log:** `D:\HAVEN\backend\outputs\log.csv`
-- **Database:** `D:\HAVEN\backend\database\haven_reid.db`
-- **Video:** `D:\HAVEN\output.mp4` (khi nhấn G để ghi hình)
+- **Database:** `backend/database/haven_reid.db`
+- **Video:** `output.mp4` (khi nhấn G để ghi hình)
+
+

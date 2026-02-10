@@ -172,8 +172,10 @@ dist/
 # Test recordings
 test_recordings/
 *.avi
+!output.mp4
 *.mp4
 *.gif
+!output.gif
 
 # Recordings
 recordings/

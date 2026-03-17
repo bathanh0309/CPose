@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RTSP Monitor — 4-Channel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<!-- ── Banner ── -->
+<div class="banner">
+    <span class="banner-dot">●</span>
+    <span class="banner-title">RTSP MONITOR</span>
+    <span class="banner-sub">4-CHANNEL · YOLOV8 HUMAN DETECTION</span>
+    <span class="banner-clock" id="clock">—</span>
+</div>
+
+<div class="body">
+
+    <!-- Camera grid (built by JS) -->
+    <div class="cam-grid" id="camGrid"></div>
+
+    <!-- Right panel -->
+    <div class="right-panel">
+
+        <!-- Stream Config -->
+        <div class="collapsible-block" id="configBlock">
+            <div class="collapsible-header" onclick="toggleBlock('configBlock')">
+                <span class="section-title">⚙ STREAM CONFIG</span>
+                <span class="collapse-arrow open" id="configBlock-arrow">▼</span>
+            </div>
+            <div class="collapsible-body" id="configBlock-body">
+                <div id="sourceConfigs"></div>
+                <div class="btn-row">
+                    <button class="btn btn-start" id="mainToggleBtn" onclick="toggleStream()">▶ START ALL</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info & Detection -->
+        <div class="collapsible-block" id="infoBlock">
+            <div class="collapsible-header" onclick="toggleBlock('infoBlock')">
+                <span class="section-title">📋 INFO &amp; DETECTION</span>
+                <span class="collapse-arrow open" id="infoBlock-arrow">▼</span>
+            </div>
+            <div class="collapsible-body" id="infoBlock-body">
+                <table class="info-table">
+                    <thead>
+                        <tr><th>CAM</th><th>STATUS</th><th>👤</th><th>DETECT</th></tr>
+                    </thead>
+                    <tbody id="infoBody">
+                        <tr>
+                            <td style="font-family:Consolas;font-size:10px">CAM-01</td>
+                            <td class="st-offline">OFFLINE</td>
+                            <td class="person-count-cell no-person">—</td>
+                            <td><label class="toggle"><input type="checkbox" checked onchange="toggleDetection(0,this.checked)"><span class="toggle-slider"></span></label></td>
+                        </tr>
+                        <tr>
+                            <td style="font-family:Consolas;font-size:10px">CAM-02</td>
+                            <td class="st-offline">OFFLINE</td>
+                            <td class="person-count-cell no-person">—</td>
+                            <td><label class="toggle"><input type="checkbox" checked onchange="toggleDetection(1,this.checked)"><span class="toggle-slider"></span></label></td>
+                        </tr>
+                        <tr>
+                            <td style="font-family:Consolas;font-size:10px">CAM-03</td>
+                            <td class="st-offline">OFFLINE</td>
+                            <td class="person-count-cell no-person">—</td>
+                            <td><label class="toggle"><input type="checkbox" checked onchange="toggleDetection(2,this.checked)"><span class="toggle-slider"></span></label></td>
+                        </tr>
+                        <tr>
+                            <td style="font-family:Consolas;font-size:10px">CAM-04</td>
+                            <td class="st-offline">OFFLINE</td>
+                            <td class="person-count-cell no-person">—</td>
+                            <td><label class="toggle"><input type="checkbox" checked onchange="toggleDetection(3,this.checked)"><span class="toggle-slider"></span></label></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Detection Log -->
+        <div class="collapsible-block" id="logBlock">
+            <div class="collapsible-header" onclick="toggleBlock('logBlock')">
+                <span class="section-title">🗂 DETECTION LOG</span>
+                <span class="collapse-arrow open" id="logBlock-arrow">▼</span>
+            </div>
+            <div class="collapsible-body" id="logBlock-body">
+                <div class="log-header-row">
+                    <span style="font-size:10px;color:var(--muted)" id="logCount">0 events</span>
+                    <button class="btn-clear" onclick="clearLogs()">🗑 Clear</button>
+                </div>
+                <div class="log-list" id="logList">
+                    <div class="log-empty">No detections yet.</div>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /right-panel -->
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+    <span class="lightbox-close">✕</span>
+    <img id="lightboxImg" src="" alt="">
+</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

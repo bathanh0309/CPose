@@ -1,0 +1,141 @@
+# ============================================================
+# HAVEN Multi-Camera Configuration
+# ============================================================
+# Unified config cho hệ thống multi-camera với:
+# - Pose detection + ADL classification
+# - Cross-camera ReID (Color Histogram)
+# - Master-Slave ID assignment
+# - Cam1 = Registration Camera (đăng ký profile + tạo G-ID)
+# - Cam2/3/4 = Slave (chỉ match, không tạo ID mới)
+# ============================================================
+
+# ============================================================
+# MASTER CAMERA - CAMERA ĐĂNG KÝ (TẠO GLOBAL ID + PROFILE)
+# ============================================================
+master_camera: "cam1"  # Cam1 là registration master
+
+# ============================================================
+# PERSON PROFILES - Thông tin đăng ký (1 người hiện tại)
+# ============================================================
+person_profiles:
+  - name: "Anh Phu"
+    age: 25
+    gender: "male"
+
+# ============================================================
+# CAMERAS - MỖI VIDEO LÀ 1 CAMERA ENTRY
+# ============================================================
+cameras:
+  # --- CAM1 (Registration Master) ---
+  - id: "cam1"
+    name: "Camera 1 (Registration)"
+    enabled: true
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam1/video1.mp4"
+    registration: true  # Cam1 đăng ký người mới
+
+  # --- CAM2 (SLAVE - 1 Person) ---
+  - id: "cam2"
+    name: "Camera 2 (Slave) - 1 Person"
+    enabled: true
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam2/video2.1.mp4"
+
+  # --- CAM2 (SLAVE - 2 People) ---
+  - id: "cam2"
+    name: "Camera 2 (Slave) - 2 People"
+    enabled: false  # Video not available
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam2/video2.2.mp4"
+
+  # --- CAM3 (SLAVE - 1 Person) ---
+  - id: "cam3"
+    name: "Camera 3 (Slave) - 1 Person"
+    enabled: true
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam3/video3.1.mp4"
+
+  # --- CAM3 (SLAVE - 2 People) ---
+  - id: "cam3"
+    name: "Camera 3 (Slave) - 2 People"
+    enabled: false  # Video not available
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam3/video3.2.mp4"
+
+  # --- CAM4 (SLAVE - 1 Person) ---
+  - id: "cam4"
+    name: "Camera 4 (Slave) - 1 Person"
+    enabled: true
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam4/video4.1.mp4"
+
+  # --- CAM4 (SLAVE - 2 People) ---
+  - id: "cam4"
+    name: "Camera 4 (Slave) - 2 People"
+    enabled: true
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam4/video4.2.mp4"
+
+  # --- CAM4 (SLAVE - 3 People) ---
+  - id: "cam4"
+    name: "Camera 4 (Slave) - 3 People"
+    enabled: false  # Video not available
+    source_type: "video"
+    video_path: "D:/HavenNet/data/multi-camera/cam4/video4.3.mp4"
+
+# ============================================================
+# YOLO MODEL
+# ============================================================
+yolo:
+  model: "yolo11n-pose.pt"
+  conf_threshold: 0.5  # Balanced detection
+  iou_threshold: 0.7   # Higher IoU for stable tracking (was 0.45)
+  device: "cuda"
+  img_size: 640
+
+# ============================================================
+# ReID (Re-Identification)
+# ============================================================
+reid:
+  # Matching threshold (0.0 - 1.0)
+  # Higher = stricter matching (less false positives)
+  # 0.48 = More lenient - prioritize avoiding duplicate IDs
+  threshold: 0.48  # Reduced to match despite pose/angle variation
+  
+  # Temporal voting - number of frames to confirm ID
+  # Higher = more stable but slower to assign
+  confirm_frames: 15  # Increased to require more evidence before creating new ID
+  
+  update_interval: 1  # Update every frame for better tracking
+  
+  max_features: 100 # số lượng đặc trưng lưu
+  
+  # Minimum keypoints required to assign ID (out of 17)
+  min_keypoints: 12  # Allow some occlusion (was 17)
+
+# ============================================================
+# ADL - Simplified: WALKING / FALL_DOWN only
+# ============================================================
+adl:
+  movement_threshold_ratio: 0.02
+  torso_angle_laying: 25
+  aspect_ratio_laying: 0.7
+  posture_voting_frames: 2
+  keypoint_conf: 0.2
+
+# ============================================================
+# DISPLAY
+# ============================================================
+display:
+  width: 1280
+  height: 720
+  window_name: "HAVEN Sequential"
+
+# ============================================================
+# OUTPUT
+# ============================================================
+output:
+  database_enabled: true
+  database_path: "D:/HavenNet/backend/database/haven_reid.db"
+  log_enabled: true
+  log_level: "INFO"

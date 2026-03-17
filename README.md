@@ -125,3 +125,8 @@ D:/HavenNet/
 - **Video:** `output.mp4` (khi nhấn G để ghi hình)
 
 
+
+---
+
+## Internal Analysis Docs
+- Consolidated analysis documentation: `.agent/analysis.md/README.md`

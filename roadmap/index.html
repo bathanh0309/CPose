@@ -1,0 +1,208 @@
+
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>HAVEN — Research Workspace</title>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<div id="app">
+
+  <!-- ══════════ HEADER ══════════ -->
+  <header id="header">
+    <div class="logo-wrap">
+      <svg class="logo-icon" viewBox="0 0 30 30" fill="none">
+        <rect width="30" height="30" rx="7" fill="#1f6feb"/>
+        <path d="M6 22V10l9-5 9 5v12l-9 4-9-4z" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M6 10l9 5 9-5M15 15v11" stroke="#fff" stroke-width="1.6"/>
+        <circle cx="15" cy="15" r="2.5" fill="#58a6ff"/>
+      </svg>
+      <div>
+        <div class="logo-text">HAVEN</div>
+        <div class="logo-sub">Research Workspace · 2024–2026</div>
+      </div>
+    </div>
+    <div class="header-sep"></div>
+
+    <!-- Search (tree mode only) -->
+    <input id="searchBox" type="text" placeholder="🔍  Tìm kiếm module, paper, metric…" autocomplete="off"/>
+
+    <!-- View toggle — next to search -->
+    <div class="view-tabs">
+      <button class="view-tab active" id="tab-tree" onclick="switchView('tree')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        Danh sách
+      </button>
+      <button class="view-tab" id="tab-map" onclick="switchView('map')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="5" cy="12" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="19" cy="19" r="2"/><line x1="7" y1="12" x2="17" y2="6"/><line x1="7" y1="12" x2="17" y2="18"/></svg>
+        Sơ đồ
+      </button>
+    </div>
+
+    <div class="ml-auto" id="hdr-tree-btns">
+      <button class="hbtn" id="btnExpandAll">Mở hết</button>
+      <button class="hbtn" id="btnCollapseAll">Thu hết</button>
+    </div>
+
+    <div class="ml-auto hidden" id="hdr-map-btns">
+      <button class="hbtn" onclick="mmAddRootNode()">+ Node</button>
+      <button class="hbtn" id="mm-btn-line">Cong</button>
+      <button class="hbtn" onclick="mmTriggerImageInsert()">🖼 Ảnh</button>
+      <button class="hbtn" onclick="mmTriggerVideoInsert()">🎬 Video</button>
+      <button class="hbtn" onclick="mmExportJSON()">⬇ JSON</button>
+      <button class="hbtn" onclick="document.getElementById('mm-file-import').click()">⬆ JSON</button>
+      <button class="hbtn" onclick="mmFitView()">⛶ Fit</button>
+      <button class="hbtn danger" onclick="mmClearAll()">Xóa hết</button>
+    </div>
+
+    <button class="hbtn" id="btnTheme" onclick="toggleTheme()" style="margin-left:8px">☀ Light</button>
+  </header>
+
+  <!-- ══════════ TREE VIEW ══════════ -->
+  <div id="view-tree">
+    <nav id="sidebar">
+      <div id="filterBar">
+        <button class="fbtn active" data-filter="all" onclick="setFilter(this,'all')">Tất cả</button>
+        <button class="fbtn" data-filter="current" onclick="setFilter(this,'current')">🟢 Hiện tại</button>
+        <button class="fbtn" data-filter="plan" onclick="setFilter(this,'plan')">🟡 Kế hoạch</button>
+        <button class="fbtn" data-filter="paper" onclick="setFilter(this,'paper')">🟣 Paper</button>
+      </div>
+      <div id="tree"></div>
+    </nav>
+
+    <main id="detail">
+      <div id="detail-content">
+        <div class="d-empty">
+          <div class="d-empty-icon">🏠</div>
+          <div style="font-size:18px;font-weight:700">HAVEN Pipeline</div>
+          <div style="color:var(--muted);max-width:400px;line-height:1.6;text-align:center">
+            Home Activity Vision &amp; Event Network<br/>
+            Chọn module ở sidebar để xem benchmark, papers, improvement plan.<br/>
+            <span style="opacity:.55;font-size:12px">Bấm <b>+</b> để thêm mục con · Double-click label để sửa tên.</span>
+          </div>
+          <div style="margin-top:16px" class="chip-row">
+            <span class="chip hl">Supervisor: Lê Phong Phú (PhD NCKU)</span>
+            <span class="chip">bathanh0309/HavenNet</span>
+            <span class="chip">Đà Nẵng · 2025–2026</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ══════════ MINDMAP VIEW ══════════ -->
+  <div id="view-map" class="hidden">
+    <div id="mm-container">
+      <!-- dotted grid bg rendered in CSS -->
+      <div id="mm-viewport-wrap">
+        <div id="mm-viewport">
+          <svg id="mm-svg">
+            <defs>
+              <marker id="mm-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/>
+              </marker>
+              <marker id="mm-arrow-sel" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0,10 3.5,0 7" fill="#58a6ff"/>
+              </marker>
+            </defs>
+          </svg>
+          <div id="mm-nodes"></div>
+        </div>
+      </div>
+      <!-- Shortcuts -->
+      <div id="mm-help">
+        <strong>Phím tắt</strong><br>
+        <b>Dbl-click:</b> Sửa chữ<br>
+        <b>Tab:</b> Node con<br>
+        <b>Enter:</b> Cùng cấp<br>
+        <b>Del:</b> Xóa node<br>
+        <b>Space:</b> Thu/Mở<br>
+        <b>Drag chấm:</b> Kéo mũi tên<br>
+        <b>Scroll:</b> Zoom
+      </div>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<!-- ══════════ MODALS ══════════ -->
+
+<!-- Add child modal -->
+<div id="modal-backdrop" class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <div class="modal-title" id="modal-heading">Thêm mục con</div>
+    <label class="modal-label">Tên mục</label>
+    <input class="modal-input" id="modal-text" type="text" placeholder="Ví dụ: Paper Survey (3 papers)" autocomplete="off"/>
+    <label class="modal-label">Trạng thái</label>
+    <select class="modal-input" id="modal-badge">
+      <option value="plan">🟡 Kế hoạch (Plan)</option>
+      <option value="current">🟢 Đang làm (Now)</option>
+      <option value="wip">🔴 Đang tiến hành (WIP)</option>
+      <option value="done">🔵 Hoàn thành (Done)</option>
+      <option value="paper">🟣 Paper</option>
+      <option value="hot">🔥 Hot</option>
+    </select>
+    <div class="modal-actions">
+      <button class="modal-btn" onclick="closeModal()">Hủy</button>
+      <button class="modal-btn primary" onclick="confirmModal()">Thêm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit detail modal (for inline content editing) -->
+<div id="edit-modal-backdrop" class="modal-backdrop" onclick="if(event.target===this)closeEditModal()">
+  <div class="modal-box" style="width:min(680px,96vw)">
+    <div class="modal-title">✏️ Chỉnh sửa chi tiết</div>
+
+    <label class="modal-label">Tiêu đề</label>
+    <input class="modal-input" id="em-title" type="text"/>
+    <label class="modal-label">Mô tả ngắn</label>
+    <input class="modal-input" id="em-subtitle" type="text"/>
+
+    <label class="modal-label">Input (mỗi dòng 1 thông tin)</label>
+    <textarea class="modal-input" id="em-input" rows="3" style="resize:vertical"></textarea>
+    <label class="modal-label">Output</label>
+    <textarea class="modal-input" id="em-output" rows="3" style="resize:vertical"></textarea>
+
+    <label class="modal-label">Key Insights (mỗi dòng 1 insight, bắt đầu bằng ⚠️ hoặc ✅ hoặc 💡)</label>
+    <textarea class="modal-input" id="em-insights" rows="4" style="resize:vertical"></textarea>
+
+    <label class="modal-label">Ghi chú / Code snippet</label>
+    <textarea class="modal-input" id="em-structure" rows="4" style="resize:vertical;font-family:monospace;font-size:12px"></textarea>
+
+    <!-- Media insert -->
+    <label class="modal-label">Chèn ảnh (URL hoặc upload)</label>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input class="modal-input" id="em-img-url" type="text" placeholder="https://... hoặc để trống và upload" style="margin-bottom:0;flex:1"/>
+      <button class="modal-btn" onclick="document.getElementById('em-img-file').click()" style="white-space:nowrap">📁 Upload</button>
+      <button class="modal-btn primary" onclick="addMediaToDetail('image')" style="white-space:nowrap">+ Thêm</button>
+    </div>
+    <input type="file" id="em-img-file" accept="image/*" style="display:none" onchange="handleDetailImageUpload(event)"/>
+
+    <label class="modal-label">Chèn video (URL YouTube/MP4 hoặc upload)</label>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input class="modal-input" id="em-vid-url" type="text" placeholder="https://youtube.com/... hoặc .mp4 URL" style="margin-bottom:0;flex:1"/>
+      <button class="modal-btn" onclick="document.getElementById('em-vid-file').click()" style="white-space:nowrap">📁 Upload</button>
+      <button class="modal-btn primary" onclick="addMediaToDetail('video')" style="white-space:nowrap">+ Thêm</button>
+    </div>
+    <input type="file" id="em-vid-file" accept="video/*" style="display:none" onchange="handleDetailVideoUpload(event)"/>
+
+    <div id="em-media-preview" style="margin-bottom:8px"></div>
+
+    <div class="modal-actions">
+      <button class="modal-btn" onclick="closeEditModal()">Hủy</button>
+      <button class="modal-btn primary" onclick="saveEditModal()">💾 Lưu</button>
+    </div>
+  </div>
+</div>
+
+<!-- Image/Video file inputs for mindmap -->
+<input type="file" id="mm-file-import" accept=".json" style="display:none" onchange="mmImportJSON(event)"/>
+<input type="file" id="mm-img-input" accept="image/*" style="display:none" onchange="mmHandleImageFile(event)"/>
+<input type="file" id="mm-vid-input" accept="video/*" style="display:none" onchange="mmHandleVideoFile(event)"/>
+
+<script src="app.js"></script>
+</body>
+</html>

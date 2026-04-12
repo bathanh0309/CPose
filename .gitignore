@@ -223,6 +223,7 @@ private_key.pem
 # Local push helper scripts
 /scripts/push_*.bat
 resources.txt
+*.git.nested-backup/
 
 # ==================
 # Excluded Folders

@@ -43,11 +43,14 @@ data/logs/*
 !data/logs/.gitkeep
 
 # Models & Weights
-models/weights/*.pt
 models/weights/*.onnx
 models/weights/*.engine
 !models/weights/.gitkeep
 !models/weights/README.md
+models/*.onnx
+models/*.engine
+!models/.gitkeep
+!models/README.md
 
 # OS
 .DS_Store
@@ -216,6 +219,11 @@ private_key.pem
 # 3. Rotate all exposed credentials immediately
 # 4. See SECURITY.md for incident response
 # ==================
+
+# Local push helper scripts
+/scripts/push_*.bat
+resources.txt
+
 # ==================
 # Excluded Folders
 # ==================

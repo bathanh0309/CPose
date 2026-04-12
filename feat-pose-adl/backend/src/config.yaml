@@ -1,0 +1,60 @@
+# Compatibility copy. The shared source of truth is:
+# D:/Capstone_Project/configs/pose_adl.yaml
+
+master_camera: "cam1"
+
+cameras:
+  - id: "cam1"
+    name: "Camera 1"
+    enabled: true
+    source_type: "video"
+    video_path: "data/video-4-cam/cam1/video1.mp4"
+
+  - id: "cam2"
+    name: "Camera 2"
+    enabled: true
+    source_type: "video"
+    video_path: "data/video-4-cam/cam2/video2.1.mp4"
+
+  - id: "cam3"
+    name: "Camera 3"
+    enabled: true
+    source_type: "video"
+    video_path: "data/video-4-cam/cam3/video3.1.mp4"
+
+  - id: "cam4"
+    name: "Camera 4"
+    enabled: true
+    source_type: "video"
+    video_path: "data/video-4-cam/cam4/video4.1.mp4"
+
+yolo:
+  model_path: "models/yolo11n-pose.pt"
+  danger_model_path: "models/yolo11n.pt"
+  conf_threshold: 0.5
+  iou_threshold: 0.7
+  device: "cuda"
+  img_size: 640
+
+reid:
+  threshold: 0.48
+  confirm_frames: 15
+  update_interval: 1
+  max_features: 100
+  min_keypoints: 12
+
+adl:
+  movement_threshold_ratio: 0.02
+  torso_angle_laying: 25
+  aspect_ratio_laying: 0.7
+  posture_voting_frames: 2
+  keypoint_conf: 0.2
+
+display:
+  width: 1280
+  height: 720
+  window_name: "HAVEN Pose + ADL"
+
+output:
+  log_enabled: true
+  log_level: "INFO"

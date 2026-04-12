@@ -1,34 +1,32 @@
-# --- Backend Dependencies ---
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
-pydantic[email]==2.5.3
-pydantic-settings==2.1.0
+# Shared runtime for:
+# - Phase 1 RTSP realtime collection backend
+# - Phase 2 pose + ADL processing worker
 
-# Database
-sqlalchemy==2.0.25
-alembic==1.13.1
-psycopg2-binary==2.9.9
+# --- Infra & config ---
+aiosqlite>=0.20,<1
+pydantic-settings>=2.3,<3
+PyYAML>=6,<7
+python-dotenv>=1,<2
 
-# Computer Vision & AI
-opencv-python>=4.9.0.80
-ultralytics==8.1.0
-numpy==1.26.3
-torch>=2.2.0
-torchvision>=0.17.0
-filterpy==1.4.5  # For tracking (ByteTrack/DeepSORT)
+# --- Web backend (FastAPI) ---
+fastapi>=0.110,<1
+starlette>=0.37,<1
+uvicorn>=0.29,<1
+anyio>=4.0,<5
+h11>=0.14,<1
+python-multipart>=0.0.9,<1
 
-# Utilities
-python-dotenv==1.0.1
-pyyaml==6.0.1
-loguru==0.7.2
-httpx==0.26.0
-python-telegram-bot==20.7
+# --- DL / CV stack ---
+torch>=2.2,<3
+torchvision>=0.17,<1
+scipy>=1.11,<2
+numpy>=1.26,<3
+opencv-python>=4.9,<5
+ultralytics>=8.3,<9
 
-# --- Frontend (Streamlit) Dependencies ---
-streamlit==1.30.0
-pandas==2.2.0
-plotly==5.18.0
-extra-streamlit-components==0.1.70
-
-
+# --- Typing / utils
+annotated-types>=0.7,<1
+typing_extensions>=4.15,<5
+typing-inspection>=0.4,<1
+colorama>=0.4,<1
+click>=8.1,<9

@@ -1,0 +1,1 @@
+# Đọc RTSP, chạy AI model nhỏ, cắt video ngầm

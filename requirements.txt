@@ -16,7 +16,7 @@ anyio>=4.0,<5
 h11>=0.14,<1
 python-multipart>=0.0.9,<1
 
-# --- DL / CV stack ---
+# --- DL / CV stack
 torch>=2.2,<3
 torchvision>=0.17,<1
 scipy>=1.11,<2
@@ -30,3 +30,18 @@ typing_extensions>=4.15,<5
 typing-inspection>=0.4,<1
 colorama>=0.4,<1
 click>=8.1,<9
+
+# Web framework & real-time
+flask>=3.0.0
+flask-socketio>=5.3.6
+flask-cors>=4.0.0
+eventlet>=0.35.0
+
+# Image processing
+Pillow>=10.0.0
+
+# System utilities
+psutil>=5.9.0               # Disk / memory monitoring
+
+# Networking (eventlet dependency)
+dnspython>=2.6.0

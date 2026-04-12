@@ -1,771 +1,320 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NeuralTrans - Data Collection Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        // ==========================================
-        // === PHASE 1: GLOBAL SERVICE & UPLOAD RTSP ===
-        // ==========================================
-
-        // Biến cờ kiểm tra xem cấu hình camera đã được nạp thành công chưa
-        let isConfigLoaded = false;
-
-        // Hàm thay đổi trạng thái UI của tiến trình thu thập dữ liệu chạy ngầm
-        function toggleService(state) {
-            // Nếu người dùng muốn Start nhưng chưa nạp cấu hình -> Chặn lại
-            if (state === 'start' && !isConfigLoaded) {
-                alert('Vui lòng nạp cấu hình nguồn (resources.txt) hợp lệ trước khi Start Service!');
-                return;
-            }
-
-            const statusText = document.getElementById('service-status');
-            if(state === 'start') {
-                statusText.innerHTML = '<span class="text-green-600">Active (Recording)</span>';
-            } else {
-                statusText.innerHTML = '<span class="text-red-600">Stopped</span>';
-            }
-        }
-
-        // Hàm xử lý khi người dùng upload file cấu hình nguồn camera (resources.txt)
-        function handleFileUpload(event) {
-            const file = event.target.files[0];
-            if (!file) return; // Thoát nếu không có file
-            
-            // Cập nhật thông báo đã nạp file thành công
-            document.getElementById('upload-status').innerHTML = `<span class="text-green-600 font-medium">✓ Đã nạp: ${file.name}</span>`;
-            
-            // Sử dụng FileReader API để đọc nội dung file text
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const text = e.target.result;
-                const lines = text.split(/\r?\n/); // Tách file thành từng dòng
-                
-                // Lấy reference đến bảng Camera Status và dropdown Live Monitor
-                const tbody = document.getElementById('camera-status-body');
-                const select = document.getElementById('live-cam-select');
-
-                // Xóa trắng dữ liệu cũ trước khi nạp mới
-                tbody.innerHTML = '';
-                select.innerHTML = '';
-                
-                let camCount = 0;
-                
-                // Duyệt qua từng dòng trong file txt
-                lines.forEach(line => {
-                    if (line.trim() === '') return; // Bỏ qua dòng trống
-                    
-                    // Phân tách dữ liệu theo chuỗi "__" (Tên_Cam__Link_RTSP)
-                    const parts = line.split('__');
-                    if (parts.length >= 2) {
-                        const camName = parts[0].trim();
-                        camCount++;
-                        
-                        // Tạo và chèn dòng mới (tr) vào bảng Camera Status (chỉ show Tên và Trạng thái, ẩn RTSP link để bảo mật)
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td class="p-3 font-medium">${camName}</td>
-                            <td class="p-3"><span class="inline-flex items-center gap-1.5 py-1 px-2 rounded-md text-xs font-medium bg-yellow-50 text-yellow-700">Connecting...</span></td>
-                            <td class="p-3 font-mono">--</td>
-                        `;
-                        tbody.appendChild(tr);
-                        
-                        // Tạo và chèn option mới vào dropdown Live Monitor
-                        const option = document.createElement('option');
-                        option.text = camName;
-                        option.value = camName; 
-                        select.appendChild(option);
-                    }
-                });
-                
-                // Cảnh báo nếu file sai format hoặc không có dữ liệu
-                if(camCount === 0) {
-                    isConfigLoaded = false; // Đánh dấu cấu hình chưa hợp lệ
-                    alert("Không tìm thấy camera nào hợp lệ. Vui lòng kiểm tra lại cấu trúc file!");
-                    document.getElementById('upload-status').innerHTML = '<span class="text-red-500">Lỗi format file</span>';
-                    
-                    // Nếu service đang chạy mà up file sai lên thì tự động dừng service cho an toàn
-                    toggleService('stop'); 
-                } else {
-                    isConfigLoaded = true; // Đánh dấu cấu hình đã nạp thành công
-                }
-            };
-            // Yêu cầu đọc file dưới dạng Text
-            reader.readAsText(file);
-            
-            // Reset giá trị input để có thể chọn lại chính file đó nếu cần
-            event.target.value = '';
-        }
-
-        // ==========================================
-        // === PHASE 2: AUTO LABELING QUEUE ===
-        // ==========================================
-
-        // Quản lý State (Trạng thái) của Phase 2
-        const BACKEND_URL = "http://127.0.0.1:8000";
-
-        let processedFolders = new Set(); // Dùng Set để lưu tên các thư mục đã xử lý (để lookup nhanh với độ phức tạp O(1))
-        let currentVideos = []; // Mảng chứa danh sách các object video được chọn [{name, sizeMB}]
-        let hasSelectedOutputFolder = false; // Cờ đánh dấu người dùng đã chọn Output Folder hay chưa
-        const DEFAULT_OUTPUT_PATH = "data/output_labels";
-        let selectedOutputFolder = DEFAULT_OUTPUT_PATH;
-
-        let pollingTimers = {};
-
-        let clientOutputDirHandle = null;
-
-        // 1. Hàm modal đổi Output Path
-        function showChangePathModal() {
-            document.getElementById('new-path-input').value = selectedOutputPath;
-            document.getElementById('path-error').classList.add('hidden');
-            document.getElementById('change-path-modal').classList.remove('hidden');
-            setTimeout(() => document.getElementById('new-path-input').focus(), 50);
-        }
-
-        function hideChangePathModal() {
-            document.getElementById('change-path-modal').classList.add('hidden');
-        }
-
-        async function confirmChangePath() {
-            const newPath = document.getElementById('new-path-input').value.trim();
-            const errEl = document.getElementById('path-error');
-            if (!newPath) {
-                errEl.textContent = 'Vui lòng nhập đường dẫn.';
-                errEl.classList.remove('hidden');
-                return;
-            }
-            errEl.classList.add('hidden');
-            const btn = document.getElementById('confirm-path-btn');
-            btn.disabled = true;
-            btn.textContent = 'Đang kiểm tra...';
-            try {
-                const res = await fetch('/api/phase2/list-output-folders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ output_folder: newPath }),
-                });
-                if (!res.ok) {
-                    const data = await res.json();
-                    throw new Error(data.detail || 'Đường dẫn không hợp lệ trên server.');
-                }
-                const { processed_folders } = await res.json();
-                processedFolders = new Set(processed_folders);
-                selectedOutputPath = newPath;
-                renderOutputPathUI(newPath);
-                renderQueueUI();
-                hideChangePathModal();
-            } catch (err) {
-                errEl.textContent = '⚠ ' + err.message;
-                errEl.classList.remove('hidden');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Xác nhận';
-            }
-        }
-
-        function renderOutputPathUI(path) {
-            const parts = path.replace(/\\/g, '/').split('/');
-            const short = parts.length > 2 ? '…/' + parts.slice(-2).join('/') : path;
-            document.getElementById('output-folder-name').innerHTML =
-                `<span class="font-mono text-emerald-700 font-medium" title="${path}">${short}</span>
-                <button onclick="showChangePathModal()" class="ml-1 text-xs text-emerald-600 hover:text-emerald-800 border border-emerald-200 hover:bg-emerald-100 px-1.5 py-0.5 rounded transition">Thay đổi</button>`;
-        }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            renderOutputPathUI(DEFAULT_OUTPUT_PATH);
-        });
-
-        // 1. Hàm xử lý khi chọn Output Folder (Sử dụng File System Access API hiện đại)
-        async function handleOutputFolderSelection() {
-            try {
-                // Mở hộp thoại hệ thống yêu cầu người dùng cấp quyền đọc thư mục
-                // Ưu điểm: Chỉ lấy metadata (cấu trúc cây thư mục), KHÔNG load nội dung file vào RAM, chống treo trình duyệt.
-                clientOutputDirHandle = await window.showDirectoryPicker({mode: 'readwrite'});
-                
-                // Cập nhật tên thư mục lên UI và bật cờ
-                document.getElementById('output-folder-name').innerHTML = `<span class="text-green-600 font-medium">✓ ${clientOutputDirHandle.name}</span>`;
-                hasSelectedOutputFolder = true;
-                
-                // Xóa danh sách cũ nếu người dùng chọn lại folder khác
-                processedFolders.clear();
-
-                // Lặp qua các thành phần bên trong thư mục gốc vừa chọn
-                for await (const entry of clientOutputDirHandle.values()) {
-                    // Nếu thành phần đó là một thư mục con (chứ không phải file), lưu tên nó vào Set
-                    if (entry.kind === 'directory') processedFolders.add(entry.name);
-                }
-
-                // Cập nhật lại giao diện bảng (Đối chiếu song song)
-                renderQueueUI();
-                
-            } catch (error) {
-                // Xử lý khi người dùng bấm Hủy (Cancel) hộp thoại hoặc trình duyệt không hỗ trợ API
-                console.log("Permission error:", error);
-                alert("Bạn cần cáp quyền truy cập thư mục để hệ thống có thể lưu kết quả về máy.")
-            }
-        }
-        
-        // 2. Hàm xử lý khi người dùng chọn nhiều file Video (.mp4)
-        async function handleVideoSelection(event) {
-            const files = event.target.files;
-            if (!files.length) return;
-
-            const emptyRow = document.getElementById('empty-queue-row');
-            if (emptyRow) emptyRow.remove();
-            
-            for (const file of files) {
-                if (!file.name.endsWith('.mp4')) continue;
-                
-                if(currentVideos.some(v => v.name === file.name)) {
-                    continue;
-                }
-
-                const formData = new FormData();
-                formData.append("file", file);
-
-                try {
-                    const res = await fetch(`${BACKEND_URL}/api/phase2/upload`, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if(!res.ok) throw new Error("Internet connection error when upload");
-                    const data = await res.json();
-
-                    currentVideos.push({
-                        name: file.name,
-                        sizeMB: data.size_mb ? `${data.size_mb.tofixed(2)} MB` : `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-                        tempPath: data.temp_path   // 🔥 QUAN TRỌNG
-                    });
-                    
-                    renderQueueUI();
-
-                } catch (err) {
-                    console.error("Upload lỗi:", err);
-                }
-            }
-
-            event.target.value = '';
-        }
-
-        // 3. Hàm cốt lõi: Đối chiếu chéo (Cross-check) và vẽ lại giao diện bảng Queue
-        function renderQueueUI() {
-            const tbody = document.getElementById('queue-body');
-            
-            // Nếu có data thì xóa trắng bảng để vẽ lại từ đầu
-            if(currentVideos.length > 0) tbody.innerHTML = '';
-
-            // Duyệt qua mảng video đang có
-            currentVideos.forEach((video, index) => {
-                // Tạo tên folder cần tìm bằng cách xóa đuôi mở rộng (VD: "video1.mp4" -> "video1")
-                const folderName = video.name.replace(/\.[^/.]+$/, "");
-                
-                // Kiểm tra xem folderName này có tồn tại trong Set Output Folder hay không
-                const isProcessed = processedFolders.has(folderName);
-                
-                const tr = document.createElement('tr');
-
-                if (isProcessed) {
-                    // KỊCH BẢN ĐÃ XỬ LÝ (DONE)
-                    tr.className = 'bg-slate-50 opacity-80'; // Làm mờ dòng
-                    tr.innerHTML = `
-                        <td class="p-3 text-center"><input type="checkbox" class="file-checkbox w-4 h-4 cursor-pointer" disabled></td>
-                        <td class="p-3 font-mono text-slate-500">${video.name}</td>
-                        <td class="p-3 text-slate-400">${video.sizeMB}</td>
-                        <td class="p-3 flex items-center justify-between gap-4">
-                            <span class="file-status inline-flex items-center gap-1 text-green-600 font-medium" title="Đã có thư mục: ${folderName}">✓ Done</span>
-                            <button onclick="deleteOutputFolder(this, '${folderName}')" class="text-xs text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2 py-1 rounded transition border border-red-200" title="Xóa folder ${folderName}">
-                                🗑️ Delete Output
-                            </button>
-                        </td>
-                    `;
-                } else {
-                    // KỊCH BẢN CHƯA XỬ LÝ (READY)
-                    tr.innerHTML = `
-                        <td class="p-3 text-center"><input type="checkbox" class="file-checkbox w-4 h-4 cursor-pointer"></td>
-                        <td class="p-3 font-mono font-medium">${video.name}</td>
-                        <td class="p-3 text-slate-500">${video.sizeMB}</td>
-                        <td class="p-3 file-status">
-                            <span class="inline-flex items-center gap-1 text-slate-600 font-medium">⏳ Ready</span>
-                        </td>
-                    `;
-                }
-                tbody.appendChild(tr);
-            });
-        }
-
-        // Hàm lưu kết quả sau khi xử lý xong video xuống Output Folder đã chọn trước đó
-        async function downloadAndSaveToUserDisk(videoNameStem, jsonResultFromBackend, imageBlobFromBackend) {
-            if (! clientOutputDirHandle){
-                console.error("Error: Output folder have not been selected yet");
-                return;
-            }
-
-            try {
-                // 1. create subfolder with the same name as mp4 file in outputfolder
-                const subDirHandle = await clientOutputDirHandle.getDirectoryHandle(videoNameStem, {create: true});
-
-                // 2. save json file in subfolder
-                const jsonFileHandle = await subDirHandle.getFileHandle('detections.json', {create: true});
-                const writableJson = await jsonFileHandle.createWritable(); // open write stream
-
-                await writableJson.write(JSON.stringify(jsonResultFromBackend, null, 2));
-                await writableJson.close();
-                
-                // 3. image
-                let imageNames = [];
-                if(jsonResultFromBackend.detections){
-                    jsonResultFromBackend.detections.forEach(det => {
-                        if (det.bounding_boxes) {
-                            det.bounding_boxes.forEach(box => {
-                                if (box.image_file) imageNames.push(box.image_file.split('/').pop());
-                            });
-                        }
-                    });
-                }
-
-                if (imageNames.length > 0) {
-                    const cropsDirHandle = await subDirHandle.getDirectoryHandle('crops', {create: true});
-
-                    for (const imgName of imageNames) {
-                        try {
-                            // call for Python API
-                            let imgRes = await fetch(`${BACKEND_URL}/api/phase2/get/${videoNameStem}/crops/${imgName}`);
-                            
-                            if(imgRes.ok) {
-                                let blob = await imgRes.blob();
-
-                                let imgHandle = await cropsDirHandle.getFileHandle(imgName, {create: true});
-
-                                let writableImg = await imgHandle.createWritable();
-                                await writableImg.write(blob);
-                                await writableImg.close();
-                            }
-                        } catch (err) {
-                            console.error(`Unstable connection when loading img ${imgName}: `, err);
-                        }
-                    }
-                }
-
-                // 4. notify
-                console.log(`[Success] Save results of ${videoNameStem} successfully in your local device!`)
-                
-                try {
-                    await fetch('/api/phase2/delete-output', 
-                        {method: 'DELETE',
-                        headers: { 'Content-Type': 'application/json'},
-                        body: JSON.stringify({ folder_name: videoNameStem})
-                    });
-                    console.log("Cleared up server processed data.");
-                } catch (e) {
-                    console.error("Error when delete data on server:", e);
-                }
-
-                processedFolders.add(videoNameStem);
-                renderQueueUI();
-            } catch (err) {
-                console.error("Error when saving result files to user's local folder", err)
-            }   
-        }
-
-        // 4. CÁC HÀM TƯƠNG TÁC GIAO DIỆN (UI CONTROLS)
-
-        // Đồng bộ Checkbox: Check All / Uncheck All (Bỏ qua các ô đang bị disabled)
-        function toggleSelectAll(masterCheckbox) {
-            const checkboxes = document.querySelectorAll('.file-checkbox:not(:disabled)');
-            checkboxes.forEach(cb => cb.checked = masterCheckbox.checked);
-        }
-
-        // Validate dữ liệu trước khi hiện Modal Xác nhận chạy (Process)
-        function checkAndShowModal() {
-            if(!clientOutputDirHandle) {
-                alert('Vui lòng nhấn "Select Output Folder" và cấp quyền duyệt file trước khi chạy Process để hệ thống có thể lưu về máy của bạn!');
-                return;
-            }
-
-            const checkboxes = document.querySelectorAll('.file-checkbox:checked:not(:disabled)');
-            if (checkboxes.length === 0) {
-                alert('Vui lòng chọn videos để xử lý!');
-                return;
-            }
-
-            // Gắn số lượng file vào UI của Modal và hiển thị Modal
-            document.getElementById('file-count').innerText = checkboxes.length;
-            document.getElementById('confirm-modal').classList.remove('hidden');
-        }
-
-        // Ẩn Modal Process
-        function hideConfirmModal() { document.getElementById('confirm-modal').classList.add('hidden'); }
-
-        // Bắt đầu giả lập tiến trình xử lý
-        async function startProcessing() {
-            hideConfirmModal();
-            const checkboxes = document.querySelectorAll('.file-checkbox:checked:not(:disabled)');
-            const selectedVideos = Array.from(checkboxes).map(cb => {
-                const name = cb.closest('tr').querySelector('.font-mono').innerText;
-                return currentVideos.find(v => v.name === name);
-            }).filter(Boolean);
-            const tempPaths = selectedVideos.map(v => v.tempPath).filter(Boolean);
-            
-            if (tempPaths.length === 0) {
-                
-                alert('Một số file chưa upload xong. Vui lòng chờ!');
-                return;
-            }
-            checkboxes.forEach(cb => {
-                const row = cb.closest('tr');
-                row.classList.add('is-processing');
-                row.querySelector('.file-status').innerHTML =
-                    '<span class="inline-flex items-center gap-1.5 text-blue-600 font-medium">' +
-                    '<div class="w-3 h-3 rounded-full border-2 border-blue-600 border-t-transparent animate-spin"></div>' +
-                    '⏳Waiting... <span class="job-progress text-xs text-blue-400">0%</span></span>';
-                cb.checked = false;
-                cb.disabled = true;
-            });
-            document.getElementById('select-all').checked = false;
-            try {
-                const res = await fetch('/api/phase2/process', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ videos: tempPaths}),
-                });
-
-                if (!res.ok) {
-                    const err = await res.json();
-                    let errorMsg = 'Process thất bại';
-                    
-                    if (typeof err.detail === 'string') {
-                        errorMsg = err.detail; // Lỗi từ HTTPException thường
-                    } else if (Array.isArray(err.detail)) {
-                        // Bóc tách mảng lỗi 422 của Pydantic FastAPI
-                        errorMsg = err.detail.map(e => `${e.loc.join('.')} - ${e.msg}`).join(', ');
-                    }
-                    
-                    throw new Error(errorMsg);
-                }
-                const { job_ids } = await res.json();
-                // job_ids.forEach((jobId, i) => startPolling(jobId, selectedVideos[i]?.name));
-                job_ids.forEach((jobId, index) => {
-                    const video = selectedVideos[index];
-                    if (video) startPolling(jobId, video.name);
-                });
-            } catch (err) {
-                alert('Lỗi khi gọi API: ' + err.message);
-            }
-        }
-
-        function startPolling(jobId, videoName) {
-            if (pollingTimers[jobId]) clearInterval(pollingTimers[jobId]);
-
-            pollingTimers[jobId] = setInterval(async () => {
-                try {
-                    const res = await fetch(`/api/phase2/status/${jobId}`);
-                    const data = await res.json();
-
-                    // 🔥 tìm đúng row
-                    const rows = document.querySelectorAll('#queue-body tr');
-                    let targetRow = null;
-
-                    rows.forEach(row => {
-                        const name = row.querySelector('.font-mono')?.innerText;
-                        if (name === videoName) targetRow = row;
-                    });
-
-                    if (!targetRow) return;
-
-                    const statusCell = targetRow.querySelector('.file-status');
-                    
-                    if (data.status === 'processing') {
-                        statusCell.innerHTML = '<span class="inline-flex items-center gap-1.5 text-blue-600 font-medium">' +
-                        '<div class="w-3 h-3 rounded-full border-2 border-blue-600 border-t-transparent animate-spin"></div>' +
-                        ' Processing... <span class="job-progress text-xs text-blue-400">' + (data.progress || 0) + '%</span></span>';
-                    } else if (data.status === 'waiting') {
-                        statusCell.innerHTML = '<span class="inline-flex items-center gap-1 text-orange-500 font-medium">⏳ Waiting...</span>';
-                    }
-
-                    if (['done', 'error', 'stopped'].includes(data.status)) {
-                        clearInterval(pollingTimers[jobId]);
-                        delete pollingTimers[jobId];
-                        onJobFinished(videoName, data);
-                    }
-
-                } catch (err) {
-                    console.error(err);
-                }
-            }, 2000);
-        }
-
-        async function onJobFinished(videoName, data) {
-            const videoNameStem = videoName.replace(/\.[^/.]+$/, "");
-
-            for (const row of document.querySelectorAll('#queue-body tr')) {
-                const cell = row.querySelector('.font-mono');
-                if (!cell || cell.innerText !== videoName) continue;
-
-                row.classList.remove('is-processing');
-                const statusCell = row.querySelector('.file-status');
-                const cb = row.querySelector('.file-checkbox');
-                
-                if (data.status === 'done') {
-                    statusCell.innerHTML = `<span class="text-purple-600 font-medium">Downloading & Saving...</span>`;
-                    try {
-                        let resultRes = await fetch(`/api/phase2/result/${videoNameStem}`);
-                        if (resultRes.ok) {
-                            let resultJson = await resultRes.json();
-                            await downloadAndSaveToUserDisk(videoNameStem, resultJson, null);
-                        } 
-                    } catch (err) {
-                        console.error('Error when download result back to user s device:', err);
-                    }
-
-                    // thong bao Done processing
-                    statusCell.innerHTML = `<span class="text-green-600 font-medium">✓ Done (${data.result?.total_detections ?? 0} detections)</span>`;
-                    processedFolders.add(videoName.replace(/\.[^/.]+$/, ''));
-                    row.classList.add('bg-slate-50', 'opacity-80');
-                } else if (data.status === 'error') {
-                    statusCell.innerHTML = `<span class="text-red-500 font-medium">✗ Lỗi: ${data.error || 'Unknown'}</span>`;
-                    if (cb) cb.disabled = false;
-                } else if (data.status === 'stopped') {
-                    statusCell.innerHTML = `<span class="text-yellow-600 font-medium">⏸ Đã dừng</span>`;
-                    if (cb) cb.disabled = false;
-                }
-                break;
-            }
-        }
-
-        // Hiển thị Modal Cảnh báo khi bấm Stop All
-        // function promptStopProcessing() {
-        //     const processingRows = document.querySelectorAll('tr.is-processing');
-        //     if (processingRows.length === 0) {
-        //         alert('Không có tiến trình nào đang chạy!');
-        //         return;
-        //     }
-        //     document.getElementById('stop-count').innerText = processingRows.length;
-        //     document.getElementById('stop-confirm-modal').classList.remove('hidden');
-        // }
-
-        async function confirmStopProcessing() {
-            hideStopModal();
-            try {
-                await fetch('/api/phase2/stop-all', { method: 'POST' });
-            } catch (err) {
-                console.error('Stop all lỗi:', err);
-            }
-            Object.values(pollingTimers).forEach(clearInterval);
-            pollingTimers = {};
-        }
-
-        // Ẩn Modal Stop
-        function hideStopModal() { document.getElementById('stop-confirm-modal').classList.add('hidden'); }
-
-        // Xác nhận Dừng mọi tiến trình đang chạy
-        // function confirmStopProcessing() {
-        //     hideStopModal();
-        //     const processingRows = document.querySelectorAll('tr.is-processing');
-            
-        //     processingRows.forEach(row => {
-        //         // Gỡ bỏ cờ đánh dấu 'is-processing'
-        //         row.classList.remove('is-processing');
-        //         const statusCell = row.querySelector('.file-status');
-        //         const cb = row.querySelector('.file-checkbox');
-                
-        //         // Reset trạng thái hiển thị về lại Ready và mở khóa checkbox
-        //         statusCell.innerHTML = '<span class="inline-flex items-center gap-1 text-slate-600 font-medium">⏳ Ready</span>';
-        //         cb.disabled = false; 
-        //     });
-        // }
-
-        // Xóa thư mục kết quả (Mô phỏng UI)
-        // function deleteOutputFolder(btn, folderName) {
-        //     if(confirm(`Xác nhận xóa thư mục kết quả [ ${folderName} ] trên UI để chạy lại?`)) {
-        //         // Xóa tên thư mục khỏi Set bộ nhớ
-        //         processedFolders.delete(folderName);
-                
-        //         // Render lại bảng, lúc này đối chiếu folderName sẽ ra False -> Chuyển dòng về Ready
-        //         renderQueueUI();
-                
-        //         // NOTE: Thực tế hệ thống sẽ cần gọi fetch() xuống API Backend để xóa vật lý folder trên ổ cứng.
-        //     }
-        // }
-
-        async function deleteOutputFolder(btn, folderName) {
-            if (!confirm(`Xác nhận xóa thư mục kết quả [ ${folderName} ] trên server?`)) return;
-            try {
-                const res = await fetch('/api/phase2/delete-output', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ output_folder: selectedOutputPath, folder_name: folderName }),
-                });
-                if (!res.ok) {
-                    const err = await res.json();
-                    alert('Xóa thất bại: ' + (err.detail || 'Unknown error'));
-                    return;
-                }
-                processedFolders.delete(folderName);
-                renderQueueUI();
-            } catch (err) {
-                alert('Lỗi kết nối: ' + err.message);
-            }
-        }
-    </script>
+    <title>CPose Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script defer src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script defer src="/static/js/app.js"></script>
 </head>
-<body class="bg-slate-50 p-6 font-sans relative min-h-screen">
-    <div class="max-w-7xl mx-auto">
-        <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-200 pb-5">
-            <div>
-                <h1 class="text-3xl font-bold text-slate-800">Data Collection & Auto-Labeling</h1>
-                <p class="text-sm text-slate-500 mt-1">Background Service Status: <strong id="service-status" class="text-slate-500 font-medium">Idle</strong></p>
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-icon">
+                <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="4" y="6" width="40" height="36" rx="10" fill="var(--accent)" fill-opacity="0.14"/>
+                    <circle cx="18" cy="16" r="4" fill="var(--success)"/>
+                    <path d="M16 24L24 18L32 24L26 34H18L16 24Z" fill="var(--accent)"/>
+                    <path d="M14 26L10 38H16L18 33" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M34 26L38 38H32L30 33" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round"/>
+                </svg>
             </div>
-            <div class="mt-4 md:mt-0 flex gap-2">
-                <button onclick="toggleService('start')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium transition shadow-sm">▶ Start Service</button>
-                <button onclick="toggleService('stop')" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded text-sm font-medium transition shadow-sm">⏹ Stop Service</button>
+            <div>
+                <span class="brand-name">CPose</span>
+                <span class="brand-sub">Three-phase pipeline</span>
+            </div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="#" class="nav-item active" data-tab="config">Configuration</a>
+            <a href="#" class="nav-item" data-tab="monitor">Live Monitor</a>
+            <a href="#" class="nav-item" data-tab="analysis">Analysis</a>
+            <a href="#" class="nav-item" data-tab="results">Results</a>
+            <a href="#" class="nav-item" data-tab="pose">Pose and ADL</a>
+        </nav>
+
+        <div class="sidebar-status">
+            <div class="status-row">
+                <span class="dot dot-sm disconnected" id="dot-sock"></span>
+                <span id="sock-lbl">Disconnected</span>
+            </div>
+            <div class="storage-bar-wrap">
+                <div class="storage-label">
+                    <span>Raw video storage</span>
+                    <strong id="storage-text">0 GB</strong>
+                </div>
+                <div class="storage-bar">
+                    <div class="storage-fill" id="storage-fill"></div>
+                </div>
+                <div class="info-row" id="storage-info-detail">No clips available yet</div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <header class="topbar">
+            <h1 id="page-title">System Configuration</h1>
+            <div class="topbar-right">
+                <span class="version-badge">Canonical Flask Workspace</span>
             </div>
         </header>
 
-        <div class="mb-6 bg-white rounded-lg shadow border border-slate-200 p-5 flex flex-col md:flex-row items-center gap-4">
-            <div class="flex-1">
-                <h2 class="text-md font-semibold text-slate-800">Cấu hình nguồn (RTSP)</h2>
-                <p class="text-xs text-slate-500 mt-0.5">Upload file <code class="bg-slate-100 px-1 rounded">resources.txt</code>. Định dạng: <code class="bg-slate-100 px-1 rounded">Tên_Cam__Link_RTSP</code></p>
-            </div>
-            <div class="flex items-center gap-3">
-                <span id="upload-status" class="text-sm text-slate-500 italic">Chưa nạp file</span>
-                <label class="bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded text-sm font-medium cursor-pointer transition flex items-center gap-2">
-                    📄 Nạp cấu hình
-                    <input type="file" accept=".txt" class="hidden" onchange="handleFileUpload(event)">
-                </label>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div class="lg:col-span-2 bg-white rounded-lg shadow border border-slate-200 p-5">
-                <h2 class="text-lg font-semibold mb-4 border-b pb-2">Camera Status (Phase 1)</h2>
-                <div class="overflow-x-auto h-64 overflow-y-auto">
-                    <table class="w-full text-left text-sm relative">
-                        <thead class="bg-slate-100 text-slate-600 sticky top-0">
-                            <tr>
-                                <th class="p-3 rounded-tl-md">Cam Name</th>
-                                <th class="p-3">Status</th>
-                                <th class="p-3 rounded-tr-md">FPS</th>
-                            </tr>
-                        </thead>
-                        <tbody id="camera-status-body" class="divide-y divide-slate-100">
-                            <tr>
-                                <td colspan="3" class="p-6 text-center text-slate-400">Vui lòng nạp cấu hình nguồn (resources.txt)</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-lg shadow border border-slate-200 p-5 flex flex-col">
-                <div class="flex justify-between items-center mb-4 border-b pb-2">
-                    <h2 class="text-lg font-semibold">Live Monitor</h2>
-                    <select id="live-cam-select" class="text-sm border border-slate-300 rounded p-1 outline-none max-w-[150px]">
-                        <option value="">-- Trống --</option>
-                    </select>
-                </div>
-                
-                <div class="bg-slate-900 rounded aspect-video flex items-center justify-center text-slate-500 mb-4 relative">
-                    <span id="stream-text">RTSP Stream</span>
-                </div>
-
-                <div class="flex gap-2 mt-auto">
-                    <button class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-medium transition">Play View</button>
-                    <button class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 py-2 rounded text-sm font-medium transition">Stop View</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="mt-6 bg-white rounded-lg shadow border border-slate-200 p-5">
-            <div class="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-4 border-b pb-2 gap-3">
-                <div>
-                    <h2 class="text-lg font-semibold">Auto-Labeling Queue (Phase 2)</h2>
-                </div>
-                
-                <div class="flex flex-wrap items-center gap-2">
-                    <div class="flex items-center gap-2 mr-2">
-                        <button onclick="handleOutputFolderSelection()" class="bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded text-sm font-medium cursor-pointer transition flex items-center gap-1.5 shadow-sm">
-                            📂 Select Output Folder
-                        </button>
-                        <span id="output-folder-name" class="text-xs truncate max-w-[160px]"></span>
+        <section class="tab-panel active" id="tab-config">
+            <div class="panel-grid two-col">
+                <article class="card">
+                    <div class="card-header">
+                        <h2>resources.txt</h2>
+                        <span class="badge badge-info">Phase 1 input</span>
                     </div>
+                    <div class="card-body">
+                        <p class="hint">Upload a plain-text file with one RTSP URL per line. Blank lines and lines starting with <code>#</code> are ignored.</p>
+                        <div class="drop-zone" id="drop-zone">
+                            <input id="file-input" type="file" accept=".txt" hidden>
+                            <p>Drop <code>resources.txt</code> here or click to browse</p>
+                        </div>
+                        <div class="config-result hidden" id="config-result"></div>
+                        <div class="form-row">
+                            <button class="btn btn-ghost" id="btn-probe-all">Probe All Cameras</button>
+                        </div>
+                    </div>
+                </article>
 
-                    <label class="bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded text-sm font-medium cursor-pointer transition flex items-center gap-2">
-                        📁 Select Videos
-                        <input type="file" multiple accept="video/mp4" class="hidden" onchange="handleVideoSelection(event)">
-                    </label>
-                    <button onclick="checkAndShowModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium transition flex items-center gap-2 shadow-sm">
-                        ▶ Process
-                    </button>
-                    <button onclick="promptStopProcessing()" class="bg-slate-700 hover:bg-slate-800 text-white px-4 py-1.5 rounded text-sm font-medium transition flex items-center gap-2 shadow-sm">
-                        ⏹ Stop All
-                    </button>
+                <article class="card">
+                    <div class="card-header">
+                        <h2>Camera Inventory</h2>
+                        <span class="badge badge-ok">Live parsed list</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="camera-list" id="camera-list">
+                            <p class="empty-hint">No cameras loaded yet</p>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="card span-full">
+                    <div class="card-header">
+                        <h2>Runtime Settings</h2>
+                        <span class="badge badge-warn">Raw video retention</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row">
+                            <label for="storage-limit">Storage limit (GB)</label>
+                            <input id="storage-limit" type="number" min="1" step="0.5" value="10">
+                            <button class="btn btn-primary" id="btn-set-limit">Apply Limit</button>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="tab-panel" id="tab-monitor">
+            <div class="control-bar">
+                <button class="btn btn-success btn-lg" id="btn-start-rec">Start Recording</button>
+                <button class="btn btn-danger btn-lg" id="btn-stop-rec" disabled>Stop Recording</button>
+                <div class="status-row">
+                    <span class="dot" id="dot-rec"></span>
+                    <span id="lbl-rec">Idle</span>
                 </div>
+                <div class="spacer"></div>
+                <div class="stat-pill">Clips <span id="rec-clip-count">0</span></div>
+                <div class="stat-pill">Detections <span id="rec-detect-count">0</span></div>
             </div>
-            
-            <div class="overflow-x-auto max-h-80 overflow-y-auto">
-                <table class="w-full text-left text-sm relative">
-                    <thead class="bg-slate-100 text-slate-600 sticky top-0 z-10">
-                        <tr>
-                            <th class="p-3 rounded-tl-md w-12 text-center">
-                                <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" class="w-4 h-4 cursor-pointer">
-                            </th>
-                            <th class="p-3">Video File</th>
-                            <th class="p-3">Size</th>
-                            <th class="p-3 rounded-tr-md">Status & Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100" id="queue-body">
-                        <tr id="empty-queue-row">
-                            <td colspan="4" class="p-6 text-center text-slate-400">Chưa có dữ liệu. Vui lòng chọn Output Folder hoặc Videos.</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
 
-    <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity">
-        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
-            <h3 class="text-xl font-bold text-slate-800 mb-2">Xác nhận chạy Auto-Labeling</h3>
-            <p class="text-slate-600 text-sm mb-6">Bạn chuẩn bị gán nhãn cho <strong id="file-count" class="text-blue-600">0</strong> file. Hệ thống sẽ tạo folder tương ứng trong Output Folder. Tiếp tục?</p>
-            <div class="flex justify-end gap-3">
-                <button onclick="hideConfirmModal()" class="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded text-sm font-medium transition">Hủy</button>
-                <button onclick="startProcessing()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition shadow-sm">Xác nhận</button>
+            <div class="camera-grid" id="camera-grid">
+                <div class="camera-placeholder">Start Phase 1 to open camera worker tiles.</div>
             </div>
-        </div>
-    </div>
 
-    <div id="stop-confirm-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity">
-        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border-t-4 border-red-500">
-            <h3 class="text-xl font-bold text-red-600 mb-2">Cảnh báo: Dừng tiến trình!</h3>
-            <p class="text-slate-600 text-sm mb-6">Có <strong id="stop-count" class="text-red-600">0</strong> file đang được xử lý dở dang. Bạn có chắc chắn muốn dừng toàn bộ?</p>
-            <div class="flex justify-end gap-3">
-                <button onclick="hideStopModal()" class="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded text-sm font-medium transition">Hủy</button>
-                <button onclick="confirmStopProcessing()" class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded text-sm font-medium transition shadow-sm">Vẫn Dừng</button>
+            <article class="card log-card">
+                <div class="card-header">
+                    <h2>Event Log</h2>
+                    <button class="btn btn-ghost btn-sm" id="btn-clear-log">Clear</button>
+                </div>
+                <div class="log-body" id="event-log">
+                    <p class="empty-hint">No events yet</p>
+                </div>
+            </article>
+        </section>
+
+        <section class="tab-panel" id="tab-analysis">
+            <div class="panel-grid two-col">
+                <article class="card span-full">
+                    <div class="card-header">
+                        <h2>Phase 2 Controls</h2>
+                        <div class="status-row">
+                            <span class="dot" id="dot-ana"></span>
+                            <span id="lbl-ana">Idle</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="input-row">
+                            <input id="video-dir" type="text" value="data/raw_videos">
+                            <button class="btn btn-primary" id="btn-start-analysis">Start Analysis</button>
+                            <button class="btn btn-danger" id="btn-stop-analysis" disabled>Stop</button>
+                            <button class="btn btn-ghost" id="btn-refresh-videos">Refresh Clips</button>
+                        </div>
+                        <p class="hint">Phase 2 scans every MP4 in the selected folder and writes PNG frames plus <code>_labels.txt</code> into <code>data/output_labels</code>.</p>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <h2>Progress</h2>
+                        <span class="badge badge-info">YOLO detect</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="analysis-idle">
+                            <p class="center-hint">Start analysis to see real-time progress.</p>
+                        </div>
+                        <div id="analysis-progress-section" class="hidden">
+                            <div class="progress-label">
+                                <span id="ana-clip-name">-</span>
+                                <strong id="ana-pct">0%</strong>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="ana-bar"></div>
+                            </div>
+                            <div class="stat-grid">
+                                <div class="stat-box">
+                                    <div id="stat-clips">0 / 0</div>
+                                    <label>Clips</label>
+                                </div>
+                                <div class="stat-box">
+                                    <div id="stat-frames">0</div>
+                                    <label>PNG Frames</label>
+                                </div>
+                                <div class="stat-box">
+                                    <div id="stat-labels">0</div>
+                                    <label>BBoxes</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="analysis-done" class="hidden result-done">
+                            <p>Phase 2 finished.</p>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <h2>Input Clips</h2>
+                        <span class="badge badge-ok">Source folder</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="video-table-wrap" id="video-list-table">
+                            <p class="empty-hint">No MP4 clips found.</p>
+                        </div>
+                    </div>
+                </article>
             </div>
-        </div>
-    </div>
+        </section>
 
-    <div id="change-path-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
-            <h3 class="text-lg font-bold text-slate-800 mb-1">Thay đổi Output Folder</h3>
-            <p class="text-xs text-slate-500 mb-4">Nhập đường dẫn thư mục trên server nơi kết quả sẽ được lưu.</p>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Đường dẫn server-side</label>
-            <input id="new-path-input" type="text"
-                placeholder="VD: data/output  hoặc  /mnt/storage/labels"
-                onkeydown="if(event.key==='Enter') confirmChangePath(); if(event.key==='Escape') hideChangePathModal();"
-                class="w-full border border-slate-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400 mb-1">
-            <p id="path-error" class="hidden text-xs text-red-500 mb-3"></p>
-            <p class="text-xs text-slate-400 mb-5">
-                💡 Đây là path trên máy chạy server, không phải máy của bạn.<br>
-                Path mặc định: <code class="bg-slate-100 px-1 rounded">data/output_labels</code>
-            </p>
-            <div class="flex justify-end gap-3">
-                <button onclick="hideChangePathModal()" class="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded text-sm font-medium transition">Hủy</button>
-                <button id="confirm-path-btn" onclick="confirmChangePath()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium transition shadow-sm">Xác nhận</button>
+        <section class="tab-panel" id="tab-results">
+            <article class="card">
+                <div class="card-header">
+                    <h2>Phase 2 Results</h2>
+                    <div class="form-row">
+                        <span class="hint" id="result-count">0 clip results</span>
+                        <button class="btn btn-ghost btn-sm" id="btn-refresh-results">Refresh</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="results-grid" id="results-grid">
+                        <p class="empty-hint">No Phase 2 outputs yet.</p>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="tab-panel" id="tab-pose">
+            <div class="panel-grid two-col">
+                <article class="card span-full">
+                    <div class="card-header">
+                        <h2>Phase 3 Controls</h2>
+                        <div class="status-row">
+                            <span class="dot" id="dot-pose"></span>
+                            <span id="lbl-pose">Idle</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="input-row">
+                            <input id="pose-dir" type="text" value="data/raw_videos">
+                            <button class="btn btn-primary" id="btn-start-pose">Start Pose Analysis</button>
+                            <button class="btn btn-danger" id="btn-stop-pose" disabled>Stop</button>
+                            <button class="btn btn-ghost" id="btn-refresh-pose">Refresh Results</button>
+                        </div>
+                        <div class="form-row">
+                            <label for="pose-save-overlay">Save overlay PNG frames</label>
+                            <input id="pose-save-overlay" type="checkbox" checked>
+                        </div>
+                        <p class="hint">Phase 3 writes <code>_keypoints.txt</code>, <code>_adl.txt</code>, and optional overlay PNG frames into <code>data/output_pose</code>.</p>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <h2>Pose Progress</h2>
+                        <span class="badge badge-info">YOLO pose</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="pose-idle">
+                            <p class="center-hint">Start Phase 3 to generate keypoints and ADL labels.</p>
+                        </div>
+                        <div id="pose-progress-section" class="hidden">
+                            <div class="progress-label">
+                                <span id="pose-clip-name">-</span>
+                                <strong id="pose-pct">0%</strong>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="pose-bar"></div>
+                            </div>
+                            <div class="stat-grid">
+                                <div class="stat-box">
+                                    <div id="pose-stat-clips">0 / 0</div>
+                                    <label>Clips</label>
+                                </div>
+                                <div class="stat-box">
+                                    <div id="pose-stat-kps">0</div>
+                                    <label>Keypoint Rows</label>
+                                </div>
+                                <div class="stat-box">
+                                    <div id="pose-stat-adl">0</div>
+                                    <label>ADL Events</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="pose-done" class="hidden result-done">
+                            <p>Phase 3 finished.</p>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="card">
+                    <div class="card-header">
+                        <h2>Pose Outputs</h2>
+                        <span class="badge badge-ok">Summary</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="results-grid" id="pose-results-grid">
+                            <p class="empty-hint">No pose outputs yet.</p>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        </section>
+    </main>
+
+    <div class="modal-overlay hidden" id="modal-probe">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="probe-cam-id">Camera Probe</h3>
+                <button class="modal-close" id="modal-close" type="button">x</button>
+            </div>
+            <div class="modal-body" id="probe-result">
+                <div class="loader"></div>
             </div>
         </div>
     </div>

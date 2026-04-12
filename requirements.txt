@@ -1,47 +1,11 @@
-# Shared runtime for:
-# - Phase 1 RTSP realtime collection backend
-# - Phase 2 pose + ADL processing worker
-
-# --- Infra & config ---
-aiosqlite>=0.20,<1
-pydantic-settings>=2.3,<3
+flask>=3.0,<4
+flask-socketio>=5.3,<6
+flask-cors>=4.0,<5
+eventlet>=0.36,<1
+ultralytics>=8.3,<9
+opencv-python>=4.9,<5
+Pillow>=10.0,<11
+psutil>=5.9,<7
 PyYAML>=6,<7
 python-dotenv>=1,<2
-
-# --- Web backend (FastAPI) ---
-fastapi>=0.110,<1
-starlette>=0.37,<1
-uvicorn>=0.29,<1
-anyio>=4.0,<5
-h11>=0.14,<1
-python-multipart>=0.0.9,<1
-
-# --- DL / CV stack
-torch>=2.2,<3
-torchvision>=0.17,<1
-scipy>=1.11,<2
-numpy>=1.26,<3
-opencv-python>=4.9,<5
-ultralytics>=8.3,<9
-
-# --- Typing / utils
-annotated-types>=0.7,<1
-typing_extensions>=4.15,<5
-typing-inspection>=0.4,<1
-colorama>=0.4,<1
-click>=8.1,<9
-
-# Web framework & real-time
-flask>=3.0.0
-flask-socketio>=5.3.6
-flask-cors>=4.0.0
-eventlet>=0.35.0
-
-# Image processing
-Pillow>=10.0.0
-
-# System utilities
-psutil>=5.9.0               # Disk / memory monitoring
-
-# Networking (eventlet dependency)
-dnspython>=2.6.0
+numpy>=1.24,<3

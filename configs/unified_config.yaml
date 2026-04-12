@@ -1,107 +1,24 @@
-# ============================================================
-# HAVEN Final - Unified Configuration
-# ============================================================
-# Một file config duy nhất cho hệ thống multi-camera:
-# - Cam1: Show only (không xử lý)
-# - Cam2: Master (tạo Global ID)
-# - Cam3/Cam4: Slave (chỉ match)
-# ============================================================
+project:
+  name: CPose
+  dashboard_url: http://localhost:5000
 
-# ============================================================
-# MASTER CAMERA
-# ============================================================
-master_camera: "cam2"
+phase1:
+  model: yolov8n.pt
+  conf_threshold: 0.35
+  pre_buffer_sec: 3
+  post_buffer_sec: 3
+  inference_every: 5
+  min_clip_duration: 2.0
+  storage_limit_gb: 10
 
-# ============================================================
-# DATA SOURCE
-# ============================================================
-data_source:
-  mode: 'folder'
-  data_root: 'D:/HavenNet/data/multi-camera'
-  video_extensions: ['.mp4', '.avi', '.mkv', '.mov']
-  watch_mode: false
+phase2:
+  model: yolo11n.pt
+  conf_threshold: 0.50
+  progress_every: 10
 
-# ============================================================
-# CAMERAS
-# ============================================================
-cameras:
-  - id: "cam1"
-    name: "Camera 1"
-    enabled: true
-    mode: "show_only"  # Chỉ hiển thị, không xử lý
-    
-  - id: "cam2"
-    name: "Camera 2 (Master)"
-    enabled: true
-    mode: "master"  # Tạo Global ID
-    
-  - id: "cam3"
-    name: "Camera 3"
-    enabled: true
-    mode: "slave"  # Chỉ match
-    
-  - id: "cam4"
-    name: "Camera 4"
-    enabled: true
-    mode: "slave"  # Chỉ match
-
-# ============================================================
-# YOLO MODEL
-# ============================================================
-yolo:
-  pose_model: "yolo11n-pose.pt"
-  detect_model: "yolo11n.pt"
-  conf_threshold: 0.6
-  iou_threshold: 0.45
-  device: "cuda"
-  img_size: 640
-
-# ============================================================
-# ReID (Re-Identification) - ENHANCED
-# ============================================================
-reid:
-  threshold: 0.65
-  strong_threshold: 0.75
-  weak_threshold: 0.55
-  max_features: 1000
-  min_features_before_slave: 50
-  update_interval: 2
-  ema_alpha: 0.3
-  min_frames_stable: 15
-  cooldown_seconds: 10
-
-# ============================================================
-# ADL (Activity Detection)
-# ============================================================
-adl:
-  movement_threshold_ratio: 0.02
-  torso_angle_laying: 25
-  aspect_ratio_laying: 0.7
-  posture_voting_frames: 2
-  keypoint_conf: 0.2
-
-# ============================================================
-# DANGEROUS OBJECTS
-# ============================================================
-dangerous_objects:
-  enabled: true
-  classes: [34, 38, 43]  # baseball bat, tennis racket, knife
-  conf_threshold: 0.1
-
-# ============================================================
-# DISPLAY
-# ============================================================
-display:
-  width: 640
-  height: 480
-  window_layout: "4_windows"
-  show_fps: true
-  show_frame_count: true
-
-# ============================================================
-# OUTPUT
-# ============================================================
-output:
-  dir: "D:/HavenNet/backend/database/recordings"
-  database_path: "D:/HavenNet/backend/database/haven_reid.db"
-  log_level: "INFO"
+phase3:
+  model: yolo11n-pose.pt
+  conf_threshold: 0.45
+  keypoint_conf_min: 0.30
+  window_size: 30
+  progress_every: 10

@@ -1,233 +1,34 @@
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
-venv/
-.venv/
-ENV/
-
-# IDEs
-.vscode/
-.idea/
-
-# HAVEN Data
-data/videos/*
-data/snapshots/*
-data/clips/*
-data/exports/*
-data/logs/*
-!data/videos/.gitkeep
-!data/snapshots/.gitkeep
-!data/clips/.gitkeep
-!data/exports/.gitkeep
-!data/logs/.gitkeep
-
-# Models & Weights
-models/weights/*.onnx
-models/weights/*.engine
-!models/weights/.gitkeep
-!models/weights/README.md
-models/*.onnx
-models/*.engine
-!models/.gitkeep
-!models/README.md
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Env
-.env
-.env.local
-
-
-# ================================
-# HAVEN SECURITY - NEVER COMMIT SECRETS
-# ================================
-# This file prevents accidental exposure of camera credentials
-# Last updated: 2026-01-23
-
-# ==================
-# Environment Files with Secrets
-# ==================
-.env
-*.env
-!*.example.env
-!camera.example.env
-
-# Backend specific env files
-backend/.env
-backend/*.env
-backend/src/config/*.env
-!backend/src/config/*.example.env
-
-# ==================
-# Python
-# ==================
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-env/
-.virtualenv
-
-# PyCharm
-.idea/
-
-# VS Code
-.vscode/
-*.code-workspace
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# Pytest
 .pytest_cache/
-.coverage
-htmlcov/
 
-# ==================
-# OS Specific
-# ==================
-# macOS
+venv/
+.venv/
+ENV/
+
+data/raw_videos/*
+data/output_labels/*
+data/output_pose/*
+data/processed_videos/*
+data/video-4-cam/
+data/mp4-gif/output.mp4
+!data/raw_videos/.gitkeep
+!data/output_labels/.gitkeep
+!data/output_pose/.gitkeep
+!data/processed_videos/.gitkeep
+!data/config/.gitkeep
+
+models/*
+!models/.gitkeep
+!models/*.pt
+
+.vscode/
+.idea/
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Windows
 Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-ehthumbs_vista.db
-*.stackdump
-Desktop.ini
 
-# Linux
-*~
+docs/images/
+docs/latex/*.log
+docs/latex/*.png
 
-# ==================
-# Logs & Temporary Files
-# ==================
-# Logs might contain IP addresses or error traces
-*.log
-logs/
-*.log.*
-
-# Temporary camera snapshots
-temp_snapshots/
-snapshots/
-*.jpg
-*.png
-!frontend/static/*.jpg
-!frontend/static/*.png
-!backend/outputs/*.png
-!backend/outputs/*.png
-!docs/architecture/*.png
-!demo.mp4
-
-# ==================
-# Database & Data Files
-# ==================
-# If you store camera metadata or event logs
-*.db
-*.sqlite
-*.sqlite3
-
-# ==================
-# Build & Distribution
-# ==================
-build/
-dist/
-*.egg-info/
-.eggs/
-
-# ==================
-# Testing & Development
-# ==================
-# Test recordings
-test_recordings/
-*.avi
-!output.mp4
-*.mp4
-*.gif
-!output.gif
-
-# Recordings
-recordings/
-
-# Coverage reports
-.coverage.*
-
-# ==================
-# Security Sensitive
-# ==================
-# Never commit these even if asked
-secrets.yaml
-credentials.json
-private_key.pem
-*.key
-*.pem
-
-# Backup files that might contain old configs
-*.bak
-*.backup
-*.old
-
-# ==================
-# PRE-COMMIT SECURITY CHECKLIST
-# ==================
-# Before every commit, manually verify:
-# 
-# [ ] git status shows no .env files
-# [ ] grep -r "192.168" . returns only example files
-# [ ] grep -r "rtsp://" . returns only documentation
-# [ ] No camera passwords in any committed file
-# [ ] camera.example.env has placeholder values only
-# 
-# If you accidentally committed secrets:
-# 1. DO NOT just delete and recommit
-# 2. Use: git filter-branch or BFG Repo-Cleaner
-# 3. Rotate all exposed credentials immediately
-# 4. See SECURITY.md for incident response
-# ==================
-
-# Local push helper scripts
-/scripts/push_*.bat
 resources.txt
-*.git.nested-backup/
-
-# ==================
-# Excluded Folders
-# ==================
-
-deployment/
-.github/

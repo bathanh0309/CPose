@@ -27,7 +27,7 @@ POST_BUFFER_SEC   = 3       # seconds to keep recording after last detection
 INFERENCE_EVERY   = 5       # run YOLO every N frames (performance trade-off)
 MIN_CLIP_DURATION = 2.0     # minimum seconds for a clip to be saved
 PERSON_CLASS_ID   = 0       # COCO class index for "person"
-CONF_THRESHOLD    = 0.35    # confidence threshold Phase 1
+CONF_THRESHOLD_P1 = 0.35    # confidence threshold Phase 1
 RECONNECT_DELAY   = 5       # seconds to wait before reconnecting a failed stream
 
 
@@ -97,7 +97,7 @@ class CameraWorker(threading.Thread):
 
     # ──────────────────────────────────────────────────────────────────────
     def _stream_loop(self):
-        cap = cv2.VideoCapture(self.url)
+        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
 
         if self.req_width and self.req_height:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.req_width)
@@ -148,19 +148,24 @@ class CameraWorker(threading.Thread):
                         results = self._model.predict(
                             frame,
                             classes=[PERSON_CLASS_ID],
-                            conf=CONF_THRESHOLD,
+                            conf=CONF_THRESHOLD_P1,
                             verbose=False,
                         )
-                        count = sum(
-                            1 for r in results for box in r.boxes
-                            if int(box.cls[0]) == PERSON_CLASS_ID
-                        )
+                        count = 0
+                        confidence_max = 0.0
+                        for result in results:
+                            for box in result.boxes:
+                                if int(box.cls[0]) != PERSON_CLASS_ID:
+                                    continue
+                                count += 1
+                                confidence_max = max(confidence_max, float(box.conf[0]))
                         if count > 0:
                             person_detected = True
                             self._emit("detection_event", {
                                 "cam_id": self.cam_id,
                                 "timestamp": datetime.now().isoformat(),
-                                "count": count,
+                                "person_count": count,
+                                "confidence_max": round(confidence_max, 3),
                             })
                     except Exception as exc:
                         logger.error("cam-%s inference error: %s", self.cam_id, exc)
@@ -271,9 +276,12 @@ class RecorderManager:
 
     def stop(self):
         with self._lock:
-            for worker in self._workers.values():
-                worker.stop()
+            workers = list(self._workers.values())
             self._workers.clear()
+        for worker in workers:
+            worker.stop()
+        for worker in workers:
+            worker.join(timeout=2.0)
         logger.info("All camera workers stopped")
 
     def is_running(self) -> bool:

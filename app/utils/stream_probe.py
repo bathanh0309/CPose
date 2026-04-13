@@ -9,24 +9,48 @@ import logging
 
 import cv2
 
+from app.utils.runtime_config import get_runtime_section
+
 logger = logging.getLogger("[StreamProbe]")
 
+_STREAM_PROBE_CFG = get_runtime_section("stream_probe")
+DEFAULT_TIMEOUT_MS = int(_STREAM_PROBE_CFG.get("timeout_ms", 8000))
+
+
+def _load_common_resolutions() -> list[tuple[int, int, str]]:
+    configured = _STREAM_PROBE_CFG.get("common_resolutions", [])
+    parsed: list[tuple[int, int, str]] = []
+    if isinstance(configured, list):
+        for item in configured:
+            if isinstance(item, (list, tuple)) and len(item) == 3:
+                try:
+                    width = int(item[0])
+                    height = int(item[1])
+                    label = str(item[2])
+                except (TypeError, ValueError):
+                    continue
+                parsed.append((width, height, label))
+    if parsed:
+        return parsed
+    return [
+        (3840, 2160, "4K UHD"),
+        (2560, 1440, "QHD 1440p"),
+        (1920, 1080, "Full HD 1080p"),
+        (1280, 720, "HD 720p"),
+        (960, 540, "qHD 540p"),
+        (640, 480, "VGA 480p"),
+        (320, 240, "QVGA 240p"),
+    ]
+
+
 # Common IP camera resolutions to offer as options
-COMMON_RESOLUTIONS = [
-    (3840, 2160, "4K UHD"),
-    (2560, 1440, "QHD 1440p"),
-    (1920, 1080, "Full HD 1080p"),
-    (1280,  720, "HD 720p"),
-    ( 960,  540, "qHD 540p"),
-    ( 640,  480, "VGA 480p"),
-    ( 320,  240, "QVGA 240p"),
-]
+COMMON_RESOLUTIONS = _load_common_resolutions()
 
 
 class StreamProber:
     """Probe RTSP streams for capabilities."""
 
-    def probe(self, url: str, timeout_ms: int = 8000) -> dict:
+    def probe(self, url: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> dict:
         """
         Open an RTSP stream briefly to read its native resolution and FPS.
 

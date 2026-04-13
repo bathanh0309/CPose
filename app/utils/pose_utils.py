@@ -8,6 +8,29 @@ from typing import Iterable
 import cv2
 import numpy as np
 
+from app.utils.runtime_config import get_runtime_section
+
+_PHASE3_DEFAULTS = get_runtime_section("phase3")
+_POSE_UTILS_DEFAULTS = get_runtime_section("pose_utils")
+
+DEFAULT_KEYPOINT_CONF_MIN = float(_PHASE3_DEFAULTS.get("keypoint_conf_min", 0.3))
+DEFAULT_KNEE_BEND_ANGLE = float(_POSE_UTILS_DEFAULTS.get("knee_bend_angle", 150))
+DEFAULT_SHOULDER_RAISE = float(_POSE_UTILS_DEFAULTS.get("shoulder_raise", 45))
+DEFAULT_VELOCITY_WALK = float(_POSE_UTILS_DEFAULTS.get("velocity_walk", 8.0))
+MIN_VISIBLE_KEYPOINTS = int(_POSE_UTILS_DEFAULTS.get("min_visible_keypoints", 8))
+FALLING_TORSO_ANGLE = float(_POSE_UTILS_DEFAULTS.get("falling_torso_angle", 68))
+FALLING_VELOCITY_MULTIPLIER = float(_POSE_UTILS_DEFAULTS.get("falling_velocity_multiplier", 1.1))
+LYING_ASPECT_RATIO = float(_POSE_UTILS_DEFAULTS.get("lying_aspect_ratio", 1.15))
+BENDING_VELOCITY_MULTIPLIER = float(_POSE_UTILS_DEFAULTS.get("bending_velocity_multiplier", 0.6))
+CONF_UNKNOWN = float(_POSE_UTILS_DEFAULTS.get("confidence_unknown", 0.2))
+CONF_FALLING = float(_POSE_UTILS_DEFAULTS.get("confidence_falling", 0.88))
+CONF_LYING = float(_POSE_UTILS_DEFAULTS.get("confidence_lying_down", 0.84))
+CONF_SITTING = float(_POSE_UTILS_DEFAULTS.get("confidence_sitting", 0.82))
+CONF_BENDING = float(_POSE_UTILS_DEFAULTS.get("confidence_bending", 0.78))
+CONF_REACHING = float(_POSE_UTILS_DEFAULTS.get("confidence_reaching", 0.76))
+CONF_WALKING = float(_POSE_UTILS_DEFAULTS.get("confidence_walking", 0.79))
+CONF_STANDING = float(_POSE_UTILS_DEFAULTS.get("confidence_standing", 0.75))
+
 KP_NOSE = 0
 KP_LEFT_EYE = 1
 KP_RIGHT_EYE = 2
@@ -95,17 +118,17 @@ def rule_based_adl(window, config) -> tuple[str, float]:
         return "unknown", 0.0
 
     thresholds = (config or {}).get("thresholds", {})
-    min_conf = float((config or {}).get("keypoint_conf_min", 0.3))
-    knee_bend_angle = float(thresholds.get("knee_bend_angle", 150))
-    shoulder_raise = float(thresholds.get("shoulder_raise", 45))
-    velocity_walk = float(thresholds.get("velocity_walk", 8.0))
+    min_conf = float((config or {}).get("keypoint_conf_min", DEFAULT_KEYPOINT_CONF_MIN))
+    knee_bend_angle = float(thresholds.get("knee_bend_angle", DEFAULT_KNEE_BEND_ANGLE))
+    shoulder_raise = float(thresholds.get("shoulder_raise", DEFAULT_SHOULDER_RAISE))
+    velocity_walk = float(thresholds.get("velocity_walk", DEFAULT_VELOCITY_WALK))
 
     latest_xy, latest_conf = window[-1]
     latest_xy = np.asarray(latest_xy, dtype=float)
     latest_conf = np.asarray(latest_conf, dtype=float)
     visible_keypoints = int(np.sum(latest_conf >= min_conf))
-    if visible_keypoints < 8:
-        return "unknown", 0.2
+    if visible_keypoints < MIN_VISIBLE_KEYPOINTS:
+        return "unknown", CONF_UNKNOWN
 
     left_shoulder = _point(latest_xy, latest_conf, KP_LEFT_SHOULDER, min_conf)
     right_shoulder = _point(latest_xy, latest_conf, KP_RIGHT_SHOULDER, min_conf)
@@ -145,19 +168,19 @@ def rule_based_adl(window, config) -> tuple[str, float]:
         for wrist, shoulder in [(left_wrist, left_shoulder), (right_wrist, right_shoulder)]
     )
 
-    if torso_angle > 68 and walk_velocity > velocity_walk * 1.1:
-        return "falling", 0.88
-    if torso_angle > 68 and aspect_ratio > 1.15:
-        return "lying_down", 0.84
+    if torso_angle > FALLING_TORSO_ANGLE and walk_velocity > velocity_walk * FALLING_VELOCITY_MULTIPLIER:
+        return "falling", CONF_FALLING
+    if torso_angle > FALLING_TORSO_ANGLE and aspect_ratio > LYING_ASPECT_RATIO:
+        return "lying_down", CONF_LYING
     if avg_knee_angle < knee_bend_angle and walk_velocity < velocity_walk:
-        return "sitting", 0.82
-    if torso_angle > shoulder_raise and walk_velocity < velocity_walk * 0.6:
-        return "bending", 0.78
+        return "sitting", CONF_SITTING
+    if torso_angle > shoulder_raise and walk_velocity < velocity_walk * BENDING_VELOCITY_MULTIPLIER:
+        return "bending", CONF_BENDING
     if wrists_above_shoulders:
-        return "reaching", 0.76
+        return "reaching", CONF_REACHING
     if walk_velocity > velocity_walk:
-        return "walking", 0.79
-    return "standing", 0.75
+        return "walking", CONF_WALKING
+    return "standing", CONF_STANDING
 
 
 def _point(keypoints_xy, keypoints_conf, index: int, min_conf: float):

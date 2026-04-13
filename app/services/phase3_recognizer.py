@@ -13,15 +13,18 @@ import cv2
 import numpy as np
 import yaml
 
+from app.utils.runtime_config import get_runtime_section
 from app.utils.pose_utils import draw_skeleton, rule_based_adl
 
 logger = logging.getLogger("[Phase3]")
 
-CONF_THRESHOLD_P3 = 0.45
-KP_CONF_MIN = 0.30
-WINDOW_SIZE = 30
-PROGRESS_EVERY = 10
-PERSON_CLASS_ID = 0
+_PHASE3_CFG = get_runtime_section("phase3")
+
+CONF_THRESHOLD_P3 = float(_PHASE3_CFG.get("conf_threshold", 0.45))
+KP_CONF_MIN = float(_PHASE3_CFG.get("keypoint_conf_min", 0.30))
+WINDOW_SIZE = int(_PHASE3_CFG.get("window_size", 30))
+PROGRESS_EVERY = int(_PHASE3_CFG.get("progress_every", 10))
+PERSON_CLASS_ID = int(_PHASE3_CFG.get("person_class_id", 0))
 
 
 class PoseADLRecognizer:
@@ -264,7 +267,26 @@ class PoseADLRecognizer:
         if not config_path.exists():
             return {}
         with config_path.open("r", encoding="utf-8") as handle:
-            return yaml.safe_load(handle) or {}
+            data = yaml.safe_load(handle) or {}
+        if not isinstance(data, dict):
+            return {}
+
+        # Unified config format: extract phase3 section.
+        phase3_cfg = data.get("phase3")
+        if isinstance(phase3_cfg, dict):
+            merged = dict(phase3_cfg)
+
+            # Backward-compatible bridge from old pose_adl-style flat keys.
+            if "save_overlay" in data and "save_overlay" not in merged:
+                merged["save_overlay"] = bool(data.get("save_overlay"))
+            if isinstance(data.get("adl_classes"), list) and "adl_classes" not in merged:
+                merged["adl_classes"] = list(data["adl_classes"])
+            if isinstance(data.get("thresholds"), dict) and "thresholds" not in merged:
+                merged["thresholds"] = dict(data["thresholds"])
+            return merged
+
+        # Legacy pose_adl format: return whole dict.
+        return data
 
     def _update_state(self, **kwargs) -> None:
         with self._lock:

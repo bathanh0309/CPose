@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -29,21 +30,29 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
+from app.utils.runtime_config import get_runtime_section
+
 logger = logging.getLogger("[Phase1]")
 
+_PHASE1_CFG = get_runtime_section("phase1")
+
 # ─── Default tuning constants (all overridable via config) ────────────────────
-PERSON_CONF_THRESHOLD      = 0.65    # minimum confidence to count as valid person
-TRIGGER_MIN_CONSECUTIVE    = 3       # consecutive inference frames with person → confirm
-PRE_ROLL_SECONDS           = 3       # circular buffer length before trigger
-POST_ROLL_SECONDS          = 5       # keep recording after last person sighting
-REARM_COOLDOWN_SECONDS     = 5       # min gap between clips (merge window)
-MIN_CLIP_SECONDS           = 3.0     # discard clip shorter than this
-MAX_CLIP_SECONDS           = 300.0   # force-close clip at this duration
-MIN_BOX_AREA_RATIO         = 0.0015  # bbox must be > 0.15% of frame area
-INFERENCE_EVERY            = 3       # run YOLO every N frames
-RECONNECT_DELAY            = 5       # seconds before reconnect attempt
-JPEG_QUALITY               = 75      # snapshot compression quality
-PERSON_CLASS_ID            = 0       # COCO class index for "person"
+PERSON_CONF_THRESHOLD      = float(_PHASE1_CFG.get("person_conf_threshold", 0.65))
+TRIGGER_MIN_CONSECUTIVE    = int(_PHASE1_CFG.get("trigger_min_consecutive", 3))
+PRE_ROLL_SECONDS           = float(_PHASE1_CFG.get("pre_roll_seconds", 3))
+POST_ROLL_SECONDS          = float(_PHASE1_CFG.get("post_roll_seconds", 5))
+REARM_COOLDOWN_SECONDS     = float(_PHASE1_CFG.get("rearm_cooldown_seconds", 5))
+MIN_CLIP_SECONDS           = float(_PHASE1_CFG.get("min_clip_seconds", 3.0))
+MAX_CLIP_SECONDS           = float(_PHASE1_CFG.get("max_clip_seconds", 300.0))
+MIN_BOX_AREA_RATIO         = float(_PHASE1_CFG.get("min_box_area_ratio", 0.0015))
+INFERENCE_EVERY            = int(_PHASE1_CFG.get("inference_every", 3))
+RECONNECT_DELAY            = int(_PHASE1_CFG.get("reconnect_delay_seconds", 5))
+JPEG_QUALITY               = int(_PHASE1_CFG.get("jpeg_quality", 75))
+PERSON_CLASS_ID            = int(_PHASE1_CFG.get("person_class_id", 0))
+SNAPSHOT_FPS               = float(_PHASE1_CFG.get("snapshot_fps", 6.0))
+SNAPSHOT_ACTIVE_TTL_S      = float(_PHASE1_CFG.get("snapshot_active_ttl_s", 10.0))
+RTSP_TRANSPORT_DEFAULT     = str(_PHASE1_CFG.get("rtsp_transport", "tcp")).strip().lower()
+FFMPEG_CAPTURE_OPTIONS     = str(_PHASE1_CFG.get("ffmpeg_capture_options", "")).strip()
 
 
 class RecState(Enum):
@@ -105,6 +114,20 @@ class CameraWorker(threading.Thread):
         # Snapshot (latest JPEG bytes, thread-safe)
         self._snap_lock = threading.Lock()
         self._latest_jpeg: bytes | None = None
+        self._latest_jpeg_ts: float = 0.0
+        self._frame_lock = threading.Lock()
+        self._latest_frame = None
+
+        # Snapshot tuning (avoid burning CPU when UI isn't watching)
+        self._snapshot_fps = float(cfg.get("snapshot_fps", SNAPSHOT_FPS))
+        self._snapshot_active_ttl = float(cfg.get("snapshot_active_ttl_s", SNAPSHOT_ACTIVE_TTL_S))
+        self._snapshot_last_encoded_at: float = 0.0
+        self._snapshot_last_requested_at: float = 0.0
+
+        # RTSP tuning (reduce artifacts/packet-loss issues)
+        default_rtsp_transport = os.environ.get("CPOSE_RTSP_TRANSPORT", RTSP_TRANSPORT_DEFAULT)
+        self._rtsp_transport = str(cfg.get("rtsp_transport", default_rtsp_transport)).strip().lower()
+        self._ffmpeg_capture_options = str(cfg.get("ffmpeg_capture_options", FFMPEG_CAPTURE_OPTIONS)).strip()
         self._model = None
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -128,6 +151,8 @@ class CameraWorker(threading.Thread):
         self._stop_evt.set()
 
     def get_snapshot(self) -> bytes | None:
+        self._snapshot_last_requested_at = time.time()
+        self._refresh_snapshot_if_needed()
         with self._snap_lock:
             return self._latest_jpeg
 
@@ -142,7 +167,20 @@ class CameraWorker(threading.Thread):
             self._emit("error", {"source": f"cam-{self.cam_id}", "message": str(exc)})
 
     def _stream_loop(self) -> None:  # noqa: C901
+        # Configure FFmpeg capture options (must be set before VideoCapture)
+        try:
+            if self._ffmpeg_capture_options:
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = self._ffmpeg_capture_options
+            elif self._rtsp_transport in ("tcp", "udp") and not os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS"):
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{self._rtsp_transport}"
+        except Exception:
+            pass
+
         cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
         if self.req_width and self.req_height:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.req_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.req_height)
@@ -173,6 +211,7 @@ class CameraWorker(threading.Thread):
         clip_start: float = 0.0
         last_clip_end: float = 0.0   # for cooldown
         frame_idx = 0
+        last_person_now = False
 
         try:
             while not self._stop_evt.is_set():
@@ -181,14 +220,17 @@ class CameraWorker(threading.Thread):
                     logger.warning("cam-%s: read failed", self.cam_id)
                     break
 
-                self._update_snapshot(frame)
+                with self._frame_lock:
+                    self._latest_frame = frame
+                self._maybe_update_snapshot(frame)
                 pre_buffer.append(frame.copy())
                 frame_idx += 1
 
                 # ── Inference (every N frames) ────────────────────────────
-                person_now = False
+                person_now = last_person_now
                 if self._model and frame_idx % self._inference_every == 0:
                     person_now, conf_max = self._detect_person(frame, frame_area)
+                    last_person_now = person_now
                     if person_now:
                         self.detect_count += 1
                         self._emit("detection_event", {
@@ -358,16 +400,42 @@ class CameraWorker(threading.Thread):
         writer = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
         return path, writer
 
-    def _update_snapshot(self, frame) -> None:
+    def _maybe_update_snapshot(self, frame) -> None:
+        if self._snapshot_fps <= 0:
+            return
+        if self._snapshot_active_ttl > 0 and (time.time() - self._snapshot_last_requested_at) > self._snapshot_active_ttl:
+            return
+        min_interval = 1.0 / max(self._snapshot_fps, 0.001)
+        if (time.time() - self._snapshot_last_encoded_at) < min_interval:
+            return
         try:
             _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             self._set_snapshot(buf.tobytes())
+            self._snapshot_last_encoded_at = time.time()
         except Exception:
             pass
 
     def _set_snapshot(self, data: bytes | None) -> None:
         with self._snap_lock:
             self._latest_jpeg = data
+            self._latest_jpeg_ts = time.time() if data else 0.0
+
+    def _refresh_snapshot_if_needed(self) -> None:
+        if self._snapshot_fps <= 0:
+            return
+        # If the cached JPEG is "old", refresh once on-demand for smoother UX.
+        if (time.time() - self._latest_jpeg_ts) < (1.0 / max(self._snapshot_fps, 0.001)):
+            return
+        with self._frame_lock:
+            frame = self._latest_frame
+        if frame is None:
+            return
+        try:
+            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+            self._set_snapshot(buf.tobytes())
+            self._snapshot_last_encoded_at = time.time()
+        except Exception:
+            return
 
     def _enforce_storage(self) -> None:
         from app.utils.file_handler import FileHandler

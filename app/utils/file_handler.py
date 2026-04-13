@@ -6,7 +6,12 @@ import logging
 from collections import Counter
 from pathlib import Path
 
+from app.utils.runtime_config import get_runtime_section
+
 logger = logging.getLogger("[Storage]")
+
+_STORAGE_CFG = get_runtime_section("storage")
+PRUNE_TARGET_RATIO = float(_STORAGE_CFG.get("prune_target_ratio", 0.8))
 
 
 class StorageManager:
@@ -120,7 +125,7 @@ class StorageManager:
 
     def enforce_storage_limit(self, raw_videos_dir: Path, limit_gb: float) -> None:
         limit_bytes = limit_gb * 1e9
-        target_bytes = limit_bytes * 0.8
+        target_bytes = limit_bytes * PRUNE_TARGET_RATIO
         files = sorted(raw_videos_dir.glob("*.mp4"), key=lambda item: item.stat().st_mtime)
         total_bytes = sum(item.stat().st_size for item in files)
 

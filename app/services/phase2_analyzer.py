@@ -10,11 +10,15 @@ from typing import Any
 
 import cv2
 
+from app.utils.runtime_config import get_runtime_section
+
 logger = logging.getLogger("[Phase2]")
 
-PERSON_CLASS_ID = 0
-CONF_THRESHOLD_P2 = 0.50
-PROGRESS_EVERY = 10
+_PHASE2_CFG = get_runtime_section("phase2")
+
+PERSON_CLASS_ID = int(_PHASE2_CFG.get("person_class_id", 0))
+CONF_THRESHOLD_P2 = float(_PHASE2_CFG.get("conf_threshold", 0.50))
+PROGRESS_EVERY = int(_PHASE2_CFG.get("progress_every", 10))
 
 
 class Analyzer:

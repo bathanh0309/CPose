@@ -19,6 +19,8 @@ const S = {
   onlineCount:        0,
   recCount:           0,
   streamIntervals:    {},    // { cam_id: intervalId }
+  activeTab:          "config",
+  statusPollInterval: null,
 };
 
 const TAB_TITLES = {
@@ -37,11 +39,15 @@ const $sockLbl  = q("#sock-label");
 socket.on("connect", () => {
   cls($dotSock, "disconnected"); add($dotSock, "connected");
   $sockLbl.textContent = "Connected";
+  if (S.statusPollInterval) { clearInterval(S.statusPollInterval); S.statusPollInterval = null; }
   fetchStorageInfo();
 });
 socket.on("disconnect", () => {
   cls($dotSock, "connected"); add($dotSock, "disconnected");
   $sockLbl.textContent = "Disconnected";
+  if (!S.statusPollInterval) {
+    S.statusPollInterval = setInterval(fetchCameraStatusFallback, 2000);
+  }
 });
 
 socket.on("camera_status", (d) => {
@@ -90,12 +96,15 @@ document.querySelectorAll(".nav-item[data-tab]").forEach(el => {
 });
 
 function switchTab(id) {
+  S.activeTab = id;
   document.querySelectorAll(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.tab === id));
   document.querySelectorAll(".tab-panel").forEach(el => el.classList.toggle("active", el.id === "tab-"+id));
   q("#page-title").textContent = TAB_TITLES[id] || id;
   if (id === "analysis") { fetchVideoList(); }
   if (id === "results")  { fetchResults(); }
   if (id === "pose")     { fetchPoseResults(); }
+  if (id === "monitor" && S.recRunning) { startAllStreams(); }
+  if (id !== "monitor") { stopAllStreams(); }
 }
 
 // ── Generic helpers ─────────────────────────────────────────────────────────
@@ -313,7 +322,7 @@ function renderCamGrid(cameras) {
     return;
   }
   grid.innerHTML = cameras.map(c => camCardHTML(c)).join("");
-  cameras.forEach(c => startStream(c.cam_id));
+  if (S.activeTab === "monitor" && S.recRunning) { startAllStreams(); }
 }
 
 function camCardHTML(c) {
@@ -361,6 +370,11 @@ function camCardHTML(c) {
 
 window.refreshStream = function(camId) { stopStream(camId); startStream(camId); };
 
+function startAllStreams() {
+  if (!S.cameras.length) return;
+  S.cameras.forEach(c => startStream(c.cam_id));
+}
+
 function startStream(camId) {
   stopStream(camId);
   let failCount = 0;
@@ -399,6 +413,14 @@ function stopStream(camId) {
 
 function stopAllStreams() {
   Object.keys(S.streamIntervals).forEach(stopStream);
+}
+
+async function fetchCameraStatusFallback() {
+  try {
+    const d = await api("/api/cameras/status");
+    (d.cameras || []).forEach(updateCamCard);
+    updateOnlineCount();
+  } catch {}
 }
 
 function updateCamCard(d) {

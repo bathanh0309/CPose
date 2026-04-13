@@ -53,8 +53,8 @@ Capstone_Project/        ← thư mục gốc (root), KHÔNG đặt lại tên
 │   ├── pose_adl.yaml               # Config Phase 3: model, ADL classes, thresholds
 │   └── runtime.env.example
 ├── data/
-│   ├── config/
-│   │   └── resources.txt           # RTSP URLs, 1 dòng/URL, # = comment
+│   |
+│   │ 
 │   ├── raw_videos/                 # [git-ignored] Clip MP4 Phase 1
 │   ├── output_labels/              # [git-ignored] PNG + TXT Phase 2
 │   └── output_pose/                # [git-ignored] Keypoints + ADL Phase 3 ← PHASE 3

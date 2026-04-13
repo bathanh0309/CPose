@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 import app as _app_module
 from app.services.phase1_recorder import RecorderManager
@@ -32,16 +32,16 @@ def _resolve_dir(raw_value: str | None, default: Path) -> Path:
     return candidate if candidate.is_absolute() else (_app_module.BASE_DIR / candidate)
 
 
+# ─── Config & Camera ──────────────────────────────────────────────────────────
+
 @api_bp.route("/config/upload", methods=["POST"])
 def upload_config():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
-
     upload = request.files["file"]
     filename = upload.filename or ""
     if not filename.lower().endswith(".txt"):
         return jsonify({"error": "Only .txt files are supported"}), 400
-
     upload.save(str(_app_module.RESOURCES_FILE))
     cameras = _storage.parse_resources(_app_module.RESOURCES_FILE)
     logger.info("Loaded %d cameras from resources.txt", len(cameras))
@@ -62,22 +62,46 @@ def probe_camera():
     cam_id = str(body.get("cam_id", "00")).zfill(2)
     if not url:
         return jsonify({"error": "url is required"}), 400
-
     info = _prober.probe(url)
     if info.get("error"):
         return jsonify({"error": info["error"], "cam_id": cam_id}), 502
+    return jsonify({
+        "cam_id": cam_id,
+        "url": url,
+        "width": info["width"],
+        "height": info["height"],
+        "fps": info["fps"],
+        "resolutions": info["resolutions"],
+    })
 
-    return jsonify(
-        {
-            "cam_id": cam_id,
-            "url": url,
-            "width": info["width"],
-            "height": info["height"],
-            "fps": info["fps"],
-            "resolutions": info["resolutions"],
-        }
+
+# ─── Camera snapshot (live view) ─────────────────────────────────────────────
+
+@api_bp.route("/cameras/<cam_id>/snapshot", methods=["GET"])
+def camera_snapshot(cam_id: str):
+    """Return the latest JPEG frame for a camera as image/jpeg.
+    Returns 204 No Content if camera not running or no frame available yet.
+    """
+    jpeg = _recorder.get_snapshot(cam_id)
+    if jpeg is None:
+        return Response(status=204)
+    return Response(
+        jpeg,
+        mimetype="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
     )
 
+
+@api_bp.route("/cameras/status", methods=["GET"])
+def cameras_live_status():
+    """Return live status for all running cameras."""
+    return jsonify({"cameras": _recorder.camera_status_list()})
+
+
+# ─── Recording (Phase 1) ──────────────────────────────────────────────────────
 
 @api_bp.route("/recording/start", methods=["POST"])
 def start_recording():
@@ -93,11 +117,15 @@ def start_recording():
     if _recorder.is_running():
         return jsonify({"error": "Recording is already running"}), 409
 
+    # Phase 1 config overrides from body
+    phase1_cfg = body.get("phase1_config", {})
+
     _recorder.start(
         cameras=cameras,
         storage_limit_gb=storage_limit_gb,
         output_dir=_app_module.RAW_VIDEOS_DIR,
         model_path=_app_module.MODEL_PHASE1,
+        config=phase1_cfg,
     )
     return jsonify({"message": "Recording started", "cameras": len(cameras)})
 
@@ -113,6 +141,8 @@ def recording_status():
     return jsonify(_recorder.status())
 
 
+# ─── Videos ───────────────────────────────────────────────────────────────────
+
 @api_bp.route("/videos", methods=["GET"])
 def list_videos():
     return jsonify({"videos": _storage.list_videos(_app_module.RAW_VIDEOS_DIR)})
@@ -122,14 +152,14 @@ def list_videos():
 def delete_video(filename: str):
     if not filename.endswith(".mp4"):
         return jsonify({"error": "Only .mp4 files can be deleted"}), 400
-
     target = _app_module.RAW_VIDEOS_DIR / filename
     if not target.exists() or not target.is_file():
         return jsonify({"error": "File not found"}), 404
-
     target.unlink()
     return jsonify({"message": f"{filename} deleted"})
 
+
+# ─── Analysis (Phase 2) ───────────────────────────────────────────────────────
 
 @api_bp.route("/analysis/start", methods=["POST"])
 def start_analysis():
@@ -139,11 +169,9 @@ def start_analysis():
         return jsonify({"error": f"Directory not found: {video_dir}"}), 400
     if _analyzer.is_running():
         return jsonify({"error": "Analysis is already running"}), 409
-
     clips = sorted(video_dir.glob("*.mp4"))
     if not clips:
         return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
-
     _analyzer.start(clips, _app_module.OUTPUT_DIR, _app_module.MODEL_PHASE2)
     return jsonify({"message": "Analysis started", "clips": len(clips)})
 
@@ -167,21 +195,20 @@ def analysis_results():
     return jsonify({"results": _storage.list_results(folder)})
 
 
+# ─── Pose & ADL (Phase 3) ─────────────────────────────────────────────────────
+
 @api_bp.route("/pose/start", methods=["POST"])
 def start_pose():
     body = request.get_json(force=True, silent=True) or {}
     video_dir = _resolve_dir(body.get("folder"), _app_module.RAW_VIDEOS_DIR)
     save_overlay = bool(body.get("save_overlay", True))
-
     if not video_dir.is_dir():
         return jsonify({"error": f"Directory not found: {video_dir}"}), 400
     if _pose.is_running():
         return jsonify({"error": "Pose analysis is already running"}), 409
-
     clips = sorted(video_dir.glob("*.mp4"))
     if not clips:
         return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
-
     _pose.start(
         clips=clips,
         output_dir=_app_module.OUTPUT_POSE_DIR,
@@ -216,13 +243,14 @@ def pose_adl_summary():
     clip_stem = str(request.args.get("clip", "")).strip()
     if not clip_stem:
         return jsonify({"error": "clip is required"}), 400
-
     folder = _resolve_dir(request.args.get("folder"), _app_module.OUTPUT_POSE_DIR)
     summary = _storage.get_pose_summary(folder, clip_stem)
     if summary is None:
         return jsonify({"error": f"Pose result not found for clip: {clip_stem}"}), 404
     return jsonify({"clip": clip_stem, "adl_distribution": summary})
 
+
+# ─── Storage ──────────────────────────────────────────────────────────────────
 
 @api_bp.route("/storage/info", methods=["GET"])
 def storage_info():
@@ -236,9 +264,7 @@ def set_storage_limit():
         limit_gb = float(body.get("limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB))
     except (TypeError, ValueError):
         return jsonify({"error": "limit_gb must be numeric"}), 400
-
     if limit_gb <= 0:
         return jsonify({"error": "limit_gb must be greater than zero"}), 400
-
     _recorder.set_storage_limit(limit_gb)
     return jsonify({"message": f"Storage limit updated to {limit_gb:.2f} GB"})

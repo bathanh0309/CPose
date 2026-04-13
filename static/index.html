@@ -1,322 +1,430 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPose Dashboard</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css">
-    <script defer src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <script defer src="/static/js/app.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CPose — Monitoring Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script defer src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script defer src="/static/js/app.js"></script>
 </head>
 <body>
-    <aside class="sidebar">
-        <div class="sidebar-brand">
-            <div class="brand-icon">
-                <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="4" y="6" width="40" height="36" rx="10" fill="var(--accent)" fill-opacity="0.14"/>
-                    <circle cx="18" cy="16" r="4" fill="var(--success)"/>
-                    <path d="M16 24L24 18L32 24L26 34H18L16 24Z" fill="var(--accent)"/>
-                    <path d="M14 26L10 38H16L18 33" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M34 26L38 38H32L30 33" stroke="var(--text-primary)" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-            </div>
-            <div>
-                <span class="brand-name">CPose</span>
-                <span class="brand-sub">Three-phase pipeline</span>
-            </div>
-        </div>
 
-        <nav class="sidebar-nav">
-            <a href="#" class="nav-item active" data-tab="config">Configuration</a>
-            <a href="#" class="nav-item" data-tab="monitor">Live Monitor</a>
-            <a href="#" class="nav-item" data-tab="analysis">Analysis</a>
-            <a href="#" class="nav-item" data-tab="results">Results</a>
-            <a href="#" class="nav-item" data-tab="pose">Pose and ADL</a>
-        </nav>
-
-        <div class="sidebar-status">
-            <div class="status-row">
-                <span class="dot dot-sm disconnected" id="dot-sock"></span>
-                <span id="sock-lbl">Disconnected</span>
-            </div>
-            <div class="storage-bar-wrap">
-                <div class="storage-label">
-                    <span>Raw video storage</span>
-                    <strong id="storage-text">0 GB</strong>
-                </div>
-                <div class="storage-bar">
-                    <div class="storage-fill" id="storage-fill"></div>
-                </div>
-                <div class="info-row" id="storage-info-detail">No clips available yet</div>
-            </div>
-        </div>
-    </aside>
-
-    <main class="main-content">
-        <header class="topbar">
-            <h1 id="page-title">System Configuration</h1>
-            <div class="topbar-right">
-                <span class="version-badge">Canonical Flask Workspace</span>
-            </div>
-        </header>
-
-        <section class="tab-panel active" id="tab-config">
-            <div class="panel-grid two-col">
-                <article class="card">
-                    <div class="card-header">
-                        <h2>resources.txt</h2>
-                        <span class="badge badge-info">Phase 1 input</span>
-                    </div>
-                    <div class="card-body">
-                        <p class="hint">Upload a plain-text file with one RTSP URL per line. Blank lines and lines starting with <code>#</code> are ignored.</p>
-                        <div class="drop-zone" id="drop-zone">
-                            <input id="file-input" type="file" accept=".txt" hidden>
-                            <p>Drop <code>resources.txt</code> here or click to browse</p>
-                        </div>
-                        <div class="config-result hidden" id="config-result"></div>
-                        <div class="form-row">
-                            <button class="btn btn-ghost" id="btn-probe-all">Probe All Cameras</button>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="card">
-                    <div class="card-header">
-                        <h2>Camera Inventory</h2>
-                        <span class="badge badge-ok">Live parsed list</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="camera-list" id="camera-list">
-                            <p class="empty-hint">No cameras loaded yet</p>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="card span-full">
-                    <div class="card-header">
-                        <h2>Runtime Settings</h2>
-                        <span class="badge badge-warn">Raw video retention</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="form-row">
-                            <label for="storage-limit">Storage limit (GB)</label>
-                            <input id="storage-limit" type="number" min="1" step="0.5" value="10">
-                            <button class="btn btn-primary" id="btn-set-limit">Apply Limit</button>
-                        </div>
-                    </div>
-                </article>
-            </div>
-        </section>
-
-        <section class="tab-panel" id="tab-monitor">
-            <div class="control-bar">
-                <button class="btn btn-success btn-lg" id="btn-start-rec">Start Recording</button>
-                <button class="btn btn-danger btn-lg" id="btn-stop-rec" disabled>Stop Recording</button>
-                <div class="status-row">
-                    <span class="dot" id="dot-rec"></span>
-                    <span id="lbl-rec">Idle</span>
-                </div>
-                <div class="spacer"></div>
-                <div class="stat-pill">Clips <span id="rec-clip-count">0</span></div>
-                <div class="stat-pill">Detections <span id="rec-detect-count">0</span></div>
-            </div>
-
-            <div class="camera-grid" id="camera-grid">
-                <div class="camera-placeholder">Start Phase 1 to open camera worker tiles.</div>
-            </div>
-
-            <article class="card log-card">
-                <div class="card-header">
-                    <h2>Event Log</h2>
-                    <button class="btn btn-ghost btn-sm" id="btn-clear-log">Clear</button>
-                </div>
-                <div class="log-body" id="event-log">
-                    <p class="empty-hint">No events yet</p>
-                </div>
-            </article>
-        </section>
-
-        <section class="tab-panel" id="tab-analysis">
-            <div class="panel-grid two-col">
-                <article class="card span-full">
-                    <div class="card-header">
-                        <h2>Phase 2 Controls</h2>
-                        <div class="status-row">
-                            <span class="dot" id="dot-ana"></span>
-                            <span id="lbl-ana">Idle</span>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="input-row">
-                            <input id="video-dir" type="text" value="data/raw_videos">
-                            <button class="btn btn-primary" id="btn-start-analysis">Start Analysis</button>
-                            <button class="btn btn-danger" id="btn-stop-analysis" disabled>Stop</button>
-                            <button class="btn btn-ghost" id="btn-refresh-videos">Refresh Clips</button>
-                        </div>
-                        <p class="hint">Phase 2 scans every MP4 in the selected folder and writes PNG frames plus <code>_labels.txt</code> into <code>data/output_labels</code>.</p>
-                    </div>
-                </article>
-
-                <article class="card">
-                    <div class="card-header">
-                        <h2>Progress</h2>
-                        <span class="badge badge-info">YOLO detect</span>
-                    </div>
-                    <div class="card-body">
-                        <div id="analysis-idle">
-                            <p class="center-hint">Start analysis to see real-time progress.</p>
-                        </div>
-                        <div id="analysis-progress-section" class="hidden">
-                            <div class="progress-label">
-                                <span id="ana-clip-name">-</span>
-                                <strong id="ana-pct">0%</strong>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="ana-bar"></div>
-                            </div>
-                            <div class="stat-grid">
-                                <div class="stat-box">
-                                    <div id="stat-clips">0 / 0</div>
-                                    <label>Clips</label>
-                                </div>
-                                <div class="stat-box">
-                                    <div id="stat-frames">0</div>
-                                    <label>PNG Frames</label>
-                                </div>
-                                <div class="stat-box">
-                                    <div id="stat-labels">0</div>
-                                    <label>BBoxes</label>
-                                </div>
-                            </div>
-                        </div>
-                        <div id="analysis-done" class="hidden result-done">
-                            <p>Phase 2 finished.</p>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="card">
-                    <div class="card-header">
-                        <h2>Input Clips</h2>
-                        <span class="badge badge-ok">Source folder</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="video-table-wrap" id="video-list-table">
-                            <p class="empty-hint">No MP4 clips found.</p>
-                        </div>
-                    </div>
-                </article>
-            </div>
-        </section>
-
-        <section class="tab-panel" id="tab-results">
-            <article class="card">
-                <div class="card-header">
-                    <h2>Phase 2 Results</h2>
-                    <div class="form-row">
-                        <span class="hint" id="result-count">0 clip results</span>
-                        <button class="btn btn-ghost btn-sm" id="btn-refresh-results">Refresh</button>
-                    </div>
-                </div>
-                <div class="card-body">
-                    <div class="results-grid" id="results-grid">
-                        <p class="empty-hint">No Phase 2 outputs yet.</p>
-                    </div>
-                </div>
-            </article>
-        </section>
-
-        <section class="tab-panel" id="tab-pose">
-            <div class="panel-grid two-col">
-                <article class="card span-full">
-                    <div class="card-header">
-                        <h2>Phase 3 Controls</h2>
-                        <div class="status-row">
-                            <span class="dot" id="dot-pose"></span>
-                            <span id="lbl-pose">Idle</span>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="input-row">
-                            <input id="pose-dir" type="text" value="data/raw_videos">
-                            <button class="btn btn-primary" id="btn-start-pose">Start Pose Analysis</button>
-                            <button class="btn btn-danger" id="btn-stop-pose" disabled>Stop</button>
-                            <button class="btn btn-ghost" id="btn-refresh-pose">Refresh Results</button>
-                        </div>
-                        <div class="form-row">
-                            <label for="pose-save-overlay">Save overlay PNG frames</label>
-                            <input id="pose-save-overlay" type="checkbox" checked>
-                        </div>
-                        <p class="hint">Phase 3 writes <code>_keypoints.txt</code>, <code>_adl.txt</code>, and optional overlay PNG frames into <code>data/output_pose</code>.</p>
-                    </div>
-                </article>
-
-                <article class="card">
-                    <div class="card-header">
-                        <h2>Pose Progress</h2>
-                        <span class="badge badge-info">YOLO pose</span>
-                    </div>
-                    <div class="card-body">
-                        <div id="pose-idle">
-                            <p class="center-hint">Start Phase 3 to generate keypoints and ADL labels.</p>
-                        </div>
-                        <div id="pose-progress-section" class="hidden">
-                            <div class="progress-label">
-                                <span id="pose-clip-name">-</span>
-                                <strong id="pose-pct">0%</strong>
-                            </div>
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="pose-bar"></div>
-                            </div>
-                            <div class="stat-grid">
-                                <div class="stat-box">
-                                    <div id="pose-stat-clips">0 / 0</div>
-                                    <label>Clips</label>
-                                </div>
-                                <div class="stat-box">
-                                    <div id="pose-stat-kps">0</div>
-                                    <label>Keypoint Rows</label>
-                                </div>
-                                <div class="stat-box">
-                                    <div id="pose-stat-adl">0</div>
-                                    <label>ADL Events</label>
-                                </div>
-                            </div>
-                        </div>
-                        <div id="pose-done" class="hidden result-done">
-                            <p>Phase 3 finished.</p>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="card">
-                    <div class="card-header">
-                        <h2>Pose Outputs</h2>
-                        <span class="badge badge-ok">Summary</span>
-                    </div>
-                    <div class="card-body">
-                        <div class="results-grid" id="pose-results-grid">
-                            <p class="empty-hint">No pose outputs yet.</p>
-                        </div>
-                    </div>
-                </article>
-            </div>
-        </section>
-    </main>
-
-    <div class="modal-overlay hidden" id="modal-probe">
-        <div class="modal">
-            <div class="modal-header">
-                <h3 id="probe-cam-id">Camera Probe</h3>
-                <button class="modal-close" id="modal-close" type="button">x</button>
-            </div>
-            <div class="modal-body" id="probe-result">
-                <div class="loader"></div>
-            </div>
-        </div>
+<!-- ═══════════════════════ SIDEBAR ═══════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-icon">
+      <!-- Camera + person icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+        <circle cx="8" cy="10" r="2" fill="var(--amber)" stroke="none"/>
+      </svg>
     </div>
+    <div>
+      <div class="brand-name">CPose</div>
+      <div class="brand-sub">3-Phase Pipeline</div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section-title">Setup</div>
+    <a href="#" class="nav-item active" data-tab="config">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0 0 4.93 19.07M4.93 4.93a10 10 0 0 0 14.14 14.14"/></svg>
+      Configuration
+    </a>
+
+    <div class="nav-section-title">Phase 1</div>
+    <a href="#" class="nav-item" data-tab="monitor">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      Live Monitor
+      <span class="nav-badge hidden" id="nav-rec-badge">REC</span>
+    </a>
+
+    <div class="nav-section-title">Phase 2</div>
+    <a href="#" class="nav-item" data-tab="analysis">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><polyline points="18 17 13 12 9 14 5 10"/></svg>
+      Analysis
+    </a>
+    <a href="#" class="nav-item" data-tab="results">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Results
+    </a>
+
+    <div class="nav-section-title">Phase 3</div>
+    <a href="#" class="nav-item" data-tab="pose">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="4" r="2"/><path d="M12 6v6M12 6L9 9M12 6l3 3M12 12l-3 4M12 12l3 4"/></svg>
+      Pose &amp; ADL
+    </a>
+  </nav>
+
+  <div class="sidebar-foot">
+    <div class="flex-row">
+      <span class="dot disconnected" id="dot-sock"></span>
+      <span id="sock-label" class="fs-12 txt-muted">Disconnected</span>
+    </div>
+    <div>
+      <div class="flex-row" style="justify-content:space-between; margin-bottom:4px;">
+        <span class="fs-12 txt-muted">Storage</span>
+        <span class="fs-12 fw-6 txt-2" id="storage-text">0 GB</span>
+      </div>
+      <div class="storage-track">
+        <div class="storage-fill" id="storage-fill"></div>
+      </div>
+      <div class="fs-12 txt-muted mt-2" id="storage-detail">— clips</div>
+    </div>
+  </div>
+</aside>
+
+<!-- ═══════════════════════ MAIN ═══════════════════════════════ -->
+<main class="main">
+
+  <header class="topbar">
+    <div>
+      <div class="topbar-title" id="page-title">System Configuration</div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-actions">
+      <span class="badge badge-idle" id="global-status">Idle</span>
+    </div>
+  </header>
+
+  <!-- ════════════ TAB: CONFIGURATION ════════════════════════ -->
+  <section class="tab-panel active" id="tab-config">
+    <div class="g g-2">
+
+      <!-- Upload card -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">resources.txt</span>
+          <span class="badge badge-info">Phase 1 input</span>
+        </div>
+        <div class="card-body">
+          <p class="hint">One RTSP URL per line. Lines starting with <code>#</code> are ignored.<br>Optional: <code>Camera Name __ rtsp://...</code> to set display labels.</p>
+          <div class="dropzone mt-3" id="drop-zone">
+            <input id="file-input" type="file" accept=".txt" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <div class="dz-title">Drop resources.txt or click to browse</div>
+            <div class="dz-sub">Plain text file · max 1 MB</div>
+          </div>
+          <div class="config-msg hidden" id="config-msg"></div>
+          <div class="form-row mt-3">
+            <button class="btn btn-ghost" id="btn-probe-all">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              Probe All Cameras
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Camera inventory -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Camera Inventory</span>
+          <span class="badge badge-idle" id="cam-count-badge">0 cameras</span>
+        </div>
+        <div class="card-body">
+          <div class="cam-list" id="camera-list">
+            <div class="empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              <div class="empty-title">No cameras loaded</div>
+              <div class="empty-sub">Upload resources.txt to get started</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Runtime settings -->
+      <div class="card col-12">
+        <div class="card-head">
+          <span class="card-title">Runtime Settings</span>
+          <span class="badge badge-warn">Storage management</span>
+        </div>
+        <div class="card-body">
+          <div class="form-row">
+            <span class="form-label" style="white-space:nowrap">Storage limit (GB)</span>
+            <input class="input" id="storage-limit" type="number" min="1" step="0.5" value="10" style="max-width:100px">
+            <button class="btn btn-primary" id="btn-set-limit">Apply</button>
+            <span class="hint" style="margin:0">Raw clips older than newest will be pruned automatically when limit is reached.</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ════════════ TAB: LIVE MONITOR ═════════════════════════ -->
+  <section class="tab-panel" id="tab-monitor">
+
+    <!-- KPI bar -->
+    <div class="kpi-bar">
+      <div class="kpi">
+        <div class="kpi-label">Cameras Online</div>
+        <div class="kpi-value green" id="kpi-online">0</div>
+        <div class="kpi-sub" id="kpi-online-sub">of 0 configured</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Recording</div>
+        <div class="kpi-value" id="kpi-recording">Off</div>
+        <div class="kpi-sub" id="kpi-rec-sub">person-triggered</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Clips Saved</div>
+        <div class="kpi-value amber" id="kpi-clips">0</div>
+        <div class="kpi-sub">this session</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Detections</div>
+        <div class="kpi-value" id="kpi-detects">0</div>
+        <div class="kpi-sub">person events</div>
+      </div>
+    </div>
+
+    <!-- Control bar -->
+    <div class="ctrl-bar">
+      <button class="btn btn-success btn-lg" id="btn-start-rec">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5,3 19,12 5,21"/></svg>
+        Start Recording
+      </button>
+      <button class="btn btn-danger btn-lg" id="btn-stop-rec" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        Stop
+      </button>
+      <div class="ctrl-status">
+        <span class="dot" id="dot-rec"></span>
+        <span id="lbl-rec">Idle — waiting for start</span>
+      </div>
+    </div>
+
+    <!-- Camera grid (live stream cards) -->
+    <div class="camera-grid" id="camera-grid">
+      <div class="cam-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+        <p class="empty-title">No cameras running</p>
+        <p class="empty-sub">Configure cameras and press <strong>Start Recording</strong></p>
+      </div>
+    </div>
+
+    <!-- Event log -->
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Event Log</span>
+        <button class="btn btn-ghost btn-xs" id="btn-clear-log">Clear</button>
+      </div>
+      <div class="log-wrap" id="event-log">
+        <div class="empty" style="padding:16px">
+          <div class="empty-sub">Events will appear here during recording</div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ════════════ TAB: ANALYSIS ══════════════════════════════ -->
+  <section class="tab-panel" id="tab-analysis">
+    <div class="g g-2">
+
+      <!-- Controls -->
+      <div class="card col-12">
+        <div class="card-head">
+          <span class="card-title">Phase 2 — YOLOv11 Offline Analysis</span>
+          <div class="flex-row">
+            <span class="dot" id="dot-ana"></span>
+            <span id="lbl-ana" class="fs-12 txt-2">Idle</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-row">
+            <input class="input mono" id="video-dir" type="text" value="data/raw_videos" placeholder="Folder path">
+            <button class="btn btn-primary" id="btn-start-analysis">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5,3 19,12 5,21"/></svg>
+              Start Analysis
+            </button>
+            <button class="btn btn-danger" id="btn-stop-analysis" disabled>Stop</button>
+            <button class="btn btn-ghost" id="btn-refresh-videos">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+              Refresh
+            </button>
+          </div>
+          <p class="hint">Scans all MP4s in the folder. Writes PNG frames + <code>_labels.txt</code> into <code>data/output_labels/</code>.</p>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Progress</span>
+          <span class="badge badge-info">Live</span>
+        </div>
+        <div class="card-body">
+          <div id="ana-idle-state">
+            <div class="empty" style="padding:20px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><path d="M3 3v18h18"/><polyline points="18 17 13 12 9 14 5 10"/></svg>
+              <div class="empty-sub">Start analysis to see progress</div>
+            </div>
+          </div>
+          <div id="ana-running-state" class="hidden">
+            <div class="progress-head">
+              <span id="ana-clip-name" class="txt-2">—</span>
+              <strong id="ana-pct">0%</strong>
+            </div>
+            <div class="progress-track mb-4">
+              <div class="progress-fill" id="ana-bar"></div>
+            </div>
+            <div class="stat-row cols-3">
+              <div class="stat-box"><div class="stat-num" id="stat-clips">0/0</div><div class="stat-lbl">Clips</div></div>
+              <div class="stat-box"><div class="stat-num" id="stat-frames">0</div><div class="stat-lbl">PNG Frames</div></div>
+              <div class="stat-box"><div class="stat-num" id="stat-labels">0</div><div class="stat-lbl">BBoxes</div></div>
+            </div>
+          </div>
+          <div id="ana-done-state" class="hidden center" style="padding:20px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" width="36" height="36" style="margin:0 auto 8px"><polyline points="20 6 9 17 4 12"/></svg>
+            <div class="fw-6 txt-green">Analysis complete</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input clips -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Input Clips</span>
+          <span class="badge badge-idle" id="clip-count-badge">0 clips</span>
+        </div>
+        <div class="card-body p0">
+          <div class="table-wrap" id="video-list-area">
+            <div class="empty"><div class="empty-sub">No MP4 clips found in the selected folder</div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ════════════ TAB: RESULTS ═══════════════════════════════ -->
+  <section class="tab-panel" id="tab-results">
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Phase 2 Results</span>
+        <div class="flex-row">
+          <span class="fs-12 txt-muted" id="result-count-label">0 results</span>
+          <button class="btn btn-ghost btn-xs" id="btn-refresh-results">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="result-grid" id="results-grid">
+          <div class="empty col-12">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div class="empty-title">No outputs yet</div>
+            <div class="empty-sub">Run Phase 2 Analysis to generate results</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ TAB: POSE & ADL ════════════════════════════ -->
+  <section class="tab-panel" id="tab-pose">
+    <div class="g g-2">
+
+      <!-- Controls -->
+      <div class="card col-12">
+        <div class="card-head">
+          <span class="card-title">Phase 3 — YOLOv11-Pose + ADL Classification</span>
+          <div class="flex-row">
+            <span class="dot" id="dot-pose"></span>
+            <span id="lbl-pose" class="fs-12 txt-2">Idle</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-row">
+            <input class="input mono" id="pose-dir" type="text" value="data/raw_videos">
+            <button class="btn btn-primary" id="btn-start-pose">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5,3 19,12 5,21"/></svg>
+              Start Pose Analysis
+            </button>
+            <button class="btn btn-danger" id="btn-stop-pose" disabled>Stop</button>
+            <button class="btn btn-ghost" id="btn-refresh-pose">Refresh</button>
+          </div>
+          <div class="form-row mt-2">
+            <label class="flex-row fs-12 txt-2" style="cursor:pointer">
+              <input id="pose-save-overlay" type="checkbox" checked style="accent-color:var(--amber)">
+              Save skeleton overlay PNG frames
+            </label>
+          </div>
+          <p class="hint">Writes <code>_keypoints.txt</code>, <code>_adl.txt</code> (and optionally overlay PNGs) into <code>data/output_pose/</code>.</p>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Pose Progress</span>
+          <span class="badge badge-pose">YOLOv11-Pose</span>
+        </div>
+        <div class="card-body">
+          <div id="pose-idle-state">
+            <div class="empty" style="padding:20px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><circle cx="12" cy="4" r="2"/><path d="M12 6v6M12 6L9 9M12 6l3 3M12 12l-3 4M12 12l3 4"/></svg>
+              <div class="empty-sub">Start Phase 3 to generate keypoints and ADL labels</div>
+            </div>
+          </div>
+          <div id="pose-running-state" class="hidden">
+            <div class="progress-head">
+              <span id="pose-clip-name" class="txt-2">—</span>
+              <strong id="pose-pct">0%</strong>
+            </div>
+            <div class="progress-track mb-4">
+              <div class="progress-fill" id="pose-bar"></div>
+            </div>
+            <div class="stat-row cols-3">
+              <div class="stat-box"><div class="stat-num" id="pose-stat-clips">0/0</div><div class="stat-lbl">Clips</div></div>
+              <div class="stat-box"><div class="stat-num" id="pose-stat-kps">0</div><div class="stat-lbl">Keypoint Rows</div></div>
+              <div class="stat-box"><div class="stat-num" id="pose-stat-adl">0</div><div class="stat-lbl">ADL Events</div></div>
+            </div>
+          </div>
+          <div id="pose-done-state" class="hidden center" style="padding:20px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2" width="36" height="36" style="margin:0 auto 8px"><polyline points="20 6 9 17 4 12"/></svg>
+            <div class="fw-6" style="color:var(--purple)">Phase 3 complete</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pose outputs -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Pose Outputs</span>
+          <button class="btn btn-ghost btn-xs" id="btn-refresh-pose-results">Refresh</button>
+        </div>
+        <div class="card-body">
+          <div class="result-grid" id="pose-results-grid">
+            <div class="empty">
+              <div class="empty-sub">No pose outputs yet</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- ════════════ PROBE MODAL ════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="modal-probe">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="probe-title">Camera Probe</h3>
+      <button class="modal-close" id="modal-close">×</button>
+    </div>
+    <div class="modal-body" id="probe-body">
+      <div class="spin"></div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

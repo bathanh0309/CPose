@@ -1,679 +1,716 @@
 "use strict";
+/* ════════════════════════════════════════════════════════════════════════
+   CPose Dashboard — app.js
+   Vanilla JS · Socket.IO · Camera snapshot polling · State machine aware
+════════════════════════════════════════════════════════════════════════ */
 
-const state = {
-  cameras: [],
-  storageLimitGb: 10,
-  selectedResolutions: {},
-  recordingRunning: false,
-  analysisRunning: false,
-  poseRunning: false,
-  analysisClipsTotal: 0,
-  poseClipsTotal: 0,
-  clipCount: 0,
-  detectCount: 0,
+// ── App state ──────────────────────────────────────────────────────────────
+const S = {
+  cameras:            [],    // parsed from resources.txt
+  storageLimitGb:     10,
+  selectedRes:        {},    // { cam_id: {width, height} }
+  recRunning:         false,
+  anaRunning:         false,
+  poseRunning:        false,
+  anaClipsTotal:      0,
+  poseClipsTotal:     0,
+  clipCount:          0,
+  detectCount:        0,
+  onlineCount:        0,
+  recCount:           0,
+  streamIntervals:    {},    // { cam_id: intervalId }
 };
 
 const TAB_TITLES = {
-  config: "System Configuration",
-  monitor: "Live Monitor",
+  config:   "System Configuration",
+  monitor:  "Live Monitor — Phase 1",
   analysis: "Phase 2 Analysis",
-  results: "Phase 2 Results",
-  pose: "Phase 3 Pose and ADL",
+  results:  "Phase 2 Results",
+  pose:     "Phase 3 — Pose & ADL",
 };
 
+// ── Socket.IO ──────────────────────────────────────────────────────────────
 const socket = io({ transports: ["websocket", "polling"] });
-
-const dotSock = document.getElementById("dot-sock");
-const sockLbl = document.getElementById("sock-lbl");
+const $dotSock  = q("#dot-sock");
+const $sockLbl  = q("#sock-label");
 
 socket.on("connect", () => {
-  dotSock.className = "dot dot-sm connected";
-  sockLbl.textContent = "Connected";
-  refreshStorageInfo();
+  cls($dotSock, "disconnected"); add($dotSock, "connected");
+  $sockLbl.textContent = "Connected";
+  fetchStorageInfo();
 });
-
 socket.on("disconnect", () => {
-  dotSock.className = "dot dot-sm disconnected";
-  sockLbl.textContent = "Disconnected";
+  cls($dotSock, "connected"); add($dotSock, "disconnected");
+  $sockLbl.textContent = "Disconnected";
 });
 
-socket.on("camera_status", (payload) => {
-  updateCameraTile(payload);
-  const summary = payload.resolution ? `${payload.status} | ${payload.resolution}` : payload.status;
-  addLog(`cam-${payload.cam_id}: ${summary}`, payload.status === "error" ? "err" : "");
+socket.on("camera_status", (d) => {
+  updateCamCard(d);
+  updateOnlineCount();
+  const msg = `${d.label || "cam"+d.cam_id}: ${d.status}${d.resolution ? " · "+d.resolution : ""}`;
+  addLog(msg, d.cam_id, "");
 });
 
-socket.on("detection_event", (payload) => {
-  const count = payload.person_count ?? payload.count ?? 0;
-  state.detectCount += 1;
-  document.getElementById("rec-detect-count").textContent = String(state.detectCount);
-  addLog(`cam-${payload.cam_id}: detected ${count} person(s)`, "detect");
-  pulseDotRec();
+socket.on("detection_event", (d) => {
+  S.detectCount++;
+  q("#kpi-detects").textContent = S.detectCount;
+  addLog("person detected (conf " + (d.confidence_max || 0).toFixed(2) + ")", d.cam_id, "detect");
+  flashDot(q("#dot-rec"));
 });
 
-socket.on("clip_saved", (payload) => {
-  state.clipCount += 1;
-  document.getElementById("rec-clip-count").textContent = String(state.clipCount);
-  addLog(`clip saved: ${payload.filename} (${payload.duration_s}s, ${payload.size_mb} MB)`, "clip");
-  refreshStorageInfo();
-  refreshVideoList();
+socket.on("clip_saved", (d) => {
+  S.clipCount++;
+  q("#kpi-clips").textContent = S.clipCount;
+  addLog(`clip saved: ${d.filename} · ${d.duration_s}s · ${d.size_mb} MB`, d.cam_id, "clip");
+  fetchStorageInfo();
+  fetchVideoList();
 });
 
-socket.on("analysis_progress", showAnalysisProgress);
-socket.on("analysis_complete", finishAnalysis);
-socket.on("pose_progress", showPoseProgress);
-socket.on("pose_complete", finishPose);
-
-socket.on("storage_warning", (payload) => {
-  addLog(
-    `storage warning: ${payload.used_gb}/${payload.limit_gb} GB (${payload.pct}%)`,
-    "warn"
-  );
-  updateStorageBar(payload.used_gb, payload.limit_gb);
+socket.on("rec_log", (d) => {
+  addLog(d.message, d.cam_id, "info");
 });
 
-socket.on("error", (payload) => {
-  addLog(`error [${payload.source}]: ${payload.message}`, "err");
+socket.on("analysis_progress",  showAnaProgress);
+socket.on("analysis_complete",  doneAnalysis);
+socket.on("pose_progress",      showPoseProgress);
+socket.on("pose_complete",      donePose);
+
+socket.on("storage_warning", (d) => {
+  addLog(`storage ${d.used_gb}/${d.limit_gb} GB (${d.pct}%)`, "system", "warn");
+  applyStorageBar(d.used_gb, d.limit_gb);
 });
 
-document.querySelectorAll(".nav-item").forEach((item) => {
-  item.addEventListener("click", (event) => {
-    event.preventDefault();
-    switchTab(item.dataset.tab);
-  });
+socket.on("error", (d) => {
+  addLog(`error [${d.source}]: ${d.message}`, "system", "err");
 });
 
-function switchTab(tabId) {
-  document.querySelectorAll(".nav-item").forEach((item) => {
-    item.classList.toggle("active", item.dataset.tab === tabId);
-  });
-  document.querySelectorAll(".tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.id === `tab-${tabId}`);
-  });
-  document.getElementById("page-title").textContent = TAB_TITLES[tabId] || tabId;
+// ── Tab navigation ─────────────────────────────────────────────────────────
+document.querySelectorAll(".nav-item[data-tab]").forEach(el => {
+  el.addEventListener("click", ev => { ev.preventDefault(); switchTab(el.dataset.tab); });
+});
 
-  if (tabId === "analysis") {
-    refreshVideoList();
-  } else if (tabId === "results") {
-    refreshResults();
-  } else if (tabId === "pose") {
-    refreshPoseResults();
-  }
+function switchTab(id) {
+  document.querySelectorAll(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.tab === id));
+  document.querySelectorAll(".tab-panel").forEach(el => el.classList.toggle("active", el.id === "tab-"+id));
+  q("#page-title").textContent = TAB_TITLES[id] || id;
+  if (id === "analysis") { fetchVideoList(); }
+  if (id === "results")  { fetchResults(); }
+  if (id === "pose")     { fetchPoseResults(); }
 }
 
-async function api(url, options = {}) {
-  const response = await fetch(url, options);
-  let data = {};
-  try {
-    data = await response.json();
-  } catch (error) {
-    data = {};
-  }
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `Request failed (${response.status})`);
-  }
-  return data;
+// ── Generic helpers ─────────────────────────────────────────────────────────
+function q(sel)          { return document.querySelector(sel); }
+function qAll(sel)       { return document.querySelectorAll(sel); }
+function add(el, cls)    { el && el.classList.add(cls); }
+function cls(el, ...cs)  { el && cs.forEach(c => el.classList.remove(c)); }
+function show(el)        { el && el.classList.remove("hidden"); }
+function hide(el)        { el && el.classList.add("hidden"); }
+function esc(s)          { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, opts);
+  let d = {};
+  try { d = await r.json(); } catch {}
+  if (!r.ok) throw new Error(d.error || d.message || `HTTP ${r.status}`);
+  return d;
 }
 
-const dropZone = document.getElementById("drop-zone");
-const fileInput = document.getElementById("file-input");
-dropZone.addEventListener("click", () => fileInput.click());
-dropZone.addEventListener("dragover", (event) => {
-  event.preventDefault();
-  dropZone.classList.add("over");
+// ── Config tab ─────────────────────────────────────────────────────────────
+const $drop     = q("#drop-zone");
+const $fileIn   = q("#file-input");
+const $cfgMsg   = q("#config-msg");
+
+$drop.addEventListener("click", () => $fileIn.click());
+$drop.addEventListener("dragover", ev => { ev.preventDefault(); add($drop, "over"); });
+$drop.addEventListener("dragleave", () => cls($drop, "over"));
+$drop.addEventListener("drop", ev => {
+  ev.preventDefault(); cls($drop, "over");
+  if (ev.dataTransfer.files[0]) uploadConfig(ev.dataTransfer.files[0]);
 });
-dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
-dropZone.addEventListener("drop", (event) => {
-  event.preventDefault();
-  dropZone.classList.remove("over");
-  if (event.dataTransfer.files[0]) {
-    uploadConfig(event.dataTransfer.files[0]);
-  }
-});
-fileInput.addEventListener("change", () => {
-  if (fileInput.files[0]) {
-    uploadConfig(fileInput.files[0]);
-  }
-});
+$fileIn.addEventListener("change", () => $fileIn.files[0] && uploadConfig($fileIn.files[0]));
 
 async function uploadConfig(file) {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const status = document.getElementById("config-result");
-  status.classList.remove("hidden", "ok", "err");
-
+  const fd = new FormData(); fd.append("file", file);
+  cls($cfgMsg, "hidden", "ok", "err"); show($cfgMsg); $cfgMsg.textContent = "Uploading…";
   try {
-    const data = await api("/api/config/upload", { method: "POST", body: formData });
-    state.cameras = data.cameras || [];
-    status.classList.add("ok");
-    status.textContent = `Saved resources.txt with ${state.cameras.length} camera(s).`;
-    renderCameraList(state.cameras);
-  } catch (error) {
-    status.classList.add("err");
-    status.textContent = error.message;
+    const d = await api("/api/config/upload", { method: "POST", body: fd });
+    S.cameras = d.cameras || [];
+    add($cfgMsg, "ok"); $cfgMsg.textContent = `✓ Loaded ${S.cameras.length} camera(s) from resources.txt`;
+    renderConfigCamList(S.cameras);
+  } catch (e) {
+    add($cfgMsg, "err"); $cfgMsg.textContent = "✗ " + e.message;
   }
 }
 
 async function fetchCameras() {
   try {
-    const data = await api("/api/config/cameras");
-    state.cameras = data.cameras || [];
-    renderCameraList(state.cameras);
-  } catch (error) {
-    addLog(error.message, "err");
-  }
+    const d = await api("/api/config/cameras");
+    S.cameras = d.cameras || [];
+    renderConfigCamList(S.cameras);
+  } catch {}
 }
 
-function renderCameraList(cameras) {
-  const list = document.getElementById("camera-list");
-  if (!cameras.length) {
-    list.innerHTML = '<p class="empty-hint">No cameras loaded yet</p>';
+function renderConfigCamList(cams) {
+  const el = q("#camera-list");
+  q("#cam-count-badge").textContent = cams.length + " camera" + (cams.length !== 1 ? "s" : "");
+  if (!cams.length) {
+    el.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><div class="empty-title">No cameras loaded</div><div class="empty-sub">Upload resources.txt to get started</div></div>`;
     return;
   }
-
-  list.innerHTML = cameras.map((camera) => `
-    <div class="camera-item" id="cam-item-${camera.cam_id}">
-      <span class="cam-id-tag" title="ID: ${camera.cam_id}">${escHtml(camera.label || 'cam' + camera.cam_id)}</span>
-      <span class="cam-url" title="${escHtml(camera.url)}">${escHtml(camera.url)}</span>
-      <span class="cam-res" id="res-tag-${camera.cam_id}">-</span>
-      <button class="btn btn-ghost btn-sm" onclick="probeCamera('${camera.cam_id}', '${camera.url.replace(/'/g, "\\'")}')">Probe</button>
+  el.innerHTML = cams.map(c => `
+    <div class="cam-row" id="cfg-cam-${c.cam_id}">
+      <span class="cam-id">${esc(c.cam_id)}</span>
+      <span class="cam-label">${esc(c.label || "cam"+c.cam_id)}</span>
+      <span class="cam-url" title="${esc(c.url)}">${maskRtsp(c.url)}</span>
+      <span class="cam-res" id="res-tag-${c.cam_id}">—</span>
+      <button class="btn btn-ghost btn-xs" onclick="probeCamera('${c.cam_id}','${c.url.replace(/'/g,"\\'")}')" type="button">Probe</button>
     </div>
   `).join("");
 }
 
-document.getElementById("btn-probe-all").addEventListener("click", async () => {
-  for (const camera of state.cameras) {
-    await probeCamera(camera.cam_id, camera.url, false);
-  }
+function maskRtsp(url) {
+  return esc(url.replace(/(rtsp:\/\/)([^:]+):([^@]+)@/, "$1***:***@"));
+}
+
+q("#btn-probe-all").addEventListener("click", async () => {
+  for (const c of S.cameras) await probeCamera(c.cam_id, c.url, false);
 });
 
 async function probeCamera(camId, url, showModal = true) {
   if (showModal) {
-    document.getElementById("probe-cam-id").textContent = `Camera cam${camId}`;
-    document.getElementById("probe-result").innerHTML = '<div class="loader"></div>';
-    document.getElementById("modal-probe").classList.remove("hidden");
+    q("#probe-title").textContent = "Probing cam" + camId + "…";
+    q("#probe-body").innerHTML = '<div class="spin"></div>';
+    show(q("#modal-probe"));
   }
-
   try {
-    const data = await api("/api/cameras/probe", {
+    const d = await api("/api/cameras/probe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cam_id: camId, url }),
     });
-
-    state.selectedResolutions[camId] = { width: data.width, height: data.height };
-    const tag = document.getElementById(`res-tag-${camId}`);
-    if (tag) {
-      tag.textContent = `${data.width}x${data.height}`;
-    }
-
-    if (!showModal) {
-      return;
-    }
-
-    document.getElementById("probe-result").innerHTML = `
-      <dl class="probe-info">
-        <dt>Camera</dt><dd>cam${escHtml(data.cam_id)}</dd>
-        <dt>Resolution</dt><dd>${data.width} x ${data.height}</dd>
-        <dt>FPS</dt><dd>${data.fps}</dd>
+    S.selectedRes[camId] = { width: d.width, height: d.height };
+    const tag = q(`#res-tag-${camId}`);
+    if (tag) tag.textContent = `${d.width}×${d.height}`;
+    if (!showModal) return;
+    q("#probe-title").textContent = "Camera cam" + camId;
+    q("#probe-body").innerHTML = `
+      <dl class="probe-dl">
+        <dt>ID</dt><dd>cam${esc(d.cam_id)}</dd>
+        <dt>Resolution</dt><dd>${d.width} × ${d.height}</dd>
+        <dt>FPS</dt><dd>${d.fps}</dd>
       </dl>
-      <div class="res-options">
-        ${data.resolutions.map((option) => `
-          <button
-            class="res-btn ${option.width === data.width && option.height === data.height ? "selected" : ""}"
-            onclick="selectResolution('${data.cam_id}', ${option.width}, ${option.height}, this)"
-            type="button"
-          >
-            ${escHtml(option.label)}
-          </button>
-        `).join("")}
-      </div>
-    `;
-  } catch (error) {
-    if (showModal) {
-      document.getElementById("probe-result").innerHTML = `<p class="empty-hint">${escHtml(error.message)}</p>`;
-    }
+      <div class="form-label mb-4">Select recording resolution</div>
+      <div class="res-list">
+        ${(d.resolutions || []).map(r => `
+          <button class="res-btn ${r.width===d.width&&r.height===d.height?"sel":""}"
+            onclick="pickRes('${d.cam_id}',${r.width},${r.height},this)" type="button">
+            ${esc(r.label)}
+          </button>`).join("")}
+      </div>`;
+  } catch (e) {
+    if (showModal) q("#probe-body").innerHTML = `<div class="empty"><div class="empty-title">Probe failed</div><div class="empty-sub">${esc(e.message)}</div><button class="btn btn-ghost mt-3" onclick="probeCamera('${camId}','${url}')">Retry</button></div>`;
   }
 }
 
-function selectResolution(camId, width, height, button) {
-  state.selectedResolutions[camId] = { width, height };
-  const tag = document.getElementById(`res-tag-${camId}`);
-  if (tag) {
-    tag.textContent = `${width}x${height}`;
-  }
-  button.closest(".res-options").querySelectorAll(".res-btn").forEach((item) => {
-    item.classList.remove("selected");
-  });
-  button.classList.add("selected");
-}
+window.probeCamera = probeCamera;
 
-document.getElementById("modal-close").addEventListener("click", () => {
-  document.getElementById("modal-probe").classList.add("hidden");
-});
+window.pickRes = function(camId, w, h, btn) {
+  S.selectedRes[camId] = { width: w, height: h };
+  const tag = q(`#res-tag-${camId}`); if (tag) tag.textContent = `${w}×${h}`;
+  btn.closest(".res-list").querySelectorAll(".res-btn").forEach(b => cls(b,"sel"));
+  add(btn, "sel");
+};
 
-document.getElementById("btn-set-limit").addEventListener("click", async () => {
-  const limitGb = parseFloat(document.getElementById("storage-limit").value);
-  state.storageLimitGb = Number.isFinite(limitGb) ? limitGb : 10;
+q("#modal-close").addEventListener("click", () => hide(q("#modal-probe")));
+
+// ── Storage limit ──────────────────────────────────────────────────────────
+q("#btn-set-limit").addEventListener("click", async () => {
+  const v = parseFloat(q("#storage-limit").value);
+  S.storageLimitGb = isFinite(v) ? v : 10;
   try {
     await api("/api/storage/limit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit_gb: state.storageLimitGb }),
+      body: JSON.stringify({ limit_gb: S.storageLimitGb }),
     });
-    refreshStorageInfo();
-  } catch (error) {
-    addLog(error.message, "err");
-  }
+    fetchStorageInfo();
+  } catch (e) { addLog(e.message, "system", "err"); }
 });
 
-async function refreshStorageInfo() {
+async function fetchStorageInfo() {
   try {
-    const data = await api("/api/storage/info");
-    document.getElementById("storage-text").textContent = `${data.used_gb} GB`;
-    document.getElementById("storage-info-detail").textContent =
-      `${data.used_gb} GB used out of ${state.storageLimitGb} GB (${data.file_count} clips)`;
-    updateStorageBar(data.used_gb, state.storageLimitGb);
-  } catch (error) {
-    addLog(error.message, "err");
-  }
+    const d = await api("/api/storage/info");
+    q("#storage-text").textContent = d.used_gb + " GB";
+    q("#storage-detail").textContent = d.file_count + " clip" + (d.file_count !== 1 ? "s" : "");
+    applyStorageBar(d.used_gb, S.storageLimitGb);
+  } catch {}
 }
 
-function updateStorageBar(usedGb, limitGb) {
-  const pct = limitGb > 0 ? Math.min(100, (usedGb / limitGb) * 100) : 0;
-  const fill = document.getElementById("storage-fill");
-  fill.style.width = `${pct}%`;
-  fill.className = "storage-fill";
-  if (pct > 90) {
-    fill.classList.add("danger");
-  } else if (pct > 70) {
-    fill.classList.add("warn");
-  }
+function applyStorageBar(used, limit) {
+  const pct = limit > 0 ? Math.min(100, (used/limit)*100) : 0;
+  const fill = q("#storage-fill");
+  fill.style.width = pct + "%";
+  cls(fill, "hi", "crit");
+  if (pct > 90) add(fill, "crit");
+  else if (pct > 70) add(fill, "hi");
 }
 
-document.getElementById("btn-start-rec").addEventListener("click", async () => {
-  if (!state.cameras.length) {
-    addLog("Upload resources.txt before starting Phase 1.", "warn");
-    return;
-  }
-
-  const camerasPayload = state.cameras.map((camera) => {
-    const resolution = state.selectedResolutions[camera.cam_id] || {};
-    return {
-      cam_id: camera.cam_id,
-      url: camera.url,
-      width: resolution.width,
-      height: resolution.height,
-    };
-  });
-
+// ── Phase 1: Recording ─────────────────────────────────────────────────────
+q("#btn-start-rec").addEventListener("click", async () => {
+  if (!S.cameras.length) { addLog("Upload resources.txt first", "system", "warn"); return; }
+  const camsPayload = S.cameras.map(c => ({
+    cam_id: c.cam_id, url: c.url, label: c.label,
+    ...(S.selectedRes[c.cam_id] || {}),
+  }));
   try {
     await api("/api/recording/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cameras: camerasPayload,
-        storage_limit_gb: state.storageLimitGb,
-      }),
+      body: JSON.stringify({ cameras: camsPayload, storage_limit_gb: S.storageLimitGb }),
     });
-    state.recordingRunning = true;
-    state.clipCount = 0;
-    state.detectCount = 0;
-    document.getElementById("rec-clip-count").textContent = "0";
-    document.getElementById("rec-detect-count").textContent = "0";
-    document.getElementById("btn-start-rec").disabled = true;
-    document.getElementById("btn-stop-rec").disabled = false;
-    document.getElementById("dot-rec").className = "dot active";
-    document.getElementById("lbl-rec").textContent = "Recording";
-    renderCameraGrid(state.cameras);
-    addLog(`Started recording on ${state.cameras.length} camera(s).`, "clip");
-  } catch (error) {
-    addLog(error.message, "err");
-  }
+    S.recRunning = true; S.clipCount = 0; S.detectCount = 0;
+    q("#kpi-clips").textContent = "0";
+    q("#kpi-detects").textContent = "0";
+    q("#btn-start-rec").disabled = true;
+    q("#btn-stop-rec").disabled = false;
+    add(q("#dot-rec"), "online"); cls(q("#dot-rec"), "offline");
+    q("#lbl-rec").textContent = "Running · person-triggered";
+    q("#kpi-recording").textContent = "Active"; add(q("#kpi-recording"), "green");
+    show(q("#nav-rec-badge"));
+    renderCamGrid(S.cameras);
+    addLog(`Recording started on ${S.cameras.length} camera(s)`, "system", "info");
+    setGlobalStatus("recording");
+  } catch (e) { addLog(e.message, "system", "err"); }
 });
 
-document.getElementById("btn-stop-rec").addEventListener("click", async () => {
-  try {
-    await api("/api/recording/stop", { method: "POST" });
-  } catch (error) {
-    addLog(error.message, "err");
-  } finally {
-    state.recordingRunning = false;
-    document.getElementById("btn-start-rec").disabled = false;
-    document.getElementById("btn-stop-rec").disabled = true;
-    document.getElementById("dot-rec").className = "dot";
-    document.getElementById("lbl-rec").textContent = "Idle";
-  }
+q("#btn-stop-rec").addEventListener("click", async () => {
+  try { await api("/api/recording/stop", { method: "POST" }); } catch (e) { addLog(e.message, "system", "err"); }
+  S.recRunning = false;
+  q("#btn-start-rec").disabled = false;
+  q("#btn-stop-rec").disabled = true;
+  cls(q("#dot-rec"), "online", "recording"); add(q("#dot-rec"), "offline");
+  q("#lbl-rec").textContent = "Idle";
+  q("#kpi-recording").textContent = "Off"; cls(q("#kpi-recording"), "green", "red");
+  hide(q("#nav-rec-badge"));
+  stopAllStreams();
+  setGlobalStatus("idle");
+  addLog("Recording stopped", "system", "info");
 });
 
-function renderCameraGrid(cameras) {
-  const grid = document.getElementById("camera-grid");
+function setGlobalStatus(s) {
+  const el = q("#global-status");
+  el.className = "badge";
+  const map = { idle:"badge-idle", recording:"badge-recording", armed:"badge-armed" };
+  add(el, map[s] || "badge-idle");
+  el.textContent = { idle:"Idle", recording:"Recording", armed:"Armed" }[s] || s;
+}
+
+// ── Camera grid + live stream ─────────────────────────────────────────────
+function renderCamGrid(cameras) {
+  const grid = q("#camera-grid");
   if (!cameras.length) {
-    grid.innerHTML = '<div class="camera-placeholder">No cameras configured.</div>';
+    grid.innerHTML = `<div class="cam-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg><p class="empty-title">No cameras configured</p><p>Add cameras in the Configuration tab</p></div>`;
     return;
   }
+  grid.innerHTML = cameras.map(c => camCardHTML(c)).join("");
+  cameras.forEach(c => startStream(c.cam_id));
+}
 
-  grid.innerHTML = cameras.map((camera) => `
-    <div class="cam-tile" id="tile-${camera.cam_id}">
-      <div class="cam-tile-header">
-        <span class="cam-id-tag">${escHtml(camera.label || 'cam' + camera.cam_id)}</span>
-        <span class="dot" id="tile-dot-${camera.cam_id}"></span>
+function camCardHTML(c) {
+  return `
+  <div class="cam-card" id="cam-card-${c.cam_id}">
+    <div class="cam-head">
+      <span class="cam-name">${esc(c.label || "cam"+c.cam_id)}</span>
+      <div class="cam-badges">
+        <span class="badge badge-idle" id="cam-conn-${c.cam_id}">Connecting</span>
+        <span class="badge badge-idle hidden" id="cam-person-${c.cam_id}">Person</span>
+        <span class="badge badge-idle hidden" id="cam-rec-${c.cam_id}">Recording</span>
       </div>
-      <div class="cam-tile-body">
-        <div class="cam-tile-stat"><span>Status</span><span id="tile-st-${camera.cam_id}">Connecting</span></div>
-        <div class="cam-tile-stat"><span>Resolution</span><span id="tile-res-${camera.cam_id}">-</span></div>
-        <div class="cam-tile-stat"><span>FPS</span><span id="tile-fps-${camera.cam_id}">-</span></div>
+      <div class="cam-actions">
+        <button class="btn btn-icon" title="Refresh stream" onclick="refreshStream('${c.cam_id}')" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+        </button>
       </div>
     </div>
-  `).join("");
+    <div class="cam-stream-wrap">
+      <img class="cam-stream-img hidden" id="stream-img-${c.cam_id}" alt="Live stream cam${c.cam_id}">
+      <div class="cam-stream-placeholder" id="stream-placeholder-${c.cam_id}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+        <span>Connecting…</span>
+      </div>
+      <div class="cam-stream-overlay">
+        <span class="badge badge-idle" id="cam-state-badge-${c.cam_id}">idle</span>
+      </div>
+    </div>
+    <div class="cam-meta">
+      <div class="cam-meta-item">
+        <span class="cam-meta-label">Resolution</span>
+        <span class="cam-meta-value" id="cam-res-${c.cam_id}">—</span>
+      </div>
+      <div class="cam-meta-item">
+        <span class="cam-meta-label">FPS</span>
+        <span class="cam-meta-value" id="cam-fps-${c.cam_id}">—</span>
+      </div>
+      <div class="cam-meta-item">
+        <span class="cam-meta-label">Clip Duration</span>
+        <span class="cam-meta-value" id="cam-dur-${c.cam_id}">—</span>
+      </div>
+    </div>
+  </div>`;
 }
 
-function updateCameraTile(payload) {
-  const status = document.getElementById(`tile-st-${payload.cam_id}`);
-  const resolution = document.getElementById(`tile-res-${payload.cam_id}`);
-  const fps = document.getElementById(`tile-fps-${payload.cam_id}`);
-  const dot = document.getElementById(`tile-dot-${payload.cam_id}`);
-  if (!status) {
-    return;
+window.refreshStream = function(camId) { stopStream(camId); startStream(camId); };
+
+function startStream(camId) {
+  stopStream(camId);
+  let failCount = 0;
+  const img = q(`#stream-img-${camId}`);
+  const ph  = q(`#stream-placeholder-${camId}`);
+  if (!img) return;
+
+  function loadFrame() {
+    const src = `/api/cameras/${camId}/snapshot?t=${Date.now()}`;
+    const tmp = new Image();
+    tmp.onload = () => {
+      img.src = src;
+      show(img); hide(ph);
+      failCount = 0;
+    };
+    tmp.onerror = () => {
+      failCount++;
+      if (failCount >= 5) {
+        hide(img); show(ph);
+        if (ph) ph.querySelector("span").textContent = "No signal — retrying…";
+      }
+    };
+    tmp.src = src;
   }
-  status.textContent = payload.status || "-";
-  resolution.textContent = payload.resolution || "-";
-  fps.textContent = payload.fps ? `${payload.fps} fps` : "-";
-  dot.className = "dot";
-  if (payload.status === "streaming") {
-    dot.classList.add("active");
-  } else if (payload.status === "error") {
-    dot.classList.add("error");
+
+  loadFrame();
+  S.streamIntervals[camId] = setInterval(loadFrame, 150); // ~6-7 fps preview
+}
+
+function stopStream(camId) {
+  if (S.streamIntervals[camId]) {
+    clearInterval(S.streamIntervals[camId]);
+    delete S.streamIntervals[camId];
   }
 }
 
-function pulseDotRec() {
-  const dot = document.getElementById("dot-rec");
-  dot.style.opacity = "0.35";
-  window.setTimeout(() => {
-    dot.style.opacity = "1";
-  }, 180);
+function stopAllStreams() {
+  Object.keys(S.streamIntervals).forEach(stopStream);
 }
 
-document.getElementById("btn-clear-log").addEventListener("click", () => {
-  document.getElementById("event-log").innerHTML = '<p class="empty-hint">No events yet</p>';
+function updateCamCard(d) {
+  const camId = d.cam_id;
+
+  // Connection badge
+  const connBadge = q(`#cam-conn-${camId}`);
+  if (connBadge) {
+    connBadge.className = "badge";
+    const statusMap = {
+      online:    ["badge-online",    "Online"],
+      offline:   ["badge-offline",   "Offline"],
+      recording: ["badge-online",    "Online"],
+      error:     ["badge-offline",   "Error"],
+      connecting:["badge-idle",      "Connecting"],
+    };
+    const [cls_, lbl] = statusMap[d.status] || ["badge-idle", d.status];
+    add(connBadge, cls_);
+    connBadge.textContent = lbl;
+  }
+
+  // Person badge
+  const personBadge = q(`#cam-person-${camId}`);
+  if (personBadge) {
+    if (d.person_detected) {
+      show(personBadge);
+      personBadge.className = "badge badge-person";
+      personBadge.textContent = "Person";
+    } else {
+      hide(personBadge);
+    }
+  }
+
+  // Recording badge
+  const recBadge = q(`#cam-rec-${camId}`);
+  if (recBadge) {
+    if (d.recording) {
+      show(recBadge);
+      recBadge.className = "badge badge-recording";
+      recBadge.textContent = "● Rec";
+    } else if (d.rec_state === "armed") {
+      show(recBadge);
+      recBadge.className = "badge badge-armed";
+      recBadge.textContent = "Armed";
+    } else {
+      hide(recBadge);
+    }
+  }
+
+  // State badge (overlay)
+  const stateBadge = q(`#cam-state-badge-${camId}`);
+  if (stateBadge) {
+    const stateMap = {
+      idle:      ["badge-idle",      "IDLE"],
+      armed:     ["badge-armed",     "ARMED"],
+      recording: ["badge-recording", "REC"],
+      post_roll: ["badge-recording", "POST-ROLL"],
+    };
+    const [sc, sl] = stateMap[d.rec_state] || ["badge-idle", d.rec_state || "IDLE"];
+    stateBadge.className = "badge " + sc;
+    stateBadge.textContent = sl;
+  }
+
+  // Meta values
+  const resEl = q(`#cam-res-${camId}`);
+  const fpsEl = q(`#cam-fps-${camId}`);
+  const durEl = q(`#cam-dur-${camId}`);
+  if (resEl) resEl.textContent = d.resolution || "—";
+  if (fpsEl) fpsEl.textContent = d.fps ? d.fps + " fps" : "—";
+  if (durEl) durEl.textContent = d.recording && d.clip_duration > 0 ? d.clip_duration + "s" : "—";
+
+  // Card highlight
+  const card = q(`#cam-card-${camId}`);
+  if (card) card.classList.toggle("is-recording", !!d.recording);
+}
+
+function updateOnlineCount() {
+  // Count online from all tiles
+  const online = document.querySelectorAll('.badge-online').length;
+  q("#kpi-online").textContent = online;
+  q("#kpi-online-sub").textContent = "of " + S.cameras.length + " configured";
+}
+
+function flashDot(el) {
+  if (!el) return;
+  el.style.opacity = ".3";
+  setTimeout(() => el.style.opacity = "1", 200);
+}
+
+// ── Event log ──────────────────────────────────────────────────────────────
+q("#btn-clear-log").addEventListener("click", () => {
+  q("#event-log").innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Events will appear here during recording</div></div>`;
 });
 
-function addLog(message, className = "") {
-  const log = document.getElementById("event-log");
-  const empty = log.querySelector(".empty-hint");
-  if (empty) {
-    empty.remove();
-  }
-
-  const entry = document.createElement("div");
-  entry.className = `log-entry ${className}`.trim();
-  const time = document.createElement("span");
-  time.className = "log-time";
-  time.textContent = new Date().toLocaleTimeString();
-  entry.appendChild(time);
-  entry.appendChild(document.createTextNode(message));
-  log.prepend(entry);
-
-  const entries = log.querySelectorAll(".log-entry");
-  if (entries.length > 200) {
-    entries[entries.length - 1].remove();
-  }
+function addLog(msg, camId, type = "") {
+  const log = q("#event-log");
+  const empty = log.querySelector(".empty"); if (empty) empty.remove();
+  const e = document.createElement("div");
+  e.className = "log-entry " + type;
+  const t = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  const camLabel = camId && camId !== "system" ? `<span class="log-cam">cam${camId}</span>` : "";
+  e.innerHTML = `<span class="log-t">${t}</span>${camLabel}<span class="log-msg">${esc(msg)}</span>`;
+  log.prepend(e);
+  if (log.children.length > 250) log.removeChild(log.lastElementChild);
 }
 
-document.getElementById("btn-start-analysis").addEventListener("click", async () => {
-  const folder = document.getElementById("video-dir").value.trim() || "data/raw_videos";
+// ── Phase 2: Analysis ──────────────────────────────────────────────────────
+q("#btn-start-analysis").addEventListener("click", async () => {
+  const folder = q("#video-dir").value.trim() || "data/raw_videos";
   try {
-    const data = await api("/api/analysis/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const d = await api("/api/analysis/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ video_dir: folder }),
     });
-    state.analysisRunning = true;
-    state.analysisClipsTotal = data.clips || 0;
-    document.getElementById("btn-start-analysis").disabled = true;
-    document.getElementById("btn-stop-analysis").disabled = false;
-    document.getElementById("dot-ana").className = "dot active";
-    document.getElementById("lbl-ana").textContent = "Running";
-    document.getElementById("analysis-idle").classList.add("hidden");
-    document.getElementById("analysis-done").classList.add("hidden");
-    document.getElementById("analysis-progress-section").classList.remove("hidden");
-    document.getElementById("stat-clips").textContent = `0 / ${state.analysisClipsTotal}`;
-    document.getElementById("stat-frames").textContent = "0";
-    document.getElementById("stat-labels").textContent = "0";
-  } catch (error) {
-    addLog(error.message, "err");
-  }
+    S.anaRunning = true; S.anaClipsTotal = d.clips || 0;
+    q("#btn-start-analysis").disabled = true;
+    q("#btn-stop-analysis").disabled = false;
+    add(q("#dot-ana"), "online"); q("#lbl-ana").textContent = "Running";
+    show(q("#ana-running-state")); hide(q("#ana-idle-state")); hide(q("#ana-done-state"));
+    q("#stat-clips").textContent = "0/" + S.anaClipsTotal;
+    q("#stat-frames").textContent = "0";
+    q("#stat-labels").textContent = "0";
+  } catch (e) { addLog(e.message, "system", "err"); }
 });
 
-document.getElementById("btn-stop-analysis").addEventListener("click", async () => {
-  try {
-    await api("/api/analysis/stop", { method: "POST" });
-  } catch (error) {
-    addLog(error.message, "err");
-  } finally {
-    resetAnalysisUi();
-  }
+q("#btn-stop-analysis").addEventListener("click", async () => {
+  try { await api("/api/analysis/stop", { method: "POST" }); } catch {}
+  resetAnaUi();
 });
 
-function showAnalysisProgress(payload) {
-  document.getElementById("analysis-progress-section").classList.remove("hidden");
-  document.getElementById("ana-clip-name").textContent = payload.clip || "-";
-  document.getElementById("ana-pct").textContent = `${payload.pct || 0}%`;
-  document.getElementById("ana-bar").style.width = `${payload.pct || 0}%`;
-  if (payload.frames_saved !== undefined) {
-    document.getElementById("stat-frames").textContent = String(payload.frames_saved);
-  }
-  if (payload.labels_written !== undefined) {
-    document.getElementById("stat-labels").textContent = String(payload.labels_written);
-  }
+function showAnaProgress(d) {
+  show(q("#ana-running-state")); hide(q("#ana-idle-state"));
+  q("#ana-clip-name").textContent = d.clip || "—";
+  q("#ana-pct").textContent = (d.pct || 0) + "%";
+  q("#ana-bar").style.width = (d.pct || 0) + "%";
+  if (d.frames_saved !== undefined) q("#stat-frames").textContent = d.frames_saved;
+  if (d.labels_written !== undefined) q("#stat-labels").textContent = d.labels_written;
 }
 
-function finishAnalysis(payload) {
-  state.analysisRunning = false;
-  document.getElementById("analysis-progress-section").classList.add("hidden");
-  document.getElementById("analysis-done").classList.remove("hidden");
-  document.getElementById("stat-clips").textContent = `${payload.clips_done || 0} / ${state.analysisClipsTotal}`;
-  document.getElementById("stat-frames").textContent = String(payload.frames_saved || 0);
-  document.getElementById("stat-labels").textContent = String(payload.labels_written || 0);
-  resetAnalysisUi();
-  refreshResults();
+function doneAnalysis(d) {
+  S.anaRunning = false;
+  hide(q("#ana-running-state")); show(q("#ana-done-state"));
+  q("#stat-clips").textContent = `${d.clips_done||0}/${S.anaClipsTotal}`;
+  q("#stat-frames").textContent = d.frames_saved || 0;
+  q("#stat-labels").textContent = d.labels_written || 0;
+  resetAnaUi();
+  fetchResults();
 }
 
-function resetAnalysisUi() {
-  document.getElementById("btn-start-analysis").disabled = false;
-  document.getElementById("btn-stop-analysis").disabled = true;
-  document.getElementById("dot-ana").className = "dot";
-  document.getElementById("lbl-ana").textContent = "Idle";
+function resetAnaUi() {
+  q("#btn-start-analysis").disabled = false;
+  q("#btn-stop-analysis").disabled = true;
+  cls(q("#dot-ana"), "online"); q("#lbl-ana").textContent = "Idle";
 }
 
-document.getElementById("btn-refresh-videos").addEventListener("click", refreshVideoList);
+q("#btn-refresh-videos").addEventListener("click", fetchVideoList);
 
-async function refreshVideoList() {
-  const table = document.getElementById("video-list-table");
+async function fetchVideoList() {
+  const area = q("#video-list-area");
   try {
-    const data = await api("/api/videos");
-    if (!data.videos.length) {
-      table.innerHTML = '<p class="empty-hint">No MP4 clips found.</p>';
+    const d = await api("/api/videos");
+    const videos = d.videos || [];
+    q("#clip-count-badge").textContent = videos.length + " clips";
+    if (!videos.length) {
+      area.innerHTML = `<div class="empty"><div class="empty-sub">No MP4 clips found in the selected folder</div></div>`;
       return;
     }
-    table.innerHTML = `
+    area.innerHTML = `
       <table>
-        <thead>
-          <tr><th>Filename</th><th>Size</th><th>Updated</th><th></th></tr>
-        </thead>
-        <tbody>
-          ${data.videos.map((video) => `
-            <tr>
-              <td class="td-mono">${escHtml(video.filename)}</td>
-              <td>${video.size_mb} MB</td>
-              <td>${new Date(video.mtime * 1000).toLocaleString()}</td>
-              <td><button class="btn btn-danger btn-del" onclick="deleteVideo('${video.filename.replace(/'/g, "\\'")}')">Delete</button></td>
-            </tr>
-          `).join("")}
+        <thead><tr><th>Filename</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+        <tbody>${videos.map(v => `
+          <tr>
+            <td class="td-mono">${esc(v.filename)}</td>
+            <td>${v.size_mb} MB</td>
+            <td class="txt-muted">${new Date(v.mtime*1000).toLocaleString()}</td>
+            <td class="td-right">
+              <button class="btn btn-danger btn-xs" onclick="deleteVideo('${v.filename.replace(/'/g,"\\'")}')">Delete</button>
+            </td>
+          </tr>`).join("")}
         </tbody>
-      </table>
-    `;
-  } catch (error) {
-    table.innerHTML = `<p class="empty-hint">${escHtml(error.message)}</p>`;
+      </table>`;
+  } catch (e) {
+    area.innerHTML = errorState(e.message, "fetchVideoList()");
   }
 }
 
-async function deleteVideo(filename) {
-  if (!window.confirm(`Delete clip ${filename}?`)) {
-    return;
-  }
+window.deleteVideo = async function(fn) {
+  if (!confirm("Delete " + fn + "?")) return;
   try {
-    await api(`/api/videos/${encodeURIComponent(filename)}`, { method: "DELETE" });
-    refreshVideoList();
-    refreshStorageInfo();
-  } catch (error) {
-    addLog(error.message, "err");
-  }
-}
+    await api("/api/videos/" + encodeURIComponent(fn), { method: "DELETE" });
+    fetchVideoList(); fetchStorageInfo();
+  } catch (e) { addLog(e.message, "system", "err"); }
+};
 
-document.getElementById("btn-refresh-results").addEventListener("click", refreshResults);
+// ── Phase 2: Results ───────────────────────────────────────────────────────
+q("#btn-refresh-results").addEventListener("click", fetchResults);
 
-async function refreshResults() {
-  const grid = document.getElementById("results-grid");
+async function fetchResults() {
+  const grid = q("#results-grid");
   try {
-    const data = await api("/api/analysis/results");
-    document.getElementById("result-count").textContent = `${data.results.length} clip result(s)`;
-    if (!data.results.length) {
-      grid.innerHTML = '<p class="empty-hint">No Phase 2 outputs yet.</p>';
+    const d = await api("/api/analysis/results");
+    q("#result-count-label").textContent = (d.results||[]).length + " results";
+    if (!d.results.length) {
+      grid.innerHTML = `<div class="empty col-12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">No outputs yet</div><div class="empty-sub">Run Phase 2 Analysis to generate results</div></div>`;
       return;
     }
-    grid.innerHTML = data.results.map((result) => `
+    grid.innerHTML = d.results.map(r => `
       <div class="result-card">
-        <div class="result-card-header"><h3>${escHtml(result.clip_stem)}</h3></div>
+        <div class="result-card-head"><h3>${esc(r.clip_stem)}</h3></div>
         <div class="result-card-body">
-          <div class="result-stat"><span>PNG frames</span><span>${result.frames}</span></div>
-          <div class="result-stat"><span>Bounding boxes</span><span>${result.label_count}</span></div>
-          <div class="result-stat"><span>Label file</span><span>${escHtml(result.label_file || "-")}</span></div>
-          <div class="result-stat"><span>Preview frame</span><span>${escHtml(result.preview_frame || "-")}</span></div>
+          <div class="result-stat"><span>PNG frames</span><strong>${r.frames}</strong></div>
+          <div class="result-stat"><span>Bounding boxes</span><strong>${r.label_count}</strong></div>
+          <div class="result-stat"><span>Label file</span><strong>${esc(r.label_file||"—")}</strong></div>
         </div>
-      </div>
-    `).join("");
-  } catch (error) {
-    grid.innerHTML = `<p class="empty-hint">${escHtml(error.message)}</p>`;
+      </div>`).join("");
+  } catch (e) {
+    grid.innerHTML = errorState(e.message, "#btn-refresh-results");
   }
 }
 
-document.getElementById("btn-start-pose").addEventListener("click", async () => {
-  const folder = document.getElementById("pose-dir").value.trim() || "data/raw_videos";
-  const saveOverlay = document.getElementById("pose-save-overlay").checked;
+// ── Phase 3: Pose & ADL ────────────────────────────────────────────────────
+q("#btn-start-pose").addEventListener("click", async () => {
+  const folder = q("#pose-dir").value.trim() || "data/raw_videos";
+  const overlay = q("#pose-save-overlay").checked;
   try {
-    const data = await api("/api/pose/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder, save_overlay: saveOverlay }),
+    const d = await api("/api/pose/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder, save_overlay: overlay }),
     });
-    state.poseRunning = true;
-    state.poseClipsTotal = data.total_clips || 0;
-    document.getElementById("btn-start-pose").disabled = true;
-    document.getElementById("btn-stop-pose").disabled = false;
-    document.getElementById("dot-pose").className = "dot active";
-    document.getElementById("lbl-pose").textContent = "Running";
-    document.getElementById("pose-idle").classList.add("hidden");
-    document.getElementById("pose-done").classList.add("hidden");
-    document.getElementById("pose-progress-section").classList.remove("hidden");
-    document.getElementById("pose-stat-clips").textContent = `0 / ${state.poseClipsTotal}`;
-    document.getElementById("pose-stat-kps").textContent = "0";
-    document.getElementById("pose-stat-adl").textContent = "0";
-  } catch (error) {
-    addLog(error.message, "err");
-  }
+    S.poseRunning = true; S.poseClipsTotal = d.total_clips || 0;
+    q("#btn-start-pose").disabled = true;
+    q("#btn-stop-pose").disabled = false;
+    add(q("#dot-pose"), "online"); q("#lbl-pose").textContent = "Running";
+    show(q("#pose-running-state")); hide(q("#pose-idle-state")); hide(q("#pose-done-state"));
+    q("#pose-stat-clips").textContent = "0/" + S.poseClipsTotal;
+    q("#pose-stat-kps").textContent = "0";
+    q("#pose-stat-adl").textContent = "0";
+  } catch (e) { addLog(e.message, "system", "err"); }
 });
 
-document.getElementById("btn-stop-pose").addEventListener("click", async () => {
-  try {
-    await api("/api/pose/stop", { method: "POST" });
-  } catch (error) {
-    addLog(error.message, "err");
-  } finally {
-    resetPoseUi();
-  }
+q("#btn-stop-pose").addEventListener("click", async () => {
+  try { await api("/api/pose/stop", { method: "POST" }); } catch {}
+  resetPoseUi();
 });
 
-function showPoseProgress(payload) {
-  document.getElementById("pose-progress-section").classList.remove("hidden");
-  document.getElementById("pose-clip-name").textContent = payload.clip || "-";
-  document.getElementById("pose-pct").textContent = `${payload.pct || 0}%`;
-  document.getElementById("pose-bar").style.width = `${payload.pct || 0}%`;
+function showPoseProgress(d) {
+  show(q("#pose-running-state")); hide(q("#pose-idle-state"));
+  q("#pose-clip-name").textContent = d.clip || "—";
+  q("#pose-pct").textContent = (d.pct || 0) + "%";
+  q("#pose-bar").style.width = (d.pct || 0) + "%";
 }
 
-function finishPose(payload) {
-  state.poseRunning = false;
-  document.getElementById("pose-progress-section").classList.add("hidden");
-  document.getElementById("pose-done").classList.remove("hidden");
-  document.getElementById("pose-stat-clips").textContent = `${payload.clips_done || 0} / ${state.poseClipsTotal}`;
-  document.getElementById("pose-stat-kps").textContent = String(payload.keypoints_written || 0);
-  document.getElementById("pose-stat-adl").textContent = String(payload.adl_events || 0);
+function donePose(d) {
+  S.poseRunning = false;
+  hide(q("#pose-running-state")); show(q("#pose-done-state"));
+  q("#pose-stat-clips").textContent = `${d.clips_done||0}/${S.poseClipsTotal}`;
+  q("#pose-stat-kps").textContent = d.keypoints_written || 0;
+  q("#pose-stat-adl").textContent = d.adl_events || 0;
   resetPoseUi();
-  refreshPoseResults();
+  fetchPoseResults();
 }
 
 function resetPoseUi() {
-  document.getElementById("btn-start-pose").disabled = false;
-  document.getElementById("btn-stop-pose").disabled = true;
-  document.getElementById("dot-pose").className = "dot";
-  document.getElementById("lbl-pose").textContent = "Idle";
+  q("#btn-start-pose").disabled = false;
+  q("#btn-stop-pose").disabled = true;
+  cls(q("#dot-pose"), "online"); q("#lbl-pose").textContent = "Idle";
 }
 
-document.getElementById("btn-refresh-pose").addEventListener("click", refreshPoseResults);
+q("#btn-refresh-pose").addEventListener("click", fetchPoseResults);
+q("#btn-refresh-pose-results").addEventListener("click", fetchPoseResults);
 
-async function refreshPoseResults() {
-  const grid = document.getElementById("pose-results-grid");
+async function fetchPoseResults() {
+  const grid = q("#pose-results-grid");
   try {
-    const data = await api("/api/pose/results");
-    if (!data.results.length) {
-      grid.innerHTML = '<p class="empty-hint">No pose outputs yet.</p>';
+    const d = await api("/api/pose/results");
+    if (!d.results.length) {
+      grid.innerHTML = `<div class="empty"><div class="empty-sub">No pose outputs yet</div></div>`;
       return;
     }
-    grid.innerHTML = data.results.map((result) => `
+    grid.innerHTML = d.results.map(r => `
       <div class="result-card">
-        <div class="result-card-header"><h3>${escHtml(result.clip_stem)}</h3></div>
+        <div class="result-card-head"><h3>${esc(r.clip_stem)}</h3></div>
         <div class="result-card-body">
-          <div class="result-stat"><span>Keypoint rows</span><span>${result.keypoints_count}</span></div>
-          <div class="result-stat"><span>ADL events</span><span>${result.adl_events}</span></div>
-          <div class="result-stat"><span>Overlay PNG</span><span>${result.overlays}</span></div>
-          <div class="adl-summary">${renderAdlSummary(result.adl_summary)}</div>
+          <div class="result-stat"><span>Keypoint rows</span><strong>${r.keypoints_count}</strong></div>
+          <div class="result-stat"><span>ADL events</span><strong>${r.adl_events}</strong></div>
+          <div class="result-stat"><span>Overlay frames</span><strong>${r.overlays}</strong></div>
+          <div class="adl-chips">${renderAdlChips(r.adl_summary)}</div>
         </div>
-      </div>
-    `).join("");
-  } catch (error) {
-    grid.innerHTML = `<p class="empty-hint">${escHtml(error.message)}</p>`;
+      </div>`).join("");
+  } catch (e) {
+    grid.innerHTML = `<div class="empty"><div class="empty-sub">${esc(e.message)}</div></div>`;
   }
 }
 
-function renderAdlSummary(summary) {
+function renderAdlChips(summary) {
   const entries = Object.entries(summary || {});
-  if (!entries.length) {
-    return '<span class="summary-chip">No ADL labels</span>';
-  }
-  return entries.map(([label, pct]) => {
-    return `<span class="summary-chip">${escHtml(label)} ${pct}%</span>`;
-  }).join("");
+  if (!entries.length) return '<span class="adl-chip">No ADL labels</span>';
+  return entries.map(([k,v]) => `<span class="adl-chip">${esc(k)} ${v}%</span>`).join("");
 }
 
-function escHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+// ── Error state helper ─────────────────────────────────────────────────────
+function errorState(msg, retryFn) {
+  return `<div class="empty">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <div class="empty-title">Failed to load</div>
+    <div class="empty-sub">${esc(msg)}</div>
+    ${retryFn ? `<button class="btn btn-ghost mt-3" onclick="${retryFn}">Retry</button>` : ""}
+  </div>`;
 }
 
-window.probeCamera = probeCamera;
-window.selectResolution = selectResolution;
-window.deleteVideo = deleteVideo;
-
+// ── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
   await fetchCameras();
-  await refreshStorageInfo();
-  await refreshVideoList();
-  await refreshResults();
-  await refreshPoseResults();
+  await fetchStorageInfo();
 })();

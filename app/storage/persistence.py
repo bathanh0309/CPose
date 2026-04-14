@@ -6,6 +6,7 @@ Author: Senior MLOps Engineer
 Date: 2026-02-02
 """
 
+import gc
 import sqlite3
 import numpy as np
 import pickle
@@ -188,13 +189,25 @@ class PersistenceManager:
                 
                 logger.info(f"Issued new GlobalID: {next_id}")
                 return next_id
+
+    @staticmethod
+    def _normalize_timestamp(timestamp: Optional[datetime | str]) -> str:
+        """Normalize timestamp inputs to ISO-8601 strings."""
+        if timestamp is None:
+            return datetime.now().isoformat()
+        if isinstance(timestamp, datetime):
+            return timestamp.isoformat()
+        if isinstance(timestamp, str):
+            return timestamp
+        return datetime.now().isoformat()
     
     def register_global_id(
         self, 
         global_id: int,
         camera: str,
         embedding: np.ndarray,
-        bbox: Optional[List[int]] = None
+        bbox: Optional[List[int]] = None,
+        timestamp: Optional[datetime | str] = None,
     ):
         """
         Register a new GlobalID in the system.
@@ -206,7 +219,7 @@ class PersistenceManager:
             bbox: Bounding box [x1, y1, x2, y2]
         """
         with self.lock:
-            timestamp = datetime.now().isoformat()
+            timestamp_str = self._normalize_timestamp(timestamp)
             
             # Store embedding in memmap
             embedding_idx = global_id - 1  # 0-indexed
@@ -230,7 +243,7 @@ class PersistenceManager:
                         INSERT INTO global_ids 
                         (global_id, created_at, first_camera, embedding_idx, last_seen_at)
                         VALUES (?, ?, ?, ?, ?)
-                    """, (global_id, timestamp, camera, embedding_idx, timestamp))
+                    """, (global_id, timestamp_str, camera, embedding_idx, timestamp_str))
                 
                 # Log appearance
                 bbox_str = str(bbox) if bbox else None
@@ -238,7 +251,7 @@ class PersistenceManager:
                     INSERT INTO camera_appearances 
                     (global_id, camera, timestamp, bbox)
                     VALUES (?, ?, ?, ?)
-                """, (global_id, camera, timestamp, bbox_str))
+                """, (global_id, camera, timestamp_str, bbox_str))
                 
                 conn.commit()
             
@@ -249,7 +262,8 @@ class PersistenceManager:
         global_id: int,
         camera: str,
         embedding: Optional[np.ndarray] = None,
-        bbox: Optional[List[int]] = None
+        bbox: Optional[List[int]] = None,
+        timestamp: Optional[datetime | str] = None,
     ):
         """
         Update appearance of existing GlobalID (for EMA update).
@@ -261,7 +275,7 @@ class PersistenceManager:
             bbox: Bounding box
         """
         with self.lock:
-            timestamp = datetime.now().isoformat()
+            timestamp_str = self._normalize_timestamp(timestamp)
             
             # Update embedding if provided
             if embedding is not None:
@@ -283,14 +297,14 @@ class PersistenceManager:
                     INSERT INTO camera_appearances 
                     (global_id, camera, timestamp, bbox)
                     VALUES (?, ?, ?, ?)
-                """, (global_id, camera, timestamp, bbox_str))
+                """, (global_id, camera, timestamp_str, bbox_str))
                 
                 # Update last_seen_at
                 conn.execute("""
                     UPDATE global_ids 
                     SET last_seen_at=?
                     WHERE global_id=?
-                """, (timestamp, global_id))
+                """, (timestamp_str, global_id))
                 
                 conn.commit()
     
@@ -349,6 +363,46 @@ class PersistenceManager:
             
             result = cursor.fetchone()
             return result[0] if result else None
+
+    def get_active_global_id_states(self) -> List[Dict]:
+        """
+        Get active GlobalIDs with their latest seen camera and timestamp.
+
+        Returns:
+            List[Dict]: One row per active GlobalID with:
+                - global_id
+                - first_camera
+                - last_seen_at
+                - last_camera
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                SELECT
+                    g.global_id,
+                    g.first_camera,
+                    g.last_seen_at,
+                    (
+                        SELECT ca.camera
+                        FROM camera_appearances ca
+                        WHERE ca.global_id = g.global_id
+                        ORDER BY ca.timestamp DESC, ca.id DESC
+                        LIMIT 1
+                    ) AS last_camera
+                FROM global_ids g
+                WHERE g.is_active = 1
+                ORDER BY g.global_id
+            """)
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "global_id": int(global_id),
+                "first_camera": first_camera,
+                "last_seen_at": last_seen_at,
+                "last_camera": last_camera,
+            }
+            for global_id, first_camera, last_seen_at, last_camera in rows
+        ]
     
     def _expand_embeddings(self, new_size: int):
         """Expand embeddings memmap when capacity exceeded."""
@@ -370,6 +424,7 @@ class PersistenceManager:
         
         # Replace old with new
         del self.embeddings
+        gc.collect()
         shutil.move(str(new_path), str(self.embeddings_path))
         
         # Reload
@@ -442,7 +497,6 @@ class PersistenceManager:
                 logger.error(f"Error closing embeddings: {e}")
         
         # Force garbage collection to release Windows file handles
-        import gc
         gc.collect()
         
         logger.info("PersistenceManager closed")

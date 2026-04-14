@@ -10,6 +10,7 @@ from typing import Any
 
 import cv2
 
+from app.utils.file_handler import sort_multicam_clips
 from app.utils.runtime_config import get_runtime_section
 
 logger = logging.getLogger("[Phase2]")
@@ -89,7 +90,7 @@ class Analyzer:
         frames_saved = 0
         labels_written = 0
 
-        for clip in sorted(clips):
+        for clip in sort_multicam_clips(clips):
             if self._stop_evt.is_set():
                 logger.info("Phase 2 interrupted by user")
                 break

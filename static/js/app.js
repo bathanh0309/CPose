@@ -14,6 +14,11 @@ const S = {
   poseRunning:        false,
   anaClipsTotal:      0,
   poseClipsTotal:     0,
+  poseClipsDone:      0,    // Track clips processed for progress
+  poseLampState:      {},
+  poseClipQueue:      [],
+  poseActiveCamera:   "",
+  poseCurrentClip:    "",
   clipCount:          0,
   detectCount:        0,
   onlineCount:        0,
@@ -21,17 +26,18 @@ const S = {
   streamIntervals:    {},    // { cam_id: intervalId }
   activeTab:          "config",
   statusPollInterval: null,
+  poseLampPollInterval: null,  // Real-time lamp state polling
+  poseViewerInterval: null,    // Polling for video snapshots
 };
 
 const TAB_TITLES = {
-  config:   "System Configuration",
-  monitor:  "Live Monitor — Phase 1",
-  analysis: "Phase 2 Analysis",
-  results:  "Phase 2 Results",
-  pose:     "Phase 3 — Pose & ADL",
+  config:   "Setup — Configuration & Resources",
+  pose:     "Sequential Multicam Demo — Pose & ADL",
 };
 
 // ── Socket.IO ──────────────────────────────────────────────────────────────
+const POSE_CAMERA_ORDER = ["cam01", "cam02", "cam03", "cam04"];
+
 const socket = io({ transports: ["websocket", "polling"] });
 const $dotSock  = q("#dot-sock");
 const $sockLbl  = q("#sock-label");
@@ -80,6 +86,7 @@ socket.on("analysis_progress",  showAnaProgress);
 socket.on("analysis_complete",  doneAnalysis);
 socket.on("pose_progress",      showPoseProgress);
 socket.on("pose_complete",      donePose);
+socket.on("pose_lamp_state",    syncPoseLampState);
 
 socket.on("storage_warning", (d) => {
   addLog(`storage ${d.used_gb}/${d.limit_gb} GB (${d.pct}%)`, "system", "warn");
@@ -91,9 +98,31 @@ socket.on("error", (d) => {
 });
 
 // ── Tab navigation ─────────────────────────────────────────────────────────
-document.querySelectorAll(".nav-item[data-tab]").forEach(el => {
-  el.addEventListener("click", ev => { ev.preventDefault(); switchTab(el.dataset.tab); });
-});
+function initTabNavigation() {
+  const items = document.querySelectorAll(".nav-item[data-tab]");
+  console.log("🔍 initTabNavigation: Found", items.length, "nav-items");
+  items.forEach(el => {
+    console.log("  → Attaching listener to nav-item:", el.dataset.tab);
+    el.addEventListener("click", ev => { 
+      console.log("✅ Click triggered on nav-item:", el.dataset.tab);
+      ev.preventDefault(); 
+      switchTab(el.dataset.tab); 
+    });
+  });
+  
+  // Fallback: add event delegation on parent nav if direct listeners don't work
+  const navParent = document.querySelector(".sidebar-nav");
+  if (navParent) {
+    navParent.addEventListener("click", ev => {
+      const navItem = ev.target.closest(".nav-item[data-tab]");
+      if (navItem) {
+        console.log("⚡ Event delegation triggered on nav-item:", navItem.dataset.tab);
+        ev.preventDefault();
+        switchTab(navItem.dataset.tab);
+      }
+    });
+  }
+}
 
 function switchTab(id) {
   S.activeTab = id;
@@ -102,9 +131,75 @@ function switchTab(id) {
   q("#page-title").textContent = TAB_TITLES[id] || id;
   if (id === "analysis") { fetchVideoList(); }
   if (id === "results")  { fetchResults(); }
-  if (id === "pose")     { fetchPoseResults(); }
+  if (id === "pose") { 
+    fetchPoseStatus(); 
+    fetchPoseResults();
+    // Auto-start Phase 3 if not already running
+    if (!S.poseRunning) {
+      setTimeout(() => autoStartPose(), 500);
+    }
+  }
   if (id === "monitor" && S.recRunning) { startAllStreams(); }
   if (id !== "monitor") { stopAllStreams(); }
+}
+
+// Auto-start Phase 3 with multicam folder
+async function autoStartPose() {
+  const folder = q("#pose-dir")?.value?.trim() || "data/multicam";
+  const overlay = q("#pose-save-overlay")?.checked ?? true;
+  
+  try {
+    const d = await api("/api/pose/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder, save_overlay: overlay }),
+    });
+    
+    // Immediately update UI with lamp state
+    S.poseRunning = true;
+    S.poseClipsTotal = d.total_clips || d.clips_total || 0;
+    S.poseCurrentClip = "";
+    
+    q("#btn-start-pose").disabled = true;
+    q("#btn-stop-pose").disabled = false;
+    add(q("#dot-pose"), "online");
+    q("#lbl-pose").textContent = "Running";
+    q("#pose-top-status").textContent = "Running";
+    add(q("#pose-top-status"), "badge-online");
+    
+    hide(q("#pose-idle-state"));
+    hide(q("#pose-done-state"));
+    
+    q("#pose-stat-clips").textContent = "0/" + S.poseClipsTotal;
+    q("#pose-stat-kps").textContent = "0";
+    q("#pose-stat-adl").textContent = "0";
+    q("#pose-stat-tracks").textContent = "0";
+    q("#pose-pct-badge").textContent = "0%";
+    
+    q("#pv-fps").textContent = "0.0";
+    q("#pv-frame").textContent = "0 / 0";
+    
+    // Sync lamp state immediately 
+    syncPoseLampState(d);
+    
+    // Start real-time polling for lamp updates
+    startPoseLampPolling();
+    startPoseViewerPolling();
+    
+    addLog(`Auto-started Phase 3 demo from ${folder}`, "system", "info");
+  } catch (e) {
+    addLog(`Auto-start failed: ${e.message}`, "system", "err");
+  }
+}
+
+// Ensure DOM is ready before setting up listeners
+try {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initTabNavigation);
+  } else {
+    initTabNavigation();
+  }
+} catch (e) {
+  console.error("Failed to init tab navigation:", e);
 }
 
 // ── Generic helpers ─────────────────────────────────────────────────────────
@@ -122,6 +217,106 @@ async function api(url, opts = {}) {
   try { d = await r.json(); } catch {}
   if (!r.ok) throw new Error(d.error || d.message || `HTTP ${r.status}`);
   return d;
+}
+
+function defaultPoseLampState() {
+  const state = {};
+  POSE_CAMERA_ORDER.forEach(camId => { state[camId] = "IDLE"; });
+  return state;
+}
+
+function syncPoseLampState(d = {}) {
+  S.poseLampState = { ...defaultPoseLampState(), ...(d.lamp_state || {}) };
+  S.poseClipQueue = Array.isArray(d.clip_queue) ? d.clip_queue : S.poseClipQueue;
+  S.poseActiveCamera = d.active_camera || "";
+  S.poseCurrentClip = d.current_clip || d.clip || S.poseCurrentClip || "";
+  if (Number.isFinite(d.clips_total)) S.poseClipsTotal = d.clips_total;
+  if (Number.isFinite(d.clips_done)) S.poseClipsDone = d.clips_done;
+  renderPoseLamps();
+  renderPoseQueue(Number.isFinite(d.clips_done) ? d.clips_done : null);
+}
+
+function renderPoseLamps() {
+  POSE_CAMERA_ORDER.forEach(camId => {
+    const lamp = q(`.lamp-card[data-cam="${camId}"]`);
+    if (!lamp) return;
+    const state = String(S.poseLampState[camId] || "IDLE").toUpperCase();
+    cls(lamp, "lamp-idle", "lamp-active", "lamp-done", "lamp-alert");
+    add(lamp, "lamp-" + state.toLowerCase());
+    const label = lamp.querySelector(".lamp-state");
+    if (label) label.textContent = state;
+  });
+
+  const badge = q("#pose-active-cam-badge");
+  if (!badge) return;
+  
+  // Determine badge text based on overall lamp state
+  const lampValues = Object.values(S.poseLampState);
+  const allDone = POSE_CAMERA_ORDER.every(cam => S.poseLampState[cam] === "DONE");
+  const anyAlert = lampValues.includes("ALERT");
+  const anyActive = lampValues.includes("ACTIVE");
+  
+  if (allDone) {
+    badge.textContent = "✓ Sequence Complete";
+  } else if (anyAlert) {
+    badge.textContent = "⚠ Alert";
+  } else if (S.poseActiveCamera) {
+    badge.textContent = `▶ Processing ${S.poseActiveCamera.toUpperCase()}`;
+    q("#pose-top-cam").textContent = S.poseActiveCamera.toUpperCase();
+  } else if (anyActive) {
+    badge.textContent = "▶ Processing…";
+  } else {
+    badge.textContent = "Idle";
+    q("#pose-top-cam").textContent = "—";
+  }
+}
+
+function renderPoseQueue(clipsDone = null) {
+  const queue = q("#pose-queue");
+  const count = q("#pose-queue-count");
+  if (!queue || !count) return;
+
+  const items = Array.isArray(S.poseClipQueue) ? S.poseClipQueue : [];
+  const doneCount = clipsDone == null ? -1 : clipsDone;
+  const progressPct = S.poseClipsTotal > 0 ? Math.round((doneCount / S.poseClipsTotal) * 100) : 0;
+  
+  count.textContent = `${items.length} clip${items.length === 1 ? "" : "s"}`;
+  if (!items.length) {
+    queue.innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Start Phase 3 to build the multicam queue</div></div>`;
+    return;
+  }
+
+  // Group by camera for better visual organization
+  const byCam = {};
+  items.forEach((item, index) => {
+    const cam = item.cam_id || "unknown";
+    if (!byCam[cam]) byCam[cam] = [];
+    byCam[cam].push({ ...item, index });
+  });
+  
+  let html = "";
+  POSE_CAMERA_ORDER.forEach(cam => {
+    if (!byCam[cam] || !byCam[cam].length) return;
+    
+    const camItems = byCam[cam];
+    const lampState = S.poseLampState[cam] || "IDLE";
+    const stateIcon = lampState === "DONE" ? "✓" : lampState === "ACTIVE" ? "▶" : lampState === "ALERT" ? "⚠" : "○";
+    
+    camItems.forEach((item, idx) => {
+      const isActive = item.clip_name === S.poseCurrentClip || item.clip_stem === S.poseCurrentClip;
+      const isDone = doneCount >= 0 && item.index < doneCount;
+      const stateClass = isActive ? "is-active" : (isDone ? "is-done" : "");
+      
+      html += `
+        <div class="pose-queue-item ${stateClass}">
+          <span class="pose-queue-cam">${esc(cam)}</span>
+          <span class="pose-queue-name">${esc(item.clip_name || item.clip_stem || "unknown")}</span>
+          <span class="pose-queue-time">${esc(item.clip_time || "")}</span>
+        </div>`;
+    });
+  });
+  
+  queue.innerHTML = html || `<div class="empty" style="padding:16px"><div class="empty-sub">No clips in queue</div></div>`;
 }
 
 // ── Config tab ─────────────────────────────────────────────────────────────
@@ -183,6 +378,17 @@ function maskRtsp(url) {
 
 q("#btn-probe-all").addEventListener("click", async () => {
   for (const c of S.cameras) await probeCamera(c.cam_id, c.url, false);
+});
+
+q("#btn-load-local-test").addEventListener("click", async () => {
+  try {
+    const d = await api("/api/config/load_local", { method: "POST" });
+    S.cameras = d.cameras || [];
+    renderConfigCams();
+    msg(d.message || "Local videos loaded as cameras", true);
+  } catch(e) {
+    msg(e.message, false);
+  }
 });
 
 async function probeCamera(camId, url, showModal = true) {
@@ -511,12 +717,16 @@ function flashDot(el) {
 }
 
 // ── Event log ──────────────────────────────────────────────────────────────
-q("#btn-clear-log").addEventListener("click", () => {
-  q("#event-log").innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Events will appear here during recording</div></div>`;
-});
+const btnClearLog = q("#btn-clear-log");
+if (btnClearLog) {
+  btnClearLog.addEventListener("click", () => {
+    q("#log-wrap").innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Events will appear here during recording</div></div>`;
+  });
+}
 
 function addLog(msg, camId, type = "") {
-  const log = q("#event-log");
+  const log = q("#log-wrap");
+  if (!log) return;
   const empty = log.querySelector(".empty"); if (empty) empty.remove();
   const e = document.createElement("div");
   e.className = "log-entry " + type;
@@ -643,7 +853,7 @@ async function fetchResults() {
 
 // ── Phase 3: Pose & ADL ────────────────────────────────────────────────────
 q("#btn-start-pose").addEventListener("click", async () => {
-  const folder = q("#pose-dir").value.trim() || "data/raw_videos";
+  const folder = q("#pose-dir").value.trim() || "data/multicam";
   const overlay = q("#pose-save-overlay").checked;
   try {
     const d = await api("/api/pose/start", {
@@ -651,46 +861,193 @@ q("#btn-start-pose").addEventListener("click", async () => {
       body: JSON.stringify({ folder, save_overlay: overlay }),
     });
     S.poseRunning = true; S.poseClipsTotal = d.total_clips || 0;
+    S.poseCurrentClip = "";
     q("#btn-start-pose").disabled = true;
     q("#btn-stop-pose").disabled = false;
     add(q("#dot-pose"), "online"); q("#lbl-pose").textContent = "Running";
-    show(q("#pose-running-state")); hide(q("#pose-idle-state")); hide(q("#pose-done-state"));
+    q("#pose-top-status").textContent = "Running";
+    q("#pose-top-status").className = "badge badge-online";
+    q("#pose-top-clip").textContent = "—";
+    hide(q("#pose-idle-state")); hide(q("#pose-done-state"));
     q("#pose-stat-clips").textContent = "0/" + S.poseClipsTotal;
     q("#pose-stat-kps").textContent = "0";
     q("#pose-stat-adl").textContent = "0";
+    q("#pose-stat-tracks").textContent = "0";
+    syncPoseLampState(d);
+    startPoseLampPolling();
+    startPoseViewerPolling();
   } catch (e) { addLog(e.message, "system", "err"); }
 });
 
 q("#btn-stop-pose").addEventListener("click", async () => {
   try { await api("/api/pose/stop", { method: "POST" }); } catch {}
-  resetPoseUi();
+  
+  // Stop polling
+  if (S.poseLampPollInterval) {
+    clearInterval(S.poseLampPollInterval);
+    S.poseLampPollInterval = null;
+  }
+  if (S.poseViewerInterval) {
+    clearInterval(S.poseViewerInterval);
+    S.poseViewerInterval = null;
+  }
+  
+  q("#btn-stop-pose").disabled = true;
+  q("#lbl-pose").textContent = "Stopping";
 });
 
 function showPoseProgress(d) {
-  show(q("#pose-running-state")); hide(q("#pose-idle-state"));
-  q("#pose-clip-name").textContent = d.clip || "—";
-  q("#pose-pct").textContent = (d.pct || 0) + "%";
-  q("#pose-bar").style.width = (d.pct || 0) + "%";
+  hide(q("#pose-idle-state"));
+  q("#pose-top-clip").textContent = d.current_clip || d.clip || "—";
+  q("#pose-pct-badge").textContent = (d.pct || d.progress_pct || 0) + "%";
+  q("#pose-bar").style.width = (d.pct || d.progress_pct || 0) + "%";
+  if (Number.isFinite(d.clips_total)) S.poseClipsTotal = d.clips_total;
+  q("#pose-stat-clips").textContent = `${d.clips_done || 0}/${S.poseClipsTotal || 0}`;
+  q("#pose-stat-kps").textContent = d.keypoints_written || 0;
+  q("#pose-stat-adl").textContent = d.adl_events || 0;
+  q("#pose-stat-tracks").textContent = d.active_tracks || 0;
+  
+  if (d.fps !== undefined) q("#pv-fps").textContent = d.fps;
+  if (d.frame_id !== undefined && d.total_frames !== undefined) {
+    q("#pv-frame").textContent = `${d.frame_id} / ${d.total_frames}`;
+  }
+  
+  syncPoseLampState(d);
 }
 
 function donePose(d) {
   S.poseRunning = false;
-  hide(q("#pose-running-state")); show(q("#pose-done-state"));
+  syncPoseLampState(d);
+  
+  // Stop polling when complete
+  if (S.poseLampPollInterval) {
+    clearInterval(S.poseLampPollInterval);
+    S.poseLampPollInterval = null;
+  }
+  if (S.poseViewerInterval) {
+    clearInterval(S.poseViewerInterval);
+    S.poseViewerInterval = null;
+  }
+  
+  show(q("#pose-done-state"));
   q("#pose-stat-clips").textContent = `${d.clips_done||0}/${S.poseClipsTotal}`;
   q("#pose-stat-kps").textContent = d.keypoints_written || 0;
   q("#pose-stat-adl").textContent = d.adl_events || 0;
-  resetPoseUi();
+  q("#pose-stat-tracks").textContent = "0";
+  resetPoseUi("Complete");
   fetchPoseResults();
 }
 
-function resetPoseUi() {
-  q("#btn-start-pose").disabled = false;
-  q("#btn-stop-pose").disabled = true;
-  cls(q("#dot-pose"), "online"); q("#lbl-pose").textContent = "Idle";
+function startPoseLampPolling() {
+  // Clear any existing polling
+  if (S.poseLampPollInterval) {
+    clearInterval(S.poseLampPollInterval);
+  }
+  
+  // Poll every 500ms for real-time lamp updates
+  S.poseLampPollInterval = setInterval(async () => {
+    try {
+      const d = await api("/api/pose/status");
+      if (!d.running) {
+        // Phase 3 completed
+        clearInterval(S.poseLampPollInterval);
+        S.poseLampPollInterval = null;
+        donePose(d);
+        return;
+      }
+      
+      // Update progress and lamps
+      showPoseProgress({
+        current_clip: d.current_clip,
+        clips_done: d.clips_done,
+        clips_total: d.clips_total,
+        progress_pct: d.progress_pct,
+        pct: d.progress_pct,
+        lamp_state: d.lamp_state,
+        active_camera: d.active_camera,
+        keypoints_written: d.keypoints_written,
+        adl_events: d.adl_events,
+      });
+    } catch (e) {
+      console.error("Polling error:", e);
+    }
+  }, 500);
 }
 
-q("#btn-refresh-pose").addEventListener("click", fetchPoseResults);
+function startPoseViewerPolling() {
+  if (S.poseViewerInterval) clearInterval(S.poseViewerInterval);
+  const imgOrig = q("#pv-orig");
+  const imgProc = q("#pv-proc");
+  const phOrig = q("#pv-orig-ph");
+  const phProc = q("#pv-proc-ph");
+  
+  S.poseViewerInterval = setInterval(() => {
+    if (!S.poseRunning) return;
+    
+    // Load original frame
+    const srcO = `/api/pose/snapshot/original?t=${Date.now()}`;
+    const tagO = new Image();
+    tagO.onload = () => { imgOrig.src = srcO; imgOrig.style.opacity = 1; hide(phOrig); };
+    tagO.onerror = () => { imgOrig.style.opacity = 0; show(phOrig); };
+    tagO.src = srcO;
+
+    // Load processed frame
+    const srcP = `/api/pose/snapshot/processed?t=${Date.now()}`;
+    const tagP = new Image();
+    tagP.onload = () => { imgProc.src = srcP; imgProc.style.opacity = 1; hide(phProc); };
+    tagP.onerror = () => { imgProc.style.opacity = 0; show(phProc); };
+    tagP.src = srcP;
+  }, 150); // ~6 fps roughly
+}
+
+function resetPoseUi(label = "Idle") {
+  q("#btn-start-pose").disabled = false;
+  q("#btn-stop-pose").disabled = true;
+  cls(q("#dot-pose"), "online"); q("#lbl-pose").textContent = label;
+  q("#pose-top-status").textContent = label;
+  q("#pose-top-status").className = "badge badge-idle";
+}
+
+q("#btn-refresh-pose").addEventListener("click", async () => {
+  await fetchPoseStatus();
+  await fetchPoseResults();
+});
 q("#btn-refresh-pose-results").addEventListener("click", fetchPoseResults);
+
+async function fetchPoseStatus() {
+  try {
+    const d = await api("/api/pose/status");
+    S.poseRunning = !!d.running;
+    S.poseClipsTotal = d.clips_total || 0;
+    syncPoseLampState(d);
+    q("#pose-stat-clips").textContent = `${d.clips_done || 0}/${S.poseClipsTotal || 0}`;
+    q("#pose-stat-kps").textContent = d.keypoints_written || 0;
+    q("#pose-stat-adl").textContent = d.adl_events || 0;
+    q("#pose-top-clip").textContent = d.current_clip || "—";
+    q("#pose-pct-badge").textContent = (d.progress_pct || 0) + "%";
+    q("#pose-bar").style.width = (d.progress_pct || 0) + "%";
+
+    if (d.running) {
+      q("#btn-start-pose").disabled = true;
+      q("#btn-stop-pose").disabled = false;
+      add(q("#dot-pose"), "online");
+      q("#lbl-pose").textContent = "Running";
+      q("#pose-top-status").textContent = "Running";
+      q("#pose-top-status").className = "badge badge-online";
+      hide(q("#pose-idle-state")); hide(q("#pose-done-state"));
+      if (!S.poseLampPollInterval) startPoseLampPolling();
+      if (!S.poseViewerInterval) startPoseViewerPolling();
+    } else if ((d.clips_done || 0) > 0) {
+      resetPoseUi("Complete");
+      hide(q("#pose-idle-state")); show(q("#pose-done-state"));
+    } else {
+      resetPoseUi("Idle");
+      show(q("#pose-idle-state")); hide(q("#pose-done-state"));
+    }
+  } catch (e) {
+    addLog(e.message, "system", "err");
+  }
+}
 
 async function fetchPoseResults() {
   const grid = q("#pose-results-grid");
@@ -702,17 +1059,39 @@ async function fetchPoseResults() {
     }
     grid.innerHTML = d.results.map(r => `
       <div class="result-card">
-        <div class="result-card-head"><h3>${esc(r.clip_stem)}</h3></div>
+        <div class="result-card-head flex-row" style="justify-content:space-between; padding-bottom:8px">
+          <strong class="fs-12" style="word-break: break-all">${esc(r.clip_stem)}</strong>
+          ${r.mp4_exists ? `<button class="btn btn-ghost btn-xs" onclick="showPreviewModal('${esc(r.clip_stem)}')">Preview <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>` : ''}
+        </div>
         <div class="result-card-body">
           <div class="result-stat"><span>Keypoint rows</span><strong>${r.keypoints_count}</strong></div>
           <div class="result-stat"><span>ADL events</span><strong>${r.adl_events}</strong></div>
           <div class="result-stat"><span>Overlay frames</span><strong>${r.overlays}</strong></div>
-          <div class="adl-chips">${renderAdlChips(r.adl_summary)}</div>
+          <div class="adl-chips mt-2">${renderAdlChips(r.adl_summary)}</div>
         </div>
       </div>`).join("");
   } catch (e) {
     grid.innerHTML = `<div class="empty"><div class="empty-sub">${esc(e.message)}</div></div>`;
   }
+}
+
+function showPreviewModal(clipStem) {
+  const modal = q("#modal-preview");
+  const video = q("#preview-video");
+  // Assuming a static route serves this, but D:\Capstone_Project\data is exposed at /api/video/<subpath>? Let's use standard logic. Wait, do we have an endpoint for static video? 
+  // Let me check app/api/routes.py to see how videos are served. 
+  // Or I can point directly to `/static/...?` No, `data/` is not static by default in Flask. Let's see.
+  video.src = `/api/video/output_process/${clipStem}/${clipStem}_processed.mp4`;
+  q("#preview-title").textContent = clipStem;
+  show(modal);
+}
+
+function closePreviewModal() {
+  const modal = q("#modal-preview");
+  const video = q("#preview-video");
+  video.pause();
+  video.src = "";
+  hide(modal);
 }
 
 function renderAdlChips(summary) {
@@ -733,6 +1112,10 @@ function errorState(msg, retryFn) {
 
 // ── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
+  S.poseLampState = defaultPoseLampState();
+  renderPoseLamps();
+  renderPoseQueue(0);
   await fetchCameras();
   await fetchStorageInfo();
+  await fetchPoseStatus();
 })();

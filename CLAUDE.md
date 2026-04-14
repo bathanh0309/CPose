@@ -1,1034 +1,701 @@
-
 > **ĐỌC FILE NÀY TRƯỚC KHI SINH BẤT KỲ CODE NÀO.**
-> Đây là tài liệu ràng buộc bắt buộc cho mọi AI assistant (Claude, Copilot, Codex, GPT-4, v.v.)
-> khi làm việc với dự án CPose. Mọi quyết định thiết kế đã được cố định tại đây.
-> Không suy luận, không tự ý thêm dependency, không thay đổi cấu trúc.
+> Đây là tài liệu ràng buộc bắt buộc cho Codex / Claude / Copilot / GPT khi làm việc với dự án **CPose**.
+> Khi có mâu thuẫn giữa các tài liệu cũ, **ưu tiên file này**.
+> Không tự ý đổi kiến trúc lớn, không thêm dependency ngoài danh sách cho phép, không đổi mục tiêu từ demo tuần tự sang hệ thống production phức tạp nếu người dùng chưa yêu cầu.
 
 ---
 
-## 1. Bối cảnh & Mục tiêu Dự án
+# 1. Mục tiêu hiện tại của dự án
 
-**CPose** là hệ thống thu thập, phân tích và nhận dạng hành vi người tự động từ nhiều camera IP (RTSP),
-phục vụ nghiên cứu pose estimation và ADL (Activities of Daily Living).
+## 1.1 Bối cảnh
 
-**Loại đồ án:** Tốt nghiệp kỹ sư Điện tử Viễn thông & Kỹ thuật Máy tính chất lượng cao,
-Trường Đại học Bách Khoa — Đại học Đà Nẵng.
+**CPose** là đồ án tốt nghiệp kỹ sư Điện tử Viễn thông & Kỹ thuật Máy tính chất lượng cao, Đại học Bách Khoa — Đại học Đà Nẵng.
 
-**Mục tiêu kỹ thuật:**
-- Phase 1: Đọc RTSP từ N camera IP → YOLOv8n real-time detect người → ghi clip MP4 ngắn
-- Phase 2: Chạy YOLOv11n offline trên clip đã ghi → xuất frame PNG + file bounding box label
-- Phase 3: Chạy YOLOv11-pose trên clip → xuất keypoints + ADL label (hành vi người)
+Mục tiêu hiện tại là làm **app demo chạy được, ổn định, dễ giải thích**, phục vụ:
+- thu thập clip test từ RTSP
+- chạy offline auto-label người
+- chạy pose + ADL
+- demo xử lý không gian–thời gian tuần tự trên clip test thủ công nhiều camera
+- demo trước với **3 người**, sau đó mới mở rộng
 
-**Môi trường triển khai:**
-- Windows 10/11, Python 3.10+
-- Phòng lab, camera IP (RTSP)
-- Khởi động bằng `run.bat`, mở trình duyệt `http://localhost:5000`
-- CUDA optional (auto-fallback sang CPU nếu không có GPU)
+## 1.2 Phạm vi chính thức của phiên bản hiện tại
 
-**KHÔNG PHẢI:** web service cloud, multi-user, database-driven, container-based.
+Phiên bản Codex phải bám theo **2 luồng rõ ràng**:
 
----
+### Luồng A — CPose gốc 3 phase
+- **Phase 1**: RTSP → YOLOv8n detect người → ghi short MP4
+- **Phase 2**: offline YOLOv11n → PNG + `labels.txt`
+- **Phase 3**: offline YOLO11n-pose → `keypoints.txt` + `adl.txt` + overlay PNG
 
-## 2. Cấu trúc Thư mục (Canonical — KHÔNG THÊM, KHÔNG XÓA)
+### Luồng B — Demo không gian–thời gian tuần tự trên clip test thủ công
+- input từ `data/multicam/`
+- video tên dạng `camxx-ss-mm-hh-dd-MM-yyyy.mp4`
+- **xử lý theo thời gian trước, theo camera sau**
+- pose + ADL + ReID phải chạy **tuần tự**, không parallel
+- hiển thị **4 bóng đèn camera từ trái sang phải**
+- cố gắng giữ **ít Global ID nhất có thể**
 
-```
-Capstone_Project/        ← thư mục gốc (root), KHÔNG đặt lại tên
-├── app/
-│   ├── __init__.py                 # Flask app factory: create_app() duy nhất
-│   ├── api/
-│   │   ├── __init__.py             # Đăng ký blueprint + SocketIO handler
-│   │   └── routes.py               # TẤT CẢ REST endpoint + SocketIO events
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── phase1_recorder.py      # Class RecorderManager (singleton)
-│   │   ├── phase2_analyzer.py      # Class Analyzer (singleton)
-│   │   └── phase3_recognizer.py    # Class PoseADLRecognizer (singleton) ← PHASE 3
-│   └── utils/
-│       ├── __init__.py
-│       ├── file_handler.py         # StorageManager: enforce_storage_limit(), list_videos()
-│       ├── stream_probe.py         # probe_rtsp(url) → {width, height, fps}
-│       └── pose_utils.py           # calc_angle(), calc_velocity(), rule_based_adl() ← PHASE 3
-├── configs/
-│   ├── unified_config.yaml         # Tham số chung toàn dự án
-│   ├── pose_adl.yaml               # Config Phase 3: model, ADL classes, thresholds
-│   └── runtime.env.example
-├── data/
-│   |
-│   │ 
-│   ├── raw_videos/                 # [git-ignored] Clip MP4 Phase 1
-│   ├── output_labels/              # [git-ignored] PNG + TXT Phase 2
-│   └── output_pose/                # [git-ignored] Keypoints + ADL Phase 3 ← PHASE 3
-│       └── <clip_stem>/
-│           ├── <clip_stem>_keypoints.txt
-│           ├── <clip_stem>_adl.txt
-│           └── <clip_stem>_overlay_NNNN.png   (optional: frame skeleton)
-├── models/                         # [git-ignored nếu lớn] .pt weights YOLO
-│   ├── yolov8n.pt                  # Phase 1
-│   ├── yolov11n.pt                  # Phase 2
-│   └── yolo11n-pose.pt             # Phase 3 ← PHASE 3
-├── static/
-│   ├── index.html                  # SPA duy nhất — KHÔNG tạo thêm html khác
-│   ├── css/
-│   │   └── style.css               # Toàn bộ style — KHÔNG import Tailwind/Bootstrap
-│   └── js/
-│       └── app.js                  # Toàn bộ frontend logic — Vanilla JS + Socket.IO CDN
-├── main.py                         # Entry point: from app import create_app
-├── run.bat                         # Windows launcher
-├── requirements.txt
-├── .env
-├── .gitignore
-├── CLAUDE.md                       # File này
-└── README.md
-```
+## 1.3 Điều không được hiểu sai
 
-**Quy tắc cứng:**
-- Không tạo file Python nào ngoài cấu trúc trên
-- Không tách routes thành nhiều file — tất cả trong `routes.py`
-- Không dùng Blueprint lồng nhau — 1 blueprint duy nhất `api_bp`
-- Không tạo folder `feat/`, `modules/`, `controllers/` hay bất kỳ cấu trúc khác
-- Thư mục gốc là `Capstone_Project/` — KHÔNG đổi tên, KHÔNG tạo subfolder `CPose/`
+- `data/multicam/*.mp4` là **test/demo only**, không phải train/val.
+- Các dataset như NTU, ETRI, Charades, Toyota Smarthome chỉ dùng cho **research / train / val / benchmark**, không phải dữ liệu runtime.
+- Mục tiêu hiện tại là **demo thực dụng**, không phải triển khai production cloud hay hệ thống enterprise.
 
 ---
 
-## 3. Công nghệ & Dependency (CỨNG — KHÔNG THÊM)
+# 2. Quy tắc ưu tiên khi Codex ra quyết định
 
-### Backend
-```
-flask>=3.0,<4
-flask-socketio>=5.3,<6
-flask-cors>=4.0,<5
-eventlet>=0.36,<1          # async mode cho SocketIO
-ultralytics>=8.3,<9        # YOLOv8n + YOLOv11 + YOLOv11n-pose
-opencv-python>=4.9,<5      # RTSP capture + VideoWriter
-Pillow>=10.0,<11           # Lưu PNG frame
-psutil>=5.9,<7             # Disk usage
-PyYAML>=6,<7               # Đọc config
-python-dotenv>=1,<2
-numpy>=1.24,<3             # Tính toán keypoints, góc khớp
-```
+Khi có mâu thuẫn, thứ tự ưu tiên là:
 
-### Frontend (CDN — KHÔNG npm/webpack/vite)
-```html
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<!-- Không dùng React, Vue, jQuery, Bootstrap, Tailwind -->
-```
+1. **Yêu cầu mới nhất của người dùng trong chat**
+2. **File `CLAUDE.md` này**
+3. Tinh thần của các tài liệu mới:
+   - `14-04-spatio-temporal.md`
+   - `14-04-fixbug-pipeline.md`
+   - `13-04-research-ADL.md`
+   - `Pipeline(1).md`
+4. Tài liệu CLAUDE cũ
+5. Suy luận của Codex
 
-### KHÔNG DÙNG:
-- FastAPI, Django, SQLAlchemy, SQLite
-- React, Vue, Angular, jQuery
-- Tailwind CSS, Bootstrap, Material UI
-- Docker, celery, redis
-- mediapipe, mmpose, ViTPose (dùng ultralytics pose thay thế)
+Codex **không được tự đoán** khi đã có ràng buộc trong file này.
 
 ---
 
-## 4. Quy tắc Đặt tên File Output
+# 3. Kiến trúc mục tiêu
 
-| Loại | Pattern | Ví dụ |
-|------|---------|-------|
-| Clip Phase 1 | `YYYYMMDD_HHMMSS_camXX.mp4` | `20240315_143022_cam01.mp4` |
-| Frame Phase 2 | `<clip_stem>_frame_<NNNN>.png` | `20240315_143022_cam01_frame_0042.png` |
-| Label Phase 2 | `<clip_stem>_labels.txt` | `20240315_143022_cam01_labels.txt` |
-| Keypoints Phase 3 | `<clip_stem>_keypoints.txt` | `20240315_143022_cam01_keypoints.txt` |
-| ADL Label Phase 3 | `<clip_stem>_adl.txt` | `20240315_143022_cam01_adl.txt` |
-| Overlay Phase 3 | `<clip_stem>_overlay_<NNNN>.png` | `20240315_143022_cam01_overlay_0042.png` |
+## 3.1 Tư tưởng chung
 
-- `camXX`: thứ tự camera trong `resources.txt`, đếm từ `01`, zero-padded 2 chữ số
-- `NNNN`: frame index trong clip, zero-padded 4 chữ số, bắt đầu từ `0000`
-- Output Phase 2: `data/output_labels/<clip_stem>/`
-- Output Phase 3: `data/output_pose/<clip_stem>/`
+Giữ kiến trúc **đơn giản, chạy được, dễ sửa**, ưu tiên:
+- code rõ ràng
+- pipeline tuần tự
+- không tạo thêm complexity không cần thiết
+- không thêm stack mới nếu chưa thật cần
 
----
+## 3.2 Chế độ hoạt động cần hỗ trợ
 
-## 5. Format File resources.txt
+### Mode 1 — RTSP Recording + Offline CPose
+Luồng chuẩn:
 
-```
-# Dòng bắt đầu bằng # là comment, bị bỏ qua
-# Dòng trống cũng bị bỏ qua
-rtsp://admin:password@192.168.1.101:554/stream1
-rtsp://admin:password@192.168.1.102:554/stream1
-```
+`resources.txt -> Phase1 raw_videos -> Phase2 output_labels -> Phase3 output_pose`
 
-- Chỉ RTSP URL, 1 URL/dòng
-- Tên cam được tạo tự động: `cam01`, `cam02`, ...
+### Mode 2 — Sequential Multicam Demo
+Luồng chuẩn:
 
----
+`data/multicam/*.mp4 -> parse timestamp -> global sort by time -> sequential processing -> output_pose`
 
-## 6. Format File Label Phase 2 (labels.txt)
+Mode 2 là trọng tâm mới cho demo hiện tại.
 
-```
-# frame_id x_min y_min x_max y_max
-0 112 54 340 490
-0 512 102 680 495
-1 115 58 338 492
-```
+## 3.3 Không được làm gì lúc này
 
-- Separator: dấu cách (space)
-- Tọa độ pixel tuyệt đối (KHÔNG normalize về [0,1])
-- Class luôn là `person` — KHÔNG ghi class vào file
+- Không chuyển toàn bộ dự án sang microservices
+- Không thêm Docker / Redis / Celery
+- Không chuyển sang React / Vue / Next.js
+- Không tự động mở rộng thành distributed multi-camera production system
+- Không ép mọi thứ chạy realtime song song nếu người dùng đang ưu tiên demo tuần tự
 
 ---
 
-## 7. Format File Keypoints Phase 3 (keypoints.txt)
+# 4. Cấu trúc thư mục — nguyên tắc thực tế
 
-```
-# frame_id person_id kp0_x kp0_y kp0_conf kp1_x kp1_y kp1_conf ... kp16_x kp16_y kp16_conf
-0 0 340.2 120.5 0.91 330.1 115.3 0.88 ... 280.1 410.3 0.85
-0 1 510.4 200.1 0.79 ...
-1 0 341.0 122.3 0.93 ...
-```
+## 4.1 Nguyên tắc cứng
 
-- 17 keypoints theo chuẩn COCO (nose, left_eye, right_eye, left_ear, right_ear,
-  left_shoulder, right_shoulder, left_elbow, right_elbow, left_wrist, right_wrist,
-  left_hip, right_hip, left_knee, right_knee, left_ankle, right_ankle)
-- Tọa độ pixel tuyệt đối, confidence [0,1]
-- `person_id` = index trong frame đó, bắt đầu từ 0
+- **Tôn trọng cấu trúc repo hiện có**.
+- Không đổi tên thư mục gốc.
+- Không di chuyển hàng loạt file nếu chưa được yêu cầu.
+- Không tạo thêm cấu trúc framework rườm rà kiểu `src/`, `controllers/`, `modules/`, `feature_xxx/`.
+- Nếu cần thêm file mới, phải đặt ở nơi hợp lý theo logic hiện có.
 
----
+## 4.2 Những thư mục dữ liệu phải tồn tại
 
-## 8. Format File ADL Label Phase 3 (adl.txt)
+- `data/config/`
+- `data/raw_videos/`
+- `data/output_labels/`
+- `data/output_pose/`
+- `data/multicam/`
 
-```
-# frame_id person_id adl_label confidence
-0  0  standing   0.92
-30 0  walking    0.87
-60 0  bending    0.74
-90 0  falling    0.81
-```
+## 4.3 Ý nghĩa
 
-**ADL Classes được hỗ trợ:**
-```
-standing, sitting, walking, lying_down, falling, reaching, bending, unknown
-```
+- `data/raw_videos/`: clip sinh từ Phase 1 RTSP recorder
+- `data/output_labels/`: kết quả Phase 2
+- `data/output_pose/`: kết quả Phase 3 và kết quả demo tuần tự multicam
+- `data/multicam/`: nơi người dùng copy video test thủ công
 
 ---
 
-## 9. Phase 1 — Recording Logic Chi tiết
+# 5. Dependency policy
 
-### Hằng số (trong phase1_recorder.py — KHÔNG đổi tên)
+## 5.1 Ưu tiên giữ stack nhẹ
+
+Cho phép ưu tiên các thư viện sau nếu repo đã hoặc sẽ dùng hợp lý:
+- `flask`
+- `flask-socketio`
+- `flask-cors`
+- `eventlet`
+- `ultralytics`
+- `opencv-python`
+- `Pillow`
+- `numpy`
+- `PyYAML`
+- `psutil`
+- `python-dotenv`
+
+## 5.2 Không được tự ý thêm
+
+- FastAPI
+- Django
+- React / Vue / Angular
+- Tailwind / Bootstrap / jQuery
+- Redis / Celery
+- Docker bắt buộc
+- framework pose khác nếu chưa được yêu cầu
+
+## 5.3 Quy tắc bổ sung dependency
+
+Chỉ được thêm dependency mới khi:
+1. người dùng yêu cầu rõ, hoặc
+2. không có cách hợp lý nào khác để hoàn thành chức năng cốt lõi
+
+Nếu thêm mới, phải giải thích ngắn trong comment hoặc README.
+
+---
+
+# 6. Chính sách dữ liệu train/val và test
+
+## 6.1 Train / Val
+
+Dùng tài liệu research ADL làm nền tham khảo:
+- ST-GCN, MS-G3D, CTR-GCN, BlockGCN
+- SkateFormer
+- RTMPose, RTMO
+- TSM
+- NTU RGB+D 60/120
+- ETRI Activity3D
+- Toyota Smarthome
+- Charades
+
+Train/val là **ngoài runtime app**.
+
+## 6.2 Test / Demo runtime
+
+Các file trong:
+- `data/multicam/`
+- `data/raw_videos/`
+
+chỉ là:
+- input test
+- input demo
+- input đánh giá hành vi / Pose / ReID
+
+Không dùng chúng như train set nội bộ runtime.
+
+---
+
+# 7. Quy ước tên file
+
+## 7.1 Phase 1 clip từ RTSP
+
+Format ưu tiên:
+
+```text
+YYYYMMDD_HHMMSS_camXX.mp4
+```
+
+Ví dụ:
+
+```text
+20240315_143022_cam01.mp4
+```
+
+## 7.2 Video test thủ công trong `data/multicam/`
+
+Format bắt buộc cho demo tuần tự:
+
+```text
+camxx-ss-mm-hh-dd-MM-yyyy.mp4
+```
+
+Ví dụ:
+
+```text
+cam01-25-26-16-29-01-2026.mp4
+cam02-40-26-16-29-01-2026.mp4
+cam03-15-58-15-28-01-2026.mp4
+cam04-27-46-16-29-01-2026.mp4
+```
+
+Codex phải parse filename này đúng.
+
+---
+
+# 8. Quy tắc sort và xử lý clip demo multicam
+
+## 8.1 Tuyệt đối không sort theo string filename đơn thuần
+
+Phải parse thành:
+- year
+- month
+- day
+- hour
+- minute
+- second
+- cam_index
+
+## 8.2 Sort key chính thức
 
 ```python
-PRE_BUFFER_SEC     = 3
-POST_BUFFER_SEC    = 3
-INFERENCE_EVERY    = 5
-MIN_CLIP_DURATION  = 2.0
-PERSON_CLASS_ID    = 0
-CONF_THRESHOLD_P1  = 0.35
-DEFAULT_STORAGE_GB = 10.0
+sort_key = (year, month, day, hour, minute, second, cam_index)
 ```
 
-### Luồng xử lý
-```
-resources.txt → parse N URLs
-      ↓
-Với mỗi URL → tạo 1 CameraThread (daemon thread)
-      ↓
-CameraThread:
-  cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-  Frame loop:
-    ret, frame = cap.read()
-    Append vào deque (PRE_BUFFER_SEC×fps)
-    Mỗi INFERENCE_EVERY frame:
-      results = yolo_n(frame, classes=[0])
-      persons = [r for conf>CONF_P1]
-    Nếu persons detected:
-      Nếu chưa ghi → flush deque vào file
-      Tiếp tục ghi frame
-      no_person_counter = 0
-    Nếu không có persons:
-      no_person_counter += 1
-      Nếu đang ghi: vẫn ghi (POST_BUFFER)
-      Nếu no_person_counter>POST_FRAMES:
-        Đóng VideoWriter
-        Nếu duration >= MIN_CLIP → giữ
-        Nếu duration < MIN_CLIP → xóa
-        emit("clip_saved", {...})
-        enforce_storage_limit()
-```
+## 8.3 Nguyên tắc vàng
+
+**Ưu tiên thời gian trước, camera sau.**
+
+Nếu 2 clip cùng timestamp thì mới dùng `cam01 < cam02 < cam03 < cam04`.
 
 ---
 
-## 10. Phase 2 — Analysis Logic Chi tiết
+# 9. Thuật toán demo không gian–thời gian tuần tự
 
-### Hằng số (trong phase2_analyzer.py)
+## 9.1 Tên thuật toán nội bộ
 
-```python
-CONF_THRESHOLD_P2  = 0.50
-PROGRESS_EVERY     = 10
-PERSON_CLASS_ID    = 0
+`TFCS-PAR` = `Time-First Cross-Camera Sequential Pose–ADL–ReID`
+
+## 9.2 Flow bắt buộc
+
+```text
+manual test clips
+-> parse filename timestamp
+-> global sort by (time, cam)
+-> sequential scheduler
+-> open one clip at a time
+-> local person tracking
+-> pose inference
+-> ADL inference
+-> cross-camera ReID update
+-> save outputs
+-> move to next clip
 ```
 
-### Luồng xử lý
-```
-User chọn folder → POST /api/analysis/start
-      ↓
-Analyzer.run(folder_path) chạy trong Thread riêng
-      ↓
-Với mỗi .mp4 (sort alphabetically):
-  clip_stem = Path(mp4).stem
-  output_dir = data/output_labels/<clip_stem>/
+## 9.3 Không được chạy parallel trong mode demo này
 
-  Với mỗi frame:
-    results = yolo_l(frame, classes=[0], conf=CONF_P2)
-    boxes = results[0].boxes.xyxy
+- Không multi-thread per clip
+- Không process nhiều clip cùng lúc
+- Không chạy pose và ADL theo hai pipeline song song khác nhau
 
-    Nếu len(boxes) > 0:
-      cv2.imwrite(out_png, frame)
-      label_file.write(f"{frame_id} {x1} {y1} {x2} {y2}\\n")
-
-    Emit progress mỗi PROGRESS_EVERY frame
-      ↓
-emit("analysis_complete", {...})
-```
+**Demo tuần tự phải đúng trước, nhanh sau.**
 
 ---
 
-## 11. Phase 3 — Pose & ADL Logic Chi tiết
+# 10. Topology camera và logic không gian
 
-### Hằng số (trong phase3_recognizer.py)
+## 10.1 Topology chuẩn cho demo
 
-```python
-POSE_MODEL_NAME     = "yolo11n-pose.pt"
-CONF_THRESHOLD_P3   = 0.45          # Confidence threshold detect người (pose model)
-KP_CONF_MIN         = 0.3           # Minimum keypoint confidence để tính ADL
-WINDOW_SIZE         = 30            # Số frame cho sliding window ADL classification
-PROGRESS_EVERY      = 10            # Emit progress mỗi N frame
-SAVE_OVERLAY        = True          # Có lưu frame skeleton PNG hay không
-PERSON_CLASS_ID     = 0
+```text
+cam01 -> cam02 -> cam03 -> elevator -> cam04
+cam04 -> room_upstairs -> cam04
+cam03 -> quay lại / xuống lại -> cam03 hoặc cam02
 ```
 
-### ADL Classes (pose_adl.yaml)
-```yaml
-adl_classes:
-  - standing
-  - sitting
-  - walking
-  - lying_down
-  - falling
-  - reaching
-  - bending
-  - unknown
+## 10.2 Ý nghĩa
 
-# Thresholds góc khớp (độ) cho rule-based classifier
-thresholds:
-  knee_bend_angle: 150      # góc đầu gối < 150° → đang ngồi/ngồi xổm
-  hip_angle_lying: 160      # góc hông > 160° khi nằm
-  shoulder_raise: 45        # góc vai > 45° so với trục ngang → reaching/bending
-  velocity_walk: 8.0        # pixel/frame trung bình để phân biệt đứng/đi
-```
+- `cam01`: đầu tuyến
+- `cam02`: trung gian tầng dưới
+- `cam03`: gần thang máy / điểm chuyển tầng
+- `cam04`: tầng trên
+- `elevator`: vùng mù giữa cam03 và cam04
+- `room_upstairs`: phòng kín ở cam04
 
-### Luồng xử lý
-```
-User chọn folder → POST /api/pose/start
-      ↓
-PoseADLRecognizer.run(folder_path) chạy trong Thread riêng
-      ↓
-Với mỗi .mp4 (sort alphabetically):
-  clip_stem = Path(mp4).stem
-  output_dir = data/output_pose/<clip_stem>/
+## 10.3 Chính sách ID
 
-  kp_buffer = {}   # person_id → deque(maxlen=WINDOW_SIZE)
-  kp_file    = output_dir / f"{clip_stem}_keypoints.txt"
-  adl_file   = output_dir / f"{clip_stem}_adl.txt"
+Không tạo ID mới quá sớm.
 
-  Với mỗi frame:
-    results = pose_model(frame, classes=[0], conf=CONF_P3)
-    keypoints_xy   = results[0].keypoints.xy    # [N, 17, 2]
-    keypoints_conf = results[0].keypoints.conf  # [N, 17]
+Khi người:
+- biến mất ở `cam03` gần elevator
+- xuất hiện sau đó ở `cam04` trong time window hợp lý
 
-    Với mỗi person i:
-      Lọc keypoints có conf >= KP_CONF_MIN
-      Ghi vào kp_file
-
-      kp_buffer[i].append(keypoints_xy[i])
-      Nếu len(kp_buffer[i]) == WINDOW_SIZE:
-        adl_label, conf = rule_based_adl(kp_buffer[i], config)
-        Ghi vào adl_file: f"{frame_id} {i} {adl_label} {conf:.2f}\\n"
-
-    Nếu SAVE_OVERLAY:
-      overlay = draw_skeleton(frame, keypoints_xy, keypoints_conf)
-      cv2.imwrite(overlay_path, overlay)
-
-    Emit progress mỗi PROGRESS_EVERY frame
-      ↓
-emit("pose_complete", {clips_done, keypoints_written, adl_events})
-```
-
-### Rule-based ADL Classifier (pose_utils.py)
-
-Hàm `rule_based_adl(window: deque, config: dict) -> (str, float)`:
-
-```python
-# Sử dụng frame cuối window để phân loại
-# 1. Tính góc khớp: calc_angle(p1, vertex, p2) → degrees
-# 2. Tính velocity trung bình qua window (ankle displacement)
-# 3. Áp dụng rule theo thứ tự ưu tiên:
-
-# Priority 1: falling (hip y thấp + thân nghiêng mạnh)
-# Priority 2: lying_down (hip_angle > threshold khi hip.y gần frame bottom)
-# Priority 3: sitting (knee_angle < threshold)
-# Priority 4: bending (shoulder_angle > threshold, người không di chuyển)
-# Priority 5: reaching (wrist.y < shoulder.y)
-# Priority 6: walking (ankle velocity > threshold)
-# Priority 7: standing (default)
-# Fallback: unknown (quá ít keypoints hợp lệ)
-```
-
-Hàm tiện ích trong `pose_utils.py`:
-```python
-def calc_angle(p1, vertex, p2) -> float:
-    """Tính góc (độ) tại vertex giữa vector p1-vertex và p2-vertex."""
-
-def calc_velocity(positions: list) -> float:
-    """Tính tốc độ trung bình (pixel/frame) từ chuỗi vị trí."""
-
-def draw_skeleton(frame, keypoints_xy, keypoints_conf, min_conf=0.3) -> np.ndarray:
-    """Vẽ skeleton COCO 17 keypoints + limbs lên frame, trả về frame mới."""
-
-def rule_based_adl(window, config) -> tuple[str, float]:
-    """Rule-based ADL classifier từ sliding window keypoints."""
-```
+thì **ưu tiên giữ nguyên Global ID**.
 
 ---
 
-## 12. API Endpoints (routes.py — ĐẦY ĐỦ)
+# 11. Trạng thái hệ thống cần có cho demo tuần tự
 
-### Phase 1 & 2 (giữ nguyên)
+Codex nên ưu tiên thiết kế các state sau:
 
-| Method | Path | Mô tả |
-|--------|------|-------|
-| GET | `/` | Serve `static/index.html` |
-| POST | `/api/config/upload` | Upload `resources.txt` |
-| GET | `/api/config/cameras` | Danh sách camera |
-| POST | `/api/cameras/probe` | Probe RTSP |
-| POST | `/api/recording/start` | Bắt đầu Phase 1 |
-| POST | `/api/recording/stop` | Dừng Phase 1 |
-| GET | `/api/recording/status` | Trạng thái Phase 1 |
-| GET | `/api/videos` | Danh sách clip MP4 |
-| DELETE | `/api/videos/<filename>` | Xóa clip |
-| POST | `/api/analysis/start` | Bắt đầu Phase 2 |
-| POST | `/api/analysis/stop` | Dừng Phase 2 |
-| GET | `/api/analysis/status` | Tiến độ Phase 2 |
-| GET | `/api/analysis/results` | Kết quả Phase 2 |
-| GET | `/api/storage/info` | Dung lượng raw_videos |
-| POST | `/api/storage/limit` | Đặt giới hạn storage |
+## 11.1 `ClipQueue`
+Danh sách clip đã parse và sort.
 
-### Phase 3 (thêm mới)
+## 11.2 `GlobalPersonTable`
+Lưu Global ID xuyên camera.
 
-| Method | Path | Body / Params | Response | Mô tả |
-|--------|------|---------------|----------|-------|
-| POST | `/api/pose/start` | `{folder: "data/raw_videos", save_overlay: true}` | `{status, total_clips}` | Bắt đầu Phase 3 |
-| POST | `/api/pose/stop` | — | `{status}` | Dừng Phase 3 |
-| GET | `/api/pose/status` | — | `{running, current_clip, progress_pct}` | Tiến độ Phase 3 |
-| GET | `/api/pose/results` | `?folder=data/output_pose` | `{results: [{clip_stem, keypoints_count, adl_events, adl_summary}]}` | Kết quả Phase 3 |
-| GET | `/api/pose/adl_summary` | `?clip=<clip_stem>` | `{clip, adl_distribution: {label: pct, ...}}` | Thống kê ADL theo clip |
+Trạng thái gợi ý:
+- `ACTIVE`
+- `PENDING_TRANSFER`
+- `IN_ROOM`
+- `DORMANT`
+- `CLOSED`
 
-### SocketIO Events (Server → Client)
+## 11.3 `PendingTransitionBuffer`
+Dùng khi một người vừa biến mất ở vùng chuyển tiếp như elevator.
 
-| Event | Payload | Phase |
-|-------|---------|-------|
-| `camera_status` | `{cam_id, status, fps, resolution, timestamp}` | 1 |
-| `detection_event` | `{cam_id, timestamp, person_count, confidence_max}` | 1 |
-| `clip_saved` | `{filename, size_mb, duration_s, cam_id}` | 1 |
-| `analysis_progress` | `{clip, frame_id, total_frames, pct, frames_saved}` | 2 |
-| `analysis_complete` | `{clips_done, frames_saved, labels_written, elapsed_s}` | 2 |
-| `pose_progress` | `{clip, frame_id, total_frames, pct, persons_detected}` | 3 |
-| `pose_complete` | `{clips_done, keypoints_written, adl_events, elapsed_s}` | 3 |
-| `storage_warning` | `{used_gb, limit_gb, pct}` | 1–3 |
-| `error` | `{source, message, traceback}` | 1–3 |
+## 11.4 `RoomHoldBuffer`
+Dùng khi người vào phòng kín ở cam04.
+
+## 11.5 `LampState`
+Dùng cho mapping 4 bóng đèn camera.
 
 ---
 
-## 13. Frontend Architecture (static/index.html + js/app.js)
+# 12. Mapping 4 bóng đèn camera
 
-### Cấu trúc SPA — 5 Tab
+UI demo phải hỗ trợ hiển thị trực quan:
 
-```
-index.html
-  ├── Tab 1: Configuration
-  ├── Tab 2: Live Monitor
-  ├── Tab 3: Analysis (Phase 2)
-  ├── Tab 4: Results (Phase 2)
-  └── Tab 5: Pose & ADL (Phase 3)   ← THÊM MỚI
+```text
+Cam01 -> Cam02 -> Cam03 -> Cam04
 ```
 
-### Tab 5: Pose & ADL
-- Input đường dẫn folder clip (default: `data/raw_videos`)
-- Nút **Load** → hiển thị danh sách clip
-- Checkbox **Save overlay** (lưu frame skeleton PNG)
-- Nút **Start Pose Analysis** → POST `/api/pose/start`
-- Progress bar tổng thể + tên clip đang xử lý
-- Nút **Stop**
-- Sau khi hoàn tất: accordion từng clip hiển thị:
-  - Tổng số keypoints được ghi
-  - Biểu đồ ADL distribution (bar đơn giản CSS, không cần Chart.js)
-  - Bảng `adl.txt`: frame_id | person_id | label | confidence
-  - Preview overlay frame đầu tiên nếu có
+Trạng thái màu:
+- `IDLE`
+- `ACTIVE`
+- `DONE`
+- `ALERT`
+
+Gợi ý hiển thị:
+- `⚪` IDLE
+- `🟡` ACTIVE
+- `🟢` DONE
+- `🔴` ALERT
+
+Khi clip camera nào đang xử lý thì bóng đèn đó sáng.
 
 ---
 
-## 14. CSS Rules (style.css)
+# 13. Global ID policy — càng ít ID càng tốt
 
-- **Dark theme bắt buộc**: `background: #0f1117`, text `#e2e8f0`
-- **Accent color**: `#3b82f6` (blue-500 equivalent)
-- **Font**: `font-family: 'Inter', system-ui, sans-serif`
+## 13.1 Nguyên tắc chung
 
-```css
-:root {
-  --bg-primary:   #0f1117;
-  --bg-secondary: #1a1f2e;
-  --bg-card:      #242938;
-  --border:       #2d3748;
-  --text-primary: #e2e8f0;
-  --text-muted:   #718096;
-  --accent:       #3b82f6;
-  --success:      #48bb78;
-  --warning:      #ed8936;
-  --error:        #fc8181;
-  --pose:         #a78bfa;   /* màu riêng cho Phase 3 */
-}
-```
+**Ưu tiên giữ ID cũ nếu còn hợp lý**, chỉ tạo ID mới khi thực sự cần.
 
----
+## 13.2 Bằng chứng ghép ID
 
-## 15. Python Code Rules
+### Mạnh
+- face match mạnh
+- temporal continuity mạnh
+- topology phù hợp và chỉ có 1 candidate rõ ràng
 
-### App factory (app/__init__.py)
+### Trung bình
+- body appearance gần giống
+- chiều cao tương đối gần giống
+- pose / gait signature tương đồng
+- ADL continuity hợp lý
 
-```python
-from flask import Flask
-from flask_socketio import SocketIO
-from flask_cors import CORS
+### Bổ trợ
+- biến mất ở cửa ra camera trước
+- xuất hiện ở cửa vào camera sau
+- thời gian di chuyển hợp lý
 
-socketio = SocketIO()
+## 13.3 Khi vào phòng hoặc đi thang máy
 
-def create_app():
-    app = Flask(__name__, static_folder="../static", static_url_path="/static")
-    CORS(app)
-    socketio.init_app(app, async_mode="eventlet", cors_allowed_origins="*")
-    from app.api import api_bp
-    app.register_blueprint(api_bp)
-    return app
-```
+- Không tạo ID mới ngay
+- Đưa vào pending buffer / room buffer
+- Chờ clip kế tiếp hợp lệ theo thời gian–topology
 
-### Path constants (BASE_DIR)
+## 13.4 Khi thay áo màu khác
 
-```python
-from pathlib import Path
+Nếu người vào `room_upstairs` rồi đi ra với áo khác màu:
+- giảm trọng số body color
+- tăng trọng số face, height, gait, temporal topology
+- nếu chỉ có 1 candidate hợp lý trong room buffer, **ưu tiên giữ ID cũ**
 
-BASE_DIR        = Path(__file__).parent.parent
-DATA_DIR        = BASE_DIR / "data"
-RAW_VIDEOS      = DATA_DIR / "raw_videos"
-OUTPUT_LABELS   = DATA_DIR / "output_labels"
-OUTPUT_POSE     = DATA_DIR / "output_pose"       # Phase 3
-CONFIG_DIR      = DATA_DIR / "config"
-MODELS_DIR      = BASE_DIR / "models"
-CONFIGS_DIR     = BASE_DIR / "configs"
-RESOURCES       = CONFIG_DIR / "resources.txt"
-POSE_ADL_CFG    = CONFIGS_DIR / "pose_adl.yaml"
-```
+## 13.5 Chỉ tạo ID mới khi
 
-### Singleton pattern
-
-```python
-class PoseADLRecognizer:
-    _instance = None
-
-    @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-```
-
-### Logging convention
-
-```python
-logger.info("[Phase3] Processing clip %s", clip_name)
-logger.info("[Phase3] ADL detected: %s (%.2f) frame %d", label, conf, frame_id)
-logger.warning("[Phase3] Low keypoint confidence frame %d", frame_id)
-logger.error("[Phase3] Error processing clip %s: %s", clip_name, err)
-```
+- không có candidate hợp lệ theo thời gian–không gian
+- face / body / pose đều không khớp đủ tin cậy
+- có xung đột nhiều người cùng thời điểm
 
 ---
 
-## 16. run.bat (Windows Launcher)
+# 14. Time window gợi ý cho chuyển camera
 
-```bat
-@echo off
-chcp 65001 >nul
-setlocal
+Giá trị demo ban đầu:
 
-set "ROOT=%~dp0"
-set "VENV=%ROOT%venv"
+- `cam01 -> cam02`: `0–60s`
+- `cam02 -> cam03`: `0–60s`
+- `cam03 -> cam04` qua thang máy: `20–180s`
+- `cam04 -> cam03` đi xuống: `20–180s`
+- `cam04 -> room -> cam04`: `5–300s`
+- `cam03 -> quay lại cam02`: `10–120s`
 
-if not exist "%VENV%\\Scripts\\activate.bat" (
-    echo [CPose] Tao virtual environment...
-    python -m venv "%VENV%"
-)
-
-call "%VENV%\\Scripts\\activate.bat"
-
-pip show flask >nul 2>&1
-if errorlevel 1 (
-    echo [CPose] Cai dat dependency...
-    pip install -r "%ROOT%requirements.txt" --quiet
-)
-
-mkdir "%ROOT%data\\raw_videos"    2>nul
-mkdir "%ROOT%data\\output_labels" 2>nul
-mkdir "%ROOT%data\\output_pose"   2>nul
-mkdir "%ROOT%data\\config"        2>nul
-mkdir "%ROOT%models"              2>nul
-
-echo [CPose] Khoi dong server tai http://localhost:5000
-start "" timeout /t 2 /nobreak >nul && start http://localhost:5000
-python "%ROOT%main.py"
-pause
-```
+Các giá trị này phải để trong config hoặc constant dễ chỉnh.
 
 ---
 
-## 17. .gitignore
+# 15. Phase 1 — Quy tắc recorder
 
-```
-__pycache__/
-*.py[cod]
-venv/
-.env
+## 15.1 Logic
 
-data/raw_videos/
-data/output_labels/
-data/output_pose/
-models/
+- đọc `resources.txt`
+- tạo worker theo camera RTSP
+- detect người bằng YOLOv8n
+- event-based clip recording
+- pre-buffer + post-buffer
+- clip quá ngắn thì bỏ
+- enforce storage limit
 
-!data/raw_videos/.gitkeep
-!data/output_labels/.gitkeep
-!data/output_pose/.gitkeep
-!data/config/.gitkeep
-!models/.gitkeep
+## 15.2 Tối ưu bắt buộc
 
-.DS_Store
-Thumbbs.db
-.vscode/
-.idea/
-```
+**Preview chỉ bật khi cần xem**, không encode/emit liên tục nếu người dùng không xem.
+
+Mục tiêu là tránh buffer và giảm tải.
 
 ---
 
-## 18. Requirements (requirements.txt)
+# 16. Phase 2 — Quy tắc offline analysis
 
-```
-flask>=3.0,<4
-flask-socketio>=5.3,<6
-flask-cors>=4.0,<5
-eventlet>=0.36,<1
-ultralytics>=8.3,<9
-opencv-python>=4.9,<5
-Pillow>=10.0,<11
-psutil>=5.9,<7
-PyYAML>=6,<7
-python-dotenv>=1,<2
-numpy>=1.24,<3
-```
+- input: thư mục clip mp4
+- process lần lượt từng clip
+- YOLOv11n detect người
+- chỉ lưu PNG frame khi có người
+- ghi `labels.txt` với tọa độ pixel tuyệt đối
+- không thêm tracking phức tạp vào phase này nếu chưa cần
 
 ---
 
-## 19. Những điều TUYỆT ĐỐI không làm
+# 17. Phase 3 — Quy tắc pose và ADL
 
-| Không làm | Thay bằng |
-|-----------|-----------|
-| Thêm SQLite / database | Filesystem + JSON nếu cần persist |
-| Thêm FastAPI, Django | Chỉ Flask |
-| Dùng React/Vue | Vanilla JS + Socket.IO CDN |
-| Tạo file route mới ngoài routes.py | Thêm endpoint vào routes.py |
-| Hard-code path dạng string | pathlib.Path từ BASE_DIR |
-| Dùng global variable | Singleton pattern (get_instance) |
-| Commit .pt, .mp4, .png vào git | .gitignore |
-| import os.path.join | from pathlib import Path |
-| Tạo thread không phải daemon | thread.daemon = True |
-| Blocking call trong route handler | Background thread + emit SocketIO |
-| Dùng mediapipe/mmpose cho pose | ultralytics pose (yolo11n-pose.pt) |
-| Tạo folder `feat-*` hay `src/` | Cấu trúc cố định mục 2 |
+## 17.1 Model hiện tại
+
+- ưu tiên `YOLO11n-pose`
+- output 17 COCO keypoints
+
+## 17.2 ADL hiện tại
+
+- dùng **một** `rule_based_adl()` thống nhất
+- không được để tồn tại 2 bộ classifier song song mâu thuẫn nhau
+
+## 17.3 ADL classes chuẩn
+
+```text
+standing
+sitting
+walking
+lying_down
+falling
+reaching
+bending
+unknown
+```
+
+## 17.4 Sliding window
+
+- mặc định `WINDOW_SIZE = 30`
+- đủ window mới classify
+- mode demo tuần tự phải giữ logic nhất quán
 
 ---
 
-## 20. Workflow Người Dùng (End-to-End)
+# 18. Bug fix priority — Codex phải ưu tiên sửa đúng thứ tự
 
-```
-1. Chạy run.bat → Browser tự mở http://localhost:5000
+## P0 — phải sửa trước
 
-2. Tab "Configuration"
-   ├─ Upload resources.txt
-   ├─ Probe Cameras → xem resolution/FPS
-   ├─ Chọn resolution ghi hình
-   └─ Set storage limit
+### Bug A — Chỉ giữ 1 ADL classifier duy nhất
+Không được để `pose_utils.py` và một classifier khác đưa ra kết quả mâu thuẫn.
 
-3. Tab "Live Monitor"
-   ├─ Start Recording → YOLOv8n detect người → ghi clip MP4
-   ├─ Xem live log + storage gauge
-   └─ Stop Recording khi xong
+### Bug B — `person_id` không ổn định trong Phase 3
+Không dùng `enumerate` theo thứ tự detection để làm ID dài hạn.
+Phải dùng **stable local track id** trong phạm vi clip.
 
-4. Tab "Analysis" (Phase 2)
-   ├─ Load clip từ data/raw_videos
-   ├─ Start Analysis → YOLOv11n offline
-   └─ Theo dõi progress bar
+### Bug C — Demo multicam phải sort theo thời gian thật
+Không sort theo alphabet đơn thuần.
 
-5. Tab "Results" (Phase 2)
-   ├─ Xem accordion từng clip
-   ├─ Preview thumbnail PNG
-   └─ Download label.txt
+### Bug D — Mode demo multicam phải chạy tuần tự
+Không parallel pose / ADL / ReID giữa nhiều clip.
 
-6. Tab "Pose & ADL" (Phase 3)
-   ├─ Load clip (cùng folder hoặc thư mục khác)
-   ├─ Bật/tắt Save overlay
-   ├─ Start Pose Analysis → yolo11n-pose → keypoints + ADL
-   ├─ Theo dõi progress
-   └─ Xem ADL distribution + download keypoints/adl.txt
-```
+## P1 — nên sửa tiếp theo
 
----
+### Bug E — Preview / stream chỉ render khi có subscriber
+Giảm buffering.
 
-*Phiên bản: 3.0 — Bổ sung Phase 3 Pose Estimation & ADL Recognition.*
-*Tài liệu này là nguồn sự thật duy nhất (single source of truth) cho mọi AI assistant.*
-'''
+### Bug F — Quy tắc ít ID nhất
+Không sinh ID mới quá sớm khi có pending transfer hoặc room hold hợp lệ.
 
-readme_md = '''# CPose — Multi-Camera Person Detection, Auto-Labeling & ADL Recognition
+### Bug G — Tách train/val và test rõ trong code / docs / UI
 
-> **Đồ án Tốt nghiệp Kỹ sư** — Ngành Điện tử Viễn thông & Kỹ thuật Máy tính Chất lượng cao
-> Trường Đại học Bách Khoa — Đại học Đà Nẵng · 2024–2025
+## P2 — để sau
+
+- nâng cấp learned ADL model
+- nâng cấp face/body ReID tốt hơn
+- mở rộng >3 người
+- realtime multi-camera production-grade
 
 ---
 
-## Tổng quan
+# 19. ReID policy cho bản demo hiện tại
 
-**CPose** là hệ thống thu thập, phân tích và nhận dạng hành vi người tự động từ nhiều camera IP (RTSP),
-phục vụ nghiên cứu pose estimation và ADL (Activities of Daily Living).
+## 19.1 Trạng thái implementation
 
-Pipeline hoạt động hoàn toàn tự động qua **3 giai đoạn**:
+ReID hiện tại có thể ở mức heuristic / simple appearance matching.
+Codex **không được quảng cáo quá mức** như thể đã là SOTA.
 
-| Giai đoạn | Mô hình | Mục tiêu | Chế độ |
-|-----------|---------|----------|--------|
-| **Phase 1** | YOLOv8n | Phát hiện người, kích hoạt ghi clip MP4 | Realtime — chạy ngầm liên tục |
-| **Phase 2** | YOLOv11 | Trích xuất frame PNG + bounding box label | Offline — chạy theo yêu cầu |
-| **Phase 3** | YOLOv11n-pose | Keypoints 17 điểm + ADL classification | Offline — chạy theo yêu cầu |
+## 19.2 Tư tưởng đúng
 
----
+- bản demo hiện tại ưu tiên **temporal-topology consistency**
+- ReID là lớp hỗ trợ cho việc giữ Global ID ít nhất có thể
+- face là tín hiệu mạnh nhất nếu có
+- body appearance là tín hiệu trung bình
+- pose/gait/height là tín hiệu bổ trợ rất hữu ích khi đổi áo hoặc đi qua vùng mù
 
-## Tính năng chính
+## 19.3 Nếu implementation chưa hoàn chỉnh
 
-### Phase 1 — Ghi hình thông minh
-- Đọc đồng thời N luồng RTSP từ `resources.txt`
-- Chỉ ghi clip khi phát hiện người (event-based) → tiết kiệm bộ nhớ
-- Pre-buffer 3 giây và post-buffer 3 giây quanh sự kiện
-- YOLO inference mỗi 5 frame để tối ưu tải CPU/GPU
-- Tự động reconnect khi mất kết nối RTSP
-- Quản lý bộ nhớ: xóa clip cũ nhất khi vượt giới hạn đặt trước
-
-### Phase 2 — Auto-labeling chất lượng cao
-- Chạy YOLOv11 offline trên toàn bộ clip hoặc thư mục chọn
-- Chỉ lưu frame khi có người (confidence ≥ 0.50)
-- Output chuẩn: frame PNG gốc + file label tọa độ pixel tuyệt đối
-- Tracking tiến độ realtime qua SocketIO
-
-### Phase 3 — Pose Estimation & ADL Recognition *(Mới)*
-- Chạy YOLOv11n-pose trên clip đã ghi → 17 keypoints COCO format/người/frame
-- Sliding window 30 frame → rule-based ADL classifier
-- Nhận dạng 8 hoạt động: `standing`, `sitting`, `walking`, `lying_down`, `falling`, `reaching`, `bending`, `unknown`
-- Tùy chọn lưu frame overlay skeleton PNG
-- Thống kê phân bố ADL theo từng clip
-
-### Dashboard Web (SPA)
-- Giao diện dark theme duy nhất, 5 tab, không cần cài thêm phần mềm
-- Probe tự động resolution và FPS của từng camera
-- Live log: detection events, clip saved, storage usage
-- Hoàn toàn Vanilla JS — không phụ thuộc framework
+Codex phải nói rõ trong comment/doc:
+- đây là heuristic demo
+- chưa phải final research-grade ReID engine
 
 ---
 
-## Yêu cầu hệ thống
+# 20. File output và format
 
-| Thành phần | Tối thiểu | Khuyến nghị |
-|------------|-----------|-------------|
-| OS | Windows 10 / Linux | Windows 11 |
-| Python | 3.10+ | 3.11 |
-| RAM | 8 GB | 16 GB |
-| GPU | Không bắt buộc | NVIDIA CUDA (tăng tốc YOLO) |
-| Mạng | Truy cập RTSP camera | LAN tốc độ cao |
+## 20.1 Phase 2
+
+`labels.txt`
+
+Format:
+
+```text
+frame_id x_min y_min x_max y_max
+```
+
+## 20.2 Phase 3
+
+`keypoints.txt`
+
+Format:
+
+```text
+frame_id person_id kp0_x kp0_y kp0_conf ... kp16_x kp16_y kp16_conf
+```
+
+`adl.txt`
+
+Format:
+
+```text
+frame_id person_id adl_label confidence
+```
+
+## 20.3 Output folder
+
+Kết quả pose/ADL luôn phải về:
+
+```text
+data/output_pose/<clip_stem>/
+```
+
+Kết quả demo multicam cũng phải tuân theo tinh thần này.
 
 ---
 
-## Cấu trúc dự án
+# 21. Frontend policy
 
-```
-Capstone_Project/
-├── app/
-│   ├── __init__.py              # Flask app factory + path constants
-│   ├── api/
-│   │   └── routes.py            # Tất cả REST endpoint + SocketIO events
-│   ├── services/
-│   │   ├── phase1_recorder.py   # RecorderManager: RTSP + YOLOv8n + clip writer
-│   │   ├── phase2_analyzer.py   # Analyzer: YOLOv11 + frame/label extractor
-│   │   └── phase3_recognizer.py # PoseADLRecognizer: YOLOv11n-pose + ADL
-│   └── utils/
-│       ├── file_handler.py      # StorageManager: storage limit, file listing
-│       ├── stream_probe.py      # probe_rtsp(): resolution + FPS từ RTSP
-│       └── pose_utils.py        # calc_angle(), rule_based_adl(), draw_skeleton()
-├── configs/
-│   ├── unified_config.yaml      # Tham số chung toàn dự án
-│   ├── pose_adl.yaml            # Config Phase 3: ADL classes, thresholds
-│   └── runtime.env.example
-├── data/
-│   ├── config/
-│   │   └── resources.txt        # Danh sách RTSP URL (1 URL/dòng)
-│   ├── raw_videos/              # [git-ignored] Clip MP4 Phase 1
-│   ├── output_labels/           # [git-ignored] PNG + TXT Phase 2
-│   └── output_pose/             # [git-ignored] Keypoints + ADL Phase 3
-│       └── <clip_stem>/
-│           ├── <clip_stem>_keypoints.txt
-│           ├── <clip_stem>_adl.txt
-│           └── <clip_stem>_overlay_NNNN.png
-├── models/                      # [git-ignored] YOLOv8/11 .pt weights
-│   ├── yolov8n.pt               # Phase 1
-│   ├── yolo11n.pt               # Phase 2
-│   └── yolo11n-pose.pt          # Phase 3
-├── static/
-│   ├── index.html               # Dashboard SPA (5 tab)
-│   ├── css/style.css
-│   └── js/app.js
-├── main.py
-├── run.bat                      # Windows one-click launcher
-├── requirements.txt
-├── CLAUDE.md                    # AI assistant codex (đọc trước khi code)
-└── .gitignore
-```
+## 21.1 Giữ UI đơn giản
+
+- SPA đơn giản
+- ưu tiên Vanilla JS
+- không ép thêm framework nặng
+
+## 21.2 Những gì frontend nên hiển thị cho demo mới
+
+- danh sách clip multicam theo timeline
+- camera nào đang xử lý
+- 4 bóng đèn camera
+- progress clip hiện tại
+- ADL summary theo clip
+- trạng thái Global ID / pending transfer / room hold nếu có
+
+## 21.3 Không cần làm quá nhiều dashboard phức tạp
+
+Mục tiêu là **demo rõ thuật toán**, không phải BI dashboard.
 
 ---
 
-## Cài đặt & Chạy
+# 22. Coding style
 
-### Windows — One-click
+## 22.1 Nguyên tắc
 
-```bat
-run.bat
-```
+- code rõ ràng
+- tách hàm vừa đủ
+- tên biến dễ hiểu
+- ưu tiên `pathlib.Path`
+- tránh hard-code path string lộn xộn
+- thêm comment ở nơi có logic thuật toán quan trọng
 
-Script tự động:
-1. Tạo virtual environment `.venv` nếu chưa có
-2. Cài đặt tất cả dependency từ `requirements.txt`
-3. Tạo các thư mục dữ liệu cần thiết (`raw_videos`, `output_labels`, `output_pose`)
-4. Khởi động server Flask tại `http://localhost:5000`
-5. Mở trình duyệt tự động
+## 22.2 Không được
 
-### Manual (Windows / Linux)
-
-```bash
-pip install -r requirements.txt
-python main.py
-```
-
-Mở trình duyệt: `http://localhost:5000`
+- tạo code thừa để “trông chuyên nghiệp” nhưng không cần thiết
+- viết logic quá trừu tượng khó debug
+- âm thầm đổi API cũ khi chưa cập nhật frontend
 
 ---
 
-## Hướng dẫn sử dụng
+# 23. Cách Codex phải làm việc khi được giao task
 
-### Bước 1 — Cấu hình camera (Tab: Configuration)
+Trước khi sửa code, Codex phải tự kiểm tra:
 
-Tạo file `resources.txt`:
+1. Task này thuộc mode nào?
+   - Phase 1/2/3 gốc?
+   - Sequential multicam demo?
+2. Có ảnh hưởng tới file naming / output format không?
+3. Có làm sai nguyên tắc time-first không?
+4. Có vô tình sinh quá nhiều Global ID không?
+5. Có làm pose/ADL chạy song song trái yêu cầu không?
+6. Có thêm dependency trái policy không?
+7. Có phá cấu trúc repo không?
 
-```
-# Mỗi dòng là 1 RTSP URL. Dòng bắt đầu bằng # là comment.
-rtsp://admin:password@192.168.1.100:554/stream1
-rtsp://admin:password@192.168.1.101:554/stream1
-```
-
-1. Tải `resources.txt` lên (kéo thả hoặc click)
-2. Nhấn **Probe Cameras** → lấy resolution và FPS của từng camera
-3. Chọn độ phân giải ghi hình (chỉ hiện option ≤ max resolution của cam)
-4. Thiết lập giới hạn storage (mặc định 10 GB)
-
-### Bước 2 — Ghi hình (Tab: Live Monitor)
-
-1. Nhấn **Start Recording**
-2. YOLOv8n chạy ngầm mỗi 5 frame/camera
-3. Clip được đặt tên: `YYYYMMDD_HHMMSS_camXX.mp4`
-4. Nhấn **Stop Recording** khi hoàn tất
-
-### Bước 3 — Auto-labeling (Tab: Analysis)
-
-1. Load clip từ `data/raw_videos`
-2. Nhấn **Start Analysis** — YOLOv11 offline
-3. Output tại `data/output_labels/<clip_stem>/`:
-
-```
-data/output_labels/
-└── 20240315_143022_cam01/
-    ├── 20240315_143022_cam01_frame_0000.png
-    ├── 20240315_143022_cam01_frame_0003.png
-    └── 20240315_143022_cam01_labels.txt
-```
-
-### Bước 4 — Xem kết quả Phase 2 (Tab: Results)
-
-- Accordion theo từng clip: số frame PNG, số bounding box
-- Preview thumbnail, tải về `labels.txt`
-
-### Bước 5 — Pose & ADL (Tab: Pose & ADL) *(Mới)*
-
-1. Load clip (cùng folder `data/raw_videos` hoặc thư mục khác)
-2. Bật/tắt **Save overlay** (lưu frame skeleton PNG)
-3. Nhấn **Start Pose Analysis**
-4. Output tại `data/output_pose/<clip_stem>/`:
-
-```
-data/output_pose/
-└── 20240315_143022_cam01/
-    ├── 20240315_143022_cam01_keypoints.txt
-    ├── 20240315_143022_cam01_adl.txt
-    └── 20240315_143022_cam01_overlay_0000.png
-```
-
-5. Xem biểu đồ phân bố ADL + tải về file kết quả
+Nếu có, phải dừng và chỉnh lại thiết kế.
 
 ---
 
-## Định dạng file output
+# 24. Acceptance checklist trước khi kết thúc một task
 
-### Phase 2 — labels.txt
+Codex chỉ được coi task là hoàn tất nếu thỏa:
 
-```
-# frame_id  x_min  y_min  x_max  y_max
-0           112    54     340    490
-0           512    102    680    495
-1           115    58     338    492
-```
-
-| Trường | Mô tả |
-|--------|-------|
-| `frame_id` | Index frame trong clip, từ 0 |
-| `x_min, y_min` | Góc trên bên trái bounding box (pixel tuyệt đối) |
-| `x_max, y_max` | Góc dưới bên phải bounding box (pixel tuyệt đối) |
-
-> Class luôn là `person` (COCO class 0) — không ghi vào file. Tọa độ **không normalize**.
-
-### Phase 3 — keypoints.txt
-
-```
-# frame_id person_id kp0_x kp0_y kp0_conf ... kp16_x kp16_y kp16_conf
-0 0 340.2 120.5 0.91 330.1 115.3 0.88 ... 280.1 410.3 0.85
-```
-
-- 17 keypoints COCO (nose → right_ankle)
-- Tọa độ pixel tuyệt đối, confidence [0,1]
-
-### Phase 3 — adl.txt
-
-```
-# frame_id person_id adl_label confidence
-0  0  standing  0.92
-30 0  walking   0.87
-60 0  bending   0.74
-```
-
-**ADL classes:** `standing` · `sitting` · `walking` · `lying_down` · `falling` · `reaching` · `bending` · `unknown`
+- [ ] Không phá Phase 1/2/3 hiện có
+- [ ] Không trộn train/val vào runtime test
+- [ ] `data/multicam` được xử lý theo **thời gian trước, camera sau**
+- [ ] Pose + ADL chạy **tuần tự**
+- [ ] Có thể hiển thị mapping 4 bóng đèn camera
+- [ ] Kết quả lưu về `data/output_pose`
+- [ ] Logic ID ưu tiên **ít ID nhất có thể**
+- [ ] Có xử lý hợp lý cho `cam03 -> elevator -> cam04`
+- [ ] Có xử lý hợp lý cho `cam04 -> room -> cam04`
+- [ ] Không tự ý thêm framework / dependency lớn
+- [ ] Có comment / doc ngắn giải thích phần logic mới
 
 ---
 
-## API Reference
+# 25. Non-goals của phiên bản hiện tại
 
-### Phase 1 & 2
-
-| Method | Endpoint | Mô tả |
-|--------|----------|-------|
-| GET | `/` | Dashboard |
-| POST | `/api/config/upload` | Upload `resources.txt` |
-| GET | `/api/config/cameras` | Danh sách camera |
-| POST | `/api/cameras/probe` | Probe RTSP |
-| POST | `/api/recording/start` | Bắt đầu Phase 1 |
-| POST | `/api/recording/stop` | Dừng Phase 1 |
-| GET | `/api/recording/status` | Trạng thái Phase 1 |
-| GET | `/api/videos` | Danh sách clip MP4 |
-| DELETE | `/api/videos/<filename>` | Xóa clip |
-| POST | `/api/analysis/start` | Bắt đầu Phase 2 |
-| POST | `/api/analysis/stop` | Dừng Phase 2 |
-| GET | `/api/analysis/status` | Tiến độ Phase 2 |
-| GET | `/api/analysis/results` | Kết quả Phase 2 |
-| GET | `/api/storage/info` | Dung lượng raw_videos |
-| POST | `/api/storage/limit` | Đặt giới hạn storage |
-
-### Phase 3 *(Mới)*
-
-| Method | Endpoint | Body / Params | Mô tả |
-|--------|----------|---------------|-------|
-| POST | `/api/pose/start` | `{folder, save_overlay}` | Bắt đầu Phase 3 |
-| POST | `/api/pose/stop` | — | Dừng Phase 3 |
-| GET | `/api/pose/status` | — | Tiến độ Phase 3 |
-| GET | `/api/pose/results` | `?folder=data/output_pose` | Kết quả Phase 3 |
-| GET | `/api/pose/adl_summary` | `?clip=<clip_stem>` | ADL distribution theo clip |
-
-### SocketIO Events (Server → Client)
-
-| Event | Mô tả | Phase |
-|-------|-------|-------|
-| `camera_status` | Trạng thái kết nối, FPS, resolution | 1 |
-| `detection_event` | Phát hiện người: cam, số người | 1 |
-| `clip_saved` | Clip được lưu: tên, size, duration | 1 |
-| `analysis_progress` | Tiến độ Phase 2: frame / tổng | 2 |
-| `analysis_complete` | Phase 2 hoàn tất | 2 |
-| `pose_progress` | Tiến độ Phase 3: frame / tổng, số người | 3 |
-| `pose_complete` | Phase 3 hoàn tất: keypoints, ADL events | 3 |
-| `storage_warning` | Dung lượng > 90% | 1–3 |
-| `error` | Lỗi backend: source, message, traceback | 1–3 |
+Những thứ **không phải mục tiêu bắt buộc ngay bây giờ**:
+- đạt SOTA ADL benchmark trong app demo
+- production-grade person ReID
+- multi-user web platform
+- cloud-native architecture
+- realtime fully parallel orchestration
+- nhận diện hàng chục người đồng thời xuyên nhiều camera phức tạp
 
 ---
 
-## YOLO Models
+# 26. Kết luận cho Codex
 
-| Model | File | Phase | Confidence | Tải tự động |
-|-------|------|-------|------------|-------------|
-| YOLOv8n | `models/yolov8n.pt` | 1 | 0.35 | ✅ Lần đầu Phase 1 |
-| YOLOv11 | `models/yolo11n.pt` | 2 | 0.50 | ✅ Lần đầu Phase 2 |
-| YOLOv11n-pose | `models/yolo11n-pose.pt` | 3 | 0.45 | ✅ Lần đầu Phase 3 |
+Nếu phải chọn giữa:
+- giải pháp hoành tráng nhưng khó chạy
+- giải pháp đơn giản nhưng đúng yêu cầu demo
 
-> Weights cache vào `models/` sau lần tải đầu. Yêu cầu Internet lần đầu.
+=> luôn chọn **giải pháp đơn giản, tuần tự, dễ demo, đúng file này**.
 
----
+**Triết lý chính thức của phiên bản hiện tại:**
 
-## Tech Stack
-
-| Thành phần | Công nghệ |
-|------------|-----------|
-| Backend | Python 3.10+, Flask 3, Flask-SocketIO 5 (eventlet) |
-| AI Engine | Ultralytics YOLOv8/11 (detect + pose) |
-| Video | OpenCV (RTSP capture, VideoWriter, frame extraction) |
-| Math | NumPy (tính góc khớp, velocity, sliding window) |
-| Frontend | HTML5, CSS3, Vanilla JavaScript, Socket.IO CDN |
-| Concurrency | `threading.Thread` (daemon) + `threading.Lock` |
-| Storage | Filesystem (`pathlib.Path`) — không dùng database |
-
----
-
-## Quản lý bộ nhớ
-
-- Giới hạn mặc định: **10 GB** (có thể thay qua giao diện)
-- Khi `raw_videos/` vượt giới hạn → tự động xóa clip cũ nhất cho đến < 80%
-- Cảnh báo SocketIO khi dung lượng > 90%
-- `output_labels/` và `output_pose/` không bị ảnh hưởng bởi cơ chế này
-
----
-
-## Ghi chú kỹ thuật
-
-- Mỗi camera chạy trên **daemon thread độc lập** — thread-safe với `threading.Lock`
-- Pre-buffer 3 giây (deque) + post-buffer 3 giây sau khi mất detection
-- YOLOv8n inference Phase 1: mỗi 5 frame (giảm tải CPU, giữ real-time)
-- Clip < 2 giây tự động bị xóa (lọc false detection thoáng qua)
-- Tự động reconnect RTSP sau 5 giây khi mất kết nối
-- Phase 3: sliding window 30 frame → ADL rule-based classification theo góc khớp + velocity
-- ADL rule priority: `falling` > `lying_down` > `sitting` > `bending` > `reaching` > `walking` > `standing`
-
----
-
-*Phát triển phục vụ nghiên cứu đồ án tốt nghiệp kỹ sư — Điện tử Viễn thông & Kỹ thuật Máy tính Chất lượng cao, Đại học Bách Khoa Đà Nẵng.*
-'''
+> `Train/Val ở ngoài runtime.`
+> `Runtime test xử lý theo thời gian trước.`
+> `Pose và ADL xử lý tuần tự.`
+> `Global ID phải càng ít càng tốt.`
+> `UI phải trực quan, đặc biệt với 4 camera và timeline.`

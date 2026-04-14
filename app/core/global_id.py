@@ -10,8 +10,8 @@ Date: 2026-02-02
 import numpy as np
 import logging
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
-from collections import defaultdict, deque
+from datetime import datetime
+from collections import defaultdict
 import threading
 
 from app.storage.persistence import PersistenceManager
@@ -22,6 +22,66 @@ logger = logging.getLogger(__name__)
 
 _GLOBAL_ID_DEFAULTS = get_runtime_section("global_id")
 QUALITY_UPDATE_THRESHOLD = float(_GLOBAL_ID_DEFAULTS.get("quality_update_threshold", 0.7))
+
+_DEFAULT_TRANSITION_WINDOWS = {
+    ("cam01", "cam02"): (0.0, 60.0),
+    ("cam02", "cam02"): (0.0, 120.0),
+    ("cam02", "cam03"): (0.0, 60.0),
+    ("cam03", "cam02"): (10.0, 120.0),
+    ("cam03", "cam03"): (0.0, 180.0),
+    ("cam03", "cam04"): (20.0, 180.0),
+    ("cam04", "cam03"): (20.0, 180.0),
+    ("cam04", "cam04"): (0.0, 300.0),
+}
+
+
+def _normalize_camera_id(camera: str | None) -> str:
+    if not camera:
+        return ""
+
+    camera = str(camera).strip().lower()
+    if not camera.startswith("cam"):
+        return camera
+
+    digits = "".join(ch for ch in camera if ch.isdigit())
+    if not digits:
+        return camera
+    return f"cam{int(digits):02d}"
+
+
+def _parse_transition_windows(raw_windows) -> Dict[Tuple[str, str], Tuple[float, float]]:
+    windows = dict(_DEFAULT_TRANSITION_WINDOWS)
+    if not isinstance(raw_windows, dict):
+        return windows
+
+    for raw_key, raw_value in raw_windows.items():
+        source = None
+        target = None
+
+        if isinstance(raw_key, str) and "->" in raw_key:
+            left, right = raw_key.split("->", 1)
+            source = _normalize_camera_id(left)
+            target = _normalize_camera_id(right)
+        elif isinstance(raw_key, (tuple, list)) and len(raw_key) == 2:
+            source = _normalize_camera_id(raw_key[0])
+            target = _normalize_camera_id(raw_key[1])
+
+        if not source or not target:
+            continue
+        if not isinstance(raw_value, (tuple, list)) or len(raw_value) != 2:
+            continue
+
+        try:
+            min_s = float(raw_value[0])
+            max_s = float(raw_value[1])
+        except (TypeError, ValueError):
+            continue
+
+        if min_s > max_s:
+            min_s, max_s = max_s, min_s
+        windows[(source, target)] = (min_s, max_s)
+
+    return windows
 
 
 class GlobalIDManager:
@@ -65,6 +125,9 @@ class GlobalIDManager:
         self.confirm_frames = config.get("confirm_frames", _GLOBAL_ID_DEFAULTS.get("confirm_frames", 3))
         self.top_k_candidates = config.get("top_k_candidates", _GLOBAL_ID_DEFAULTS.get("top_k_candidates", 20))
         self.use_hungarian = config.get("use_hungarian", _GLOBAL_ID_DEFAULTS.get("use_hungarian", True))
+        self.transition_windows = _parse_transition_windows(
+            config.get("transition_windows", _GLOBAL_ID_DEFAULTS.get("transition_windows", {}))
+        )
         
         # UNK handling
         self.unk_namespace = config.get("unk_namespace", "global")
@@ -193,11 +256,13 @@ class GlobalIDManager:
                     
                     # Update feature bank
                     if quality_score >= QUALITY_UPDATE_THRESHOLD:
+                        appearance_time = self._coerce_frame_time(frame_time)
                         self.persistence.update_appearance(
                             global_id, 
                             self.master_camera,
                             embedding,
-                            bbox
+                            bbox,
+                            timestamp=appearance_time,
                         )
                         # Update vector index
                         self._update_vector_index(global_id, embedding)
@@ -222,7 +287,8 @@ class GlobalIDManager:
             new_id,
             self.master_camera,
             embedding,
-            bbox
+            bbox,
+            timestamp=self._coerce_frame_time(frame_time),
         )
         
         # Add to vector index
@@ -294,11 +360,13 @@ class GlobalIDManager:
                 
                 # Update appearance (but NOT create new ID)
                 if quality_score >= QUALITY_UPDATE_THRESHOLD:
+                    appearance_time = self._coerce_frame_time(frame_time)
                     self.persistence.update_appearance(
                         global_id,
                         camera,
                         embedding,
-                        bbox
+                        bbox,
+                        timestamp=appearance_time,
                     )
                     # Update vector index
                     self._update_vector_index(global_id, embedding)
@@ -384,22 +452,81 @@ class GlobalIDManager:
         """
         Get list of valid GlobalID candidates for slave camera.
         Apply spatiotemporal filtering.
-        
-        For now, return all GlobalIDs.
-        TODO: Implement camera graph transition time filtering.
         """
-        # Get all active GlobalIDs
-        _, global_ids = self.persistence.get_all_embeddings(active_only=True)
-        return global_ids.tolist()
+        target_camera = _normalize_camera_id(camera)
+        current_dt = self._coerce_frame_time(frame_time)
+        if current_dt is None:
+            logger.debug("Invalid frame_time=%s. Rejecting candidates for %s.", frame_time, target_camera)
+            return []
+
+        candidate_rows = self.persistence.get_active_global_id_states()
+        valid_ids: List[int] = []
+
+        for row in candidate_rows:
+            global_id = int(row["global_id"])
+            last_camera = _normalize_camera_id(row.get("last_camera"))
+            last_seen_at = row.get("last_seen_at")
+
+            if not last_camera or not last_seen_at:
+                continue
+
+            previous_dt = self._parse_iso_datetime(last_seen_at)
+            if previous_dt is None:
+                continue
+
+            window = self.transition_windows.get((last_camera, target_camera))
+            if window is None:
+                continue
+
+            delta_s = (current_dt - previous_dt).total_seconds()
+            min_s, max_s = window
+            if min_s <= delta_s <= max_s:
+                valid_ids.append(global_id)
+
+        logger.debug(
+            "Spatiotemporal gating for %s at %s kept %d/%d candidates",
+            target_camera,
+            current_dt.isoformat(),
+            len(valid_ids),
+            len(candidate_rows),
+        )
+        return valid_ids
+
+    @staticmethod
+    def _coerce_frame_time(frame_time) -> Optional[datetime]:
+        if isinstance(frame_time, datetime):
+            return frame_time
+        if isinstance(frame_time, str):
+            try:
+                return datetime.fromisoformat(frame_time)
+            except ValueError:
+                return None
+        try:
+            return datetime.fromtimestamp(float(frame_time))
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    @staticmethod
+    def _parse_iso_datetime(raw_value: str | None) -> Optional[datetime]:
+        if not raw_value:
+            return None
+        try:
+            return datetime.fromisoformat(raw_value)
+        except ValueError:
+            return None
     
     def _update_vector_index(self, global_id: int, new_embedding: np.ndarray):
         """
         Update vector index with new embedding (EMA style).
-        Currently rebuilds - can optimize with incremental update.
+        The current VectorDatabase does not expose a safe in-place update API,
+        so we rebuild from persistence to keep the search index consistent.
         """
-        # For now, simple approach: index will be periodically rebuilt
-        # In production, implement incremental update
-        pass
+        embeddings, global_ids = self.persistence.get_all_embeddings(active_only=True)
+        if len(embeddings) == 0:
+            return
+
+        self.vector_db.rebuild(embeddings, global_ids)
+        logger.debug("Vector index refreshed after GlobalID %s update", global_id)
     
     def _compute_iou(self, bbox1: List[int], bbox2: List[int]) -> float:
         """Compute IoU between two bboxes."""

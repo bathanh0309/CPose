@@ -10,54 +10,57 @@
   <script defer src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script defer src="/static/js/app.js"></script>
 </head>
-<body>
+<body class="master-container">
 
 <!-- ═══════════════════════ SIDEBAR ═══════════════════════════ -->
 <aside class="sidebar">
   <div class="sidebar-brand">
-    <div class="brand-icon">
-      <!-- Camera + person icon -->
-      <svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
-        <circle cx="8" cy="10" r="2" fill="var(--amber)" stroke="none"/>
-      </svg>
+    <div class="sidebar-brand-inner">
+      <div class="brand-icon">
+        <!-- Camera + person icon -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+          <circle cx="8" cy="10" r="2" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <div class="brand-name-wrap">
+        <div class="brand-name">CPose</div>
+        <div class="brand-sub">3-Phase Pipeline</div>
+      </div>
     </div>
-    <div>
-      <div class="brand-name">CPose</div>
-      <div class="brand-sub">3-Phase Pipeline</div>
-    </div>
+    <button class="btn-sidebar-toggle" onclick="document.body.classList.toggle('collapsed-sidebar');" title="Toggle Sidebar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
   </div>
 
   <nav class="sidebar-nav">
-    <div class="nav-section-title">Setup</div>
-    <a href="#" class="nav-item active" data-tab="config">
+    <div class="nav-section-title">Quick Start</div>
+    <a href="#" class="nav-item active" data-tab="config" onclick="switchTab('config'); return false;">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0 0 4.93 19.07M4.93 4.93a10 10 0 0 0 14.14 14.14"/></svg>
-      Configuration
+      <span>Setup</span>
     </a>
 
-    <div class="nav-section-title">Phase 1</div>
-    <a href="#" class="nav-item" data-tab="monitor">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-      Live Monitor
-      <span class="nav-badge hidden" id="nav-rec-badge">REC</span>
+    <div class="nav-section-title">Phases</div>
+    <a href="#" class="nav-item" data-tab="monitor" onclick="switchTab('monitor'); return false;">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+      <span>Phase 1 — Record</span>
     </a>
-
-    <div class="nav-section-title">Phase 2</div>
-    <a href="#" class="nav-item" data-tab="analysis">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><polyline points="18 17 13 12 9 14 5 10"/></svg>
-      Analysis
+    <a href="#" class="nav-item" data-tab="analysis" onclick="switchTab('analysis'); return false;">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Phase 2 — Analyze</span>
     </a>
-    <a href="#" class="nav-item" data-tab="results">
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-      Results
-    </a>
-
-    <div class="nav-section-title">Phase 3</div>
-    <a href="#" class="nav-item" data-tab="pose">
+    <a href="#" class="nav-item" data-tab="pose" onclick="switchTab('pose'); return false;">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="4" r="2"/><path d="M12 6v6M12 6L9 9M12 6l3 3M12 12l-3 4M12 12l3 4"/></svg>
-      Pose &amp; ADL
+      <span>Phase 3 — Pose & ADL</span>
+    </a>
+
+    <div class="nav-section-title">Diagnostics</div>
+    <a href="#" class="nav-item" onclick="document.getElementById('log-drawer').classList.toggle('open'); return false;">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <span>Event Logs</span>
     </a>
   </nav>
+
 
   <div class="sidebar-foot">
     <div class="flex-row">
@@ -76,6 +79,19 @@
     </div>
   </div>
 </aside>
+
+<!-- LOG DRAWER -->
+<div class="log-drawer" id="log-drawer">
+  <div class="log-drawer-head">
+    <div class="log-drawer-title">System Event Logs</div>
+    <button class="log-drawer-close" onclick="document.getElementById('log-drawer').classList.remove('open')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="log-wrap" id="log-wrap">
+    <!-- logs -->
+  </div>
+</div>
 
 <!-- ═══════════════════════ MAIN ═══════════════════════════════ -->
 <main class="main">
@@ -113,6 +129,10 @@
             <button class="btn btn-ghost" id="btn-probe-all">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
               Probe All Cameras
+            </button>
+            <button class="btn btn-ghost" id="btn-load-local-test" style="color:var(--amber)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              Load 'data/multicam'
             </button>
           </div>
         </div>
@@ -155,7 +175,7 @@
   </section>
 
   <!-- ════════════ TAB: LIVE MONITOR ═════════════════════════ -->
-  <section class="tab-panel" id="tab-monitor">
+  <section class="tab-panel hidden" id="tab-monitor">
 
     <!-- KPI bar -->
     <div class="kpi-bar">
@@ -222,7 +242,7 @@
   </section>
 
   <!-- ════════════ TAB: ANALYSIS ══════════════════════════════ -->
-  <section class="tab-panel" id="tab-analysis">
+  <section class="tab-panel hidden" id="tab-analysis">
     <div class="g g-2">
 
       <!-- Controls -->
@@ -302,7 +322,7 @@
   </section>
 
   <!-- ════════════ TAB: RESULTS ═══════════════════════════════ -->
-  <section class="tab-panel" id="tab-results">
+  <section class="tab-panel hidden" id="tab-results">
     <div class="card">
       <div class="card-head">
         <span class="card-title">Phase 2 Results</span>
@@ -328,86 +348,120 @@
 
   <!-- ════════════ TAB: POSE & ADL ════════════════════════════ -->
   <section class="tab-panel" id="tab-pose">
-    <div class="g g-2">
-
-      <!-- Controls -->
-      <div class="card col-12">
-        <div class="card-head">
-          <span class="card-title">Phase 3 — YOLOv11-Pose + ADL Classification</span>
-          <div class="flex-row">
-            <span class="dot" id="dot-pose"></span>
-            <span id="lbl-pose" class="fs-12 txt-2">Idle</span>
-          </div>
+    <!-- A. Top control bar -->
+    <div class="card mb-3">
+      <div class="card-head flex-row" style="justify-content:space-between">
+        <div class="flex-row" style="flex-wrap:wrap">
+          <span class="card-title">Sequential Multicam Processing</span>
+          <span class="badge badge-info" id="pose-top-status" style="margin-left:12px">Idle</span>
+          <span class="badge badge-pose" id="pose-top-cam" style="margin-left:8px">—</span>
+          <span class="txt-2 fs-12 ml-2" id="pose-top-clip" style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">—</span>
         </div>
-        <div class="card-body">
-          <div class="form-row">
-            <input class="input mono" id="pose-dir" type="text" value="data/raw_videos">
-            <button class="btn btn-primary" id="btn-start-pose">
-              <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><polygon points="5,3 19,12 5,21"/></svg>
-              Start Pose Analysis
-            </button>
-            <button class="btn btn-danger" id="btn-stop-pose" disabled>Stop</button>
-            <button class="btn btn-ghost" id="btn-refresh-pose">Refresh</button>
-          </div>
-          <div class="form-row mt-2">
-            <label class="flex-row fs-12 txt-2" style="cursor:pointer">
-              <input id="pose-save-overlay" type="checkbox" checked style="accent-color:var(--amber)">
-              Save skeleton overlay PNG frames
-            </label>
-          </div>
-          <p class="hint">Writes <code>_keypoints.txt</code>, <code>_adl.txt</code> (and optionally overlay PNGs) into <code>data/output_pose/</code>.</p>
+        <div class="flex-row">
+          <span class="dot" id="dot-pose"></span>
+          <span id="lbl-pose" class="fs-12 txt-2" style="width:60px">Idle</span>
         </div>
       </div>
+      <div class="card-body form-row" style="padding-top:0">
+        <span class="form-label" style="white-space:nowrap">Source:</span>
+        <select class="input mono" id="pose-dir" style="width:200px">
+          <option value="data/multicam">data/multicam</option>
+          <option value="data/raw_videos">data/raw_videos</option>
+        </select>
+        <label class="flex-row fs-12 txt-2 ml-2 mr-3" style="cursor:pointer">
+          <input id="pose-save-overlay" type="checkbox" checked style="accent-color:var(--amber)">
+          Save Overlay & MP4
+        </label>
+        <button class="btn btn-primary" id="btn-start-pose">Start Processing</button>
+        <button class="btn btn-danger" id="btn-stop-pose" disabled>Stop</button>
+        <button class="btn btn-ghost" id="btn-refresh-pose">Refresh</button>
+      </div>
+    </div>
 
-      <!-- Progress -->
+    <!-- B. Main processing viewer area -->
+    <div class="g g-2 mb-3">
+      <div class="card col-12" style="overflow:hidden">
+        <div class="card-head" style="padding-bottom:12px">
+          <span class="card-title">Dual Video Viewer</span>
+          <div class="flex-row fs-12 txt-2">
+            <span class="mr-3">FPS: <strong id="pv-fps">0.0</strong></span>
+            <span>Frame: <strong id="pv-frame">0 / 0</strong></span>
+          </div>
+        </div>
+        <div class="p0 flex-row" style="height: 380px; gap: 0; background: #000; overflow:hidden; align-items:stretch">
+          <div style="flex:1; border-right:1px solid #333; position: relative">
+            <div class="badge badge-idle" style="position:absolute; top:8px; left:8px; z-index:10; opacity:0.8">Original</div>
+            <img id="pv-orig" src="" style="width:100%; height:100%; object-fit:contain; opacity:0">
+            <div id="pv-orig-ph" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#555">No Signal</div>
+          </div>
+          <div style="flex:1; position: relative">
+            <div class="badge badge-idle" style="position:absolute; top:8px; left:8px; z-index:10; opacity:0.8; border-color:var(--purple); color:var(--purple)">Processed</div>
+            <img id="pv-proc" src="" style="width:100%; height:100%; object-fit:contain; opacity:0">
+            <div id="pv-proc-ph" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#555">No Signal</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- C & D & E: Metrics, Queue, Lamps -->
+    <div class="g g-2 mb-3">
+      <!-- Timeline queue & Lamps -->
       <div class="card">
         <div class="card-head">
-          <span class="card-title">Pose Progress</span>
-          <span class="badge badge-pose">YOLOv11-Pose</span>
+          <span class="card-title">Queue & Topology</span>
+          <span class="badge badge-info" id="pose-active-cam-badge">Idle</span>
         </div>
         <div class="card-body">
-          <div id="pose-idle-state">
-            <div class="empty" style="padding:20px">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><circle cx="12" cy="4" r="2"/><path d="M12 6v6M12 6L9 9M12 6l3 3M12 12l-3 4M12 12l3 4"/></svg>
-              <div class="empty-sub">Start Phase 3 to generate keypoints and ADL labels</div>
-            </div>
+          <div class="lamp-rail" id="pose-lamp-rail" style="margin-bottom:16px">
+            <div class="lamp-card lamp-idle" data-cam="cam01"><span class="lamp-bulb"></span><span class="lamp-name">Cam01</span><span class="lamp-state">IDLE</span></div><div class="lamp-link"></div>
+            <div class="lamp-card lamp-idle" data-cam="cam02"><span class="lamp-bulb"></span><span class="lamp-name">Cam02</span><span class="lamp-state">IDLE</span></div><div class="lamp-link"></div>
+            <div class="lamp-card lamp-idle" data-cam="cam03"><span class="lamp-bulb"></span><span class="lamp-name">Cam03</span><span class="lamp-state">IDLE</span></div><div class="lamp-link"></div>
+            <div class="lamp-card lamp-idle" data-cam="cam04"><span class="lamp-bulb"></span><span class="lamp-name">Cam04</span><span class="lamp-state">IDLE</span></div>
           </div>
-          <div id="pose-running-state" class="hidden">
-            <div class="progress-head">
-              <span id="pose-clip-name" class="txt-2">—</span>
-              <strong id="pose-pct">0%</strong>
-            </div>
-            <div class="progress-track mb-4">
-              <div class="progress-fill" id="pose-bar"></div>
-            </div>
-            <div class="stat-row cols-3">
-              <div class="stat-box"><div class="stat-num" id="pose-stat-clips">0/0</div><div class="stat-lbl">Clips</div></div>
-              <div class="stat-box"><div class="stat-num" id="pose-stat-kps">0</div><div class="stat-lbl">Keypoint Rows</div></div>
-              <div class="stat-box"><div class="stat-num" id="pose-stat-adl">0</div><div class="stat-lbl">ADL Events</div></div>
-            </div>
+          
+          <div class="pose-queue-head mt-4">
+            <span class="form-label mb-0">Sorted Timeline</span>
+            <span class="fs-12 txt-muted" id="pose-queue-count">0 clips</span>
           </div>
-          <div id="pose-done-state" class="hidden center" style="padding:20px">
-            <svg viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2" width="36" height="36" style="margin:0 auto 8px"><polyline points="20 6 9 17 4 12"/></svg>
-            <div class="fw-6" style="color:var(--purple)">Phase 3 complete</div>
+          <div class="pose-queue" id="pose-queue" style="max-height:180px; overflow-y:auto">
+            <div class="empty" style="padding:16px"><div class="empty-sub">Start Processing to build the queue</div></div>
           </div>
         </div>
       </div>
 
-      <!-- Pose outputs -->
+      <!-- Compact metrics -->
       <div class="card">
         <div class="card-head">
-          <span class="card-title">Pose Outputs</span>
-          <button class="btn btn-ghost btn-xs" id="btn-refresh-pose-results">Refresh</button>
+          <span class="card-title">Runtime Metrics</span>
+          <span class="badge badge-idle" id="pose-pct-badge">0%</span>
         </div>
         <div class="card-body">
-          <div class="result-grid" id="pose-results-grid">
-            <div class="empty">
-              <div class="empty-sub">No pose outputs yet</div>
-            </div>
+          <div class="progress-track mb-4">
+            <div class="progress-fill" id="pose-bar"></div>
           </div>
+          <div class="stat-row cols-2 cols-sm-4" style="gap:12px; margin-bottom:12px">
+            <div class="stat-box"><div class="stat-num" id="pose-stat-clips">0/0</div><div class="stat-lbl">Clips</div></div>
+            <div class="stat-box"><div class="stat-num" id="pose-stat-kps">0</div><div class="stat-lbl">Keypoint Rows</div></div>
+            <div class="stat-box"><div class="stat-num" id="pose-stat-adl">0</div><div class="stat-lbl">ADL Events</div></div>
+            <div class="stat-box"><div class="stat-num" id="pose-stat-tracks">0</div><div class="stat-lbl">Active Tracks</div></div>
+          </div>
+          <div class="empty hidden" id="pose-idle-state" style="padding:12px"><div class="empty-sub">Ready to start Phase 3</div></div>
+          <div class="empty hidden" id="pose-done-state" style="padding:12px"><svg viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2" width="24" height="24" style="margin:0 auto"><polyline points="20 6 9 17 4 12"/></svg><div class="fw-6 fs-12 mt-2" style="color:var(--purple)">Sequence Complete</div></div>
         </div>
       </div>
+    </div>
 
+    <!-- F. Outputs -->
+    <div class="card col-12">
+      <div class="card-head">
+        <span class="card-title">Output Summary</span>
+        <button class="btn btn-ghost btn-xs" id="btn-refresh-pose-results">Refresh</button>
+      </div>
+      <div class="card-body">
+        <div class="result-grid" id="pose-results-grid">
+          <div class="empty"><div class="empty-sub">No outputs yet</div></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -422,6 +476,18 @@
     </div>
     <div class="modal-body" id="probe-body">
       <div class="spin"></div>
+    </div>
+  </div>
+</div>
+<!-- ════════════ PREVIEW MODAL ════════════════════════════════ -->
+<div class="modal-overlay hidden" id="modal-preview">
+  <div class="modal modal-preview">
+    <div class="modal-head">
+      <h3 id="preview-title">Video Preview</h3>
+      <button class="modal-close" onclick="closePreviewModal()">×</button>
+    </div>
+    <div class="modal-body" style="padding: 16px;">
+      <video id="preview-video" class="preview-video" controls autoplay></video>
     </div>
   </div>
 </div>

@@ -1,0 +1,18 @@
+{
+  "name": "cpose-dashboard",
+  "version": "1.0.0-alpha",
+  "description": "CPose Sequential Multicam Demo Dashboard",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.0"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0",
+    "@vitejs/plugin-basic-ssl": "^1.1.0"
+  }
+}

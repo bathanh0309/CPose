@@ -97,6 +97,14 @@ global_id:
   max_unk_per_video: 10
   iou_resurrection_threshold: 0.3
   quality_update_threshold: 0.7
+  transition_windows:
+    # CLAUDE.md §14: time-window hints for cross-camera Re-ID gating
+    cam01->cam02: [0, 60]
+    cam02->cam03: [0, 60]      # was incorrectly cam02->cam02
+    cam03->cam02: [10, 120]    # return path
+    cam03->cam04: [20, 180]    # elevator blind zone
+    cam04->cam03: [20, 180]    # elevator return
+    cam04->cam04: [5, 300]     # room_upstairs hold (CLAUDE.md §13.4)
 
 reid:
   threshold: 0.65
@@ -105,6 +113,8 @@ reid:
   min_crop_height: 30
   min_crop_width: 15
   top_k_similarity: 5
+  pending_track_ttl_seconds: 10.0
+  confirmed_track_ttl_seconds: 60.0
 
 tracker:
   max_age: 30

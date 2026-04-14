@@ -11,6 +11,7 @@ from app.services.phase2_analyzer import Analyzer
 from app.services.phase3_recognizer import PoseADLRecognizer
 from app.utils.file_handler import StorageManager
 from app.utils.stream_probe import StreamProber
+from app.utils.file_handler import sort_multicam_clips
 
 logger = logging.getLogger("[API]")
 
@@ -69,6 +70,29 @@ def get_cameras():
         return jsonify({"cameras": []})
 
     return jsonify({"cameras": _storage.parse_resources(_app_module.RESOURCES_FILE)})
+
+
+@api_bp.route("/config/load_local", methods=["POST"])
+def load_local_test_cameras():
+    """Tạo resources.txt từ tất cả các file .mp4 trong thư mục data/multicam để test Phase 1"""
+    video_dir = _app_module.BASE_DIR / "data" / "multicam"
+    if not video_dir.exists():
+        return jsonify({"error": "Thư mục data/multicam không tồn tại"}), 404
+        
+    videos = list(video_dir.glob("*.mp4"))
+    if not videos:
+        return jsonify({"error": "Không có video .mp4 nào trong data/multicam"}), 404
+    
+    with open(_app_module.RESOURCES_FILE, "w", encoding="utf-8") as f:
+        f.write("# Automatically generated for local testing\n")
+        # Ensure sequential order cam01, cam02 etc.
+        for i, path in enumerate(sorted(videos)):
+            cam_str = f"cam{i+1:02d}"
+            f.write(f"{cam_str} __ {str(path.resolve())}\n")
+            
+    cameras = _storage.parse_resources(_app_module.RESOURCES_FILE)
+    logger.info("Loaded %d cameras dynamically from data/multicam", len(cameras))
+    return jsonify({"message": f"Loaded {len(videos)} local videos as cameras", "cameras": cameras})
 
 
 @api_bp.route("/cameras/probe", methods=["POST"])
@@ -236,7 +260,7 @@ def start_analysis():
     if _analyzer.is_running():
         return jsonify({"error": "Analysis is already running"}), 409
 
-    clips = sorted(video_dir.glob("*.mp4"))
+    clips = sort_multicam_clips(video_dir.glob("*.mp4"))
     if not clips:
         return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
 
@@ -293,7 +317,7 @@ def start_pose():
     if _pose.is_running():
         return jsonify({"error": "Pose analysis is already running"}), 409
 
-    clips = sorted(video_dir.glob("*.mp4"))
+    clips = sort_multicam_clips(video_dir.glob("*.mp4"))
     if not clips:
         return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
 
@@ -304,11 +328,15 @@ def start_pose():
         config_path=_app_module.POSE_CONFIG_FILE,
         save_overlay=save_overlay,
     )
+    pose_state = _pose.status()
 
     return jsonify({
         "status": "started",
         "total_clips": len(clips),
-        "save_overlay": save_overlay
+        "save_overlay": save_overlay,
+        "lamp_state": pose_state.get("lamp_state", {}),
+        "clip_queue": pose_state.get("clip_queue", []),
+        "active_camera": pose_state.get("active_camera", ""),
     })
 
 
@@ -338,6 +366,29 @@ def pose_results():
     if not folder.exists():
         return jsonify({"results": []})
     return jsonify({"results": _storage.list_pose_results(folder)})
+
+
+@api_bp.route("/pose/snapshot/<view>", methods=["GET"])
+def pose_snapshot(view: str):
+    """
+    Trả về ảnh JPEG mới nhất (snapshot) của quá trình Pose đang chạy.
+    view: 'original' hoặc 'processed'.
+    """
+    if view not in ("original", "processed"):
+        return jsonify({"error": "Invalid view type"}), 400
+
+    jpeg = _pose.get_snapshot(view)
+    if jpeg is None:
+        return Response(status=204)
+
+    return Response(
+        jpeg,
+        mimetype="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @api_bp.route("/pose/adl_summary", methods=["GET"])
@@ -389,3 +440,10 @@ def set_storage_limit():
 
     _recorder.set_storage_limit(limit_gb)
     return jsonify({"message": f"Storage limit updated to {limit_gb:.2f} GB"})
+
+
+@api_bp.route("/video/<path:filepath>")
+def serve_video(filepath):
+    from flask import send_from_directory
+    data_dir = _app_module.BASE_DIR / "data"
+    return send_from_directory(data_dir, filepath)

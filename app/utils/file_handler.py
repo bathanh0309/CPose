@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from collections import Counter
 from pathlib import Path
+from typing import Iterable
 
 from app.utils.runtime_config import get_runtime_section
 
@@ -12,6 +14,69 @@ logger = logging.getLogger("[Storage]")
 
 _STORAGE_CFG = get_runtime_section("storage")
 PRUNE_TARGET_RATIO = float(_STORAGE_CFG.get("prune_target_ratio", 0.8))
+MULTICAM_CAMERA_ORDER = ("cam01", "cam02", "cam03", "cam04")
+
+_MULTICAM_SORT_FORMATS = (
+    "%S-%M-%H-%d-%m-%Y",
+    "%Y-%m-%d-%H-%M-%S",
+)
+
+
+def _parse_multicam_timestamp(item: Path | str) -> tuple[datetime, int, str] | None:
+    """Parse a multicam clip stem into a sortable timestamp."""
+    name = Path(item).stem
+    parts = name.split("-")
+    if len(parts) != 7:
+        return None
+
+    cam_token = parts[0]
+    if not cam_token.startswith("cam"):
+        return None
+
+    cam_digits = "".join(ch for ch in cam_token if ch.isdigit())
+    if not cam_digits:
+        return None
+
+    tail = "-".join(parts[1:])
+    for fmt in _MULTICAM_SORT_FORMATS:
+        try:
+            clip_dt = datetime.strptime(tail, fmt)
+            return clip_dt, int(cam_digits), name.lower()
+        except ValueError:
+            continue
+    return None
+
+
+def extract_multicam_camera_id(item: Path | str) -> str | None:
+    """Return normalized camera id like cam01 when present."""
+    name = Path(item).stem
+    prefix = name.split("-", 1)[0].lower()
+    if not prefix.startswith("cam"):
+        return None
+
+    cam_digits = "".join(ch for ch in prefix if ch.isdigit())
+    if not cam_digits:
+        return None
+    return f"cam{int(cam_digits):02d}"
+
+
+def multicam_sort_key(item: Path | str) -> tuple[datetime, int, str]:
+    """Sort key that prefers timestamp, then camera index, then name."""
+    parsed = _parse_multicam_timestamp(item)
+    if parsed is not None:
+        return parsed
+
+    path = Path(item)
+    try:
+        fallback_dt = datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        fallback_dt = datetime.min
+    return fallback_dt, 9999, path.stem.lower()
+
+
+def sort_multicam_clips(clips: Iterable[Path]) -> list[Path]:
+    """Return clips ordered by capture time first, camera second."""
+    return sorted(list(clips), key=multicam_sort_key)
 
 
 class StorageManager:
@@ -64,7 +129,7 @@ class StorageManager:
             return []
 
         results: list[dict] = []
-        for folder in sorted(output_dir.iterdir()):
+        for folder in sort_multicam_clips(path for path in output_dir.iterdir() if path.is_dir()):
             if not folder.is_dir():
                 continue
             png_files = sorted(folder.glob("*.png"))
@@ -85,7 +150,10 @@ class StorageManager:
             return []
 
         results: list[dict] = []
-        for folder in sorted(output_dir.iterdir()):
+        from app import BASE_DIR
+        out_process_dir = BASE_DIR / "data" / "output_process"
+
+        for folder in sort_multicam_clips(path for path in output_dir.iterdir() if path.is_dir()):
             if not folder.is_dir():
                 continue
 
@@ -93,6 +161,8 @@ class StorageManager:
             adl_file = next(iter(sorted(folder.glob("*_adl.txt"))), None)
             overlay_files = list(folder.glob("*_overlay_*.png"))
             adl_summary = self._read_adl_summary(adl_file) if adl_file else {}
+            
+            mp4_path = out_process_dir / folder.name / f"{folder.name}_processed.mp4"
 
             results.append(
                 {
@@ -101,6 +171,7 @@ class StorageManager:
                     "adl_events": self._count_data_lines(adl_file),
                     "overlays": len(overlay_files),
                     "adl_summary": adl_summary,
+                    "mp4_exists": mp4_path.exists(),
                 }
             )
         return results

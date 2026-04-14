@@ -6,9 +6,9 @@ from pathlib import Path
 from flask import Blueprint, Response, jsonify, request
 
 import app as _app_module
-from app.services.phase1_recorder import RecorderManager
-from app.services.phase2_analyzer import Analyzer
-from app.services.phase3_recognizer import PoseADLRecognizer
+from app.services.recorder import RecorderManager
+from app.services.analyzer import Analyzer
+from app.services.recognizer import PoseADLRecognizer
 from app.utils.file_handler import StorageManager
 from app.utils.stream_probe import StreamProber
 from app.utils.file_handler import sort_multicam_clips
@@ -389,6 +389,32 @@ def pose_snapshot(view: str):
             "Pragma": "no-cache",
         },
     )
+
+
+
+@api_bp.route("/pose/save_result", methods=["POST"])
+def save_pose_result():
+    body = request.get_json(force=True, silent=True) or {}
+    clip_stem = body.get("clip_stem")
+    if not clip_stem:
+        return jsonify({"error": "clip_stem is required"}), 400
+        
+    src_dir = _app_module.OUTPUT_POSE_DIR / clip_stem
+    preview_vid = src_dir / f"{clip_stem}_preview.mp4"
+    if not preview_vid.exists():
+        return jsonify({"error": "Preview video not found"}), 404
+        
+    import shutil
+    dest_dir = _app_module.BASE_DIR / "data" / "output_process" / clip_stem
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Copy video
+    shutil.copy2(preview_vid, dest_dir / f"{clip_stem}_processed.mp4")
+    # Copy other outputs for completeness
+    for f in src_dir.glob("*.txt"):
+        shutil.copy2(f, dest_dir / f.name)
+        
+    return jsonify({"message": f"Result saved for {clip_stem}", "status": "success"})
 
 
 @api_bp.route("/pose/adl_summary", methods=["GET"])

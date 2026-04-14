@@ -681,6 +681,7 @@ body {
 
 /* ════════════════════ STAT BOXES ══════════════════════════════ */
 .stat-row { display: grid; gap: var(--sp3); }
+.stat-row.cols-2 { grid-template-columns: repeat(2,1fr); }
 .stat-row.cols-3 { grid-template-columns: repeat(3,1fr); }
 .stat-box {
   background: var(--bg-stripe);
@@ -838,6 +839,7 @@ tr:hover td { background: var(--bg-stripe); }
 .mt-2      { margin-top: var(--sp2); }
 .mt-3      { margin-top: var(--sp3); }
 .mt-4      { margin-top: var(--sp4); }
+.mb-3      { margin-bottom: var(--sp3); }
 .mb-4      { margin-bottom: var(--sp4); }
 .fw-6      { font-weight: 600; }
 .fs-12     { font-size: 12px; }

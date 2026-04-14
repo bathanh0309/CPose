@@ -1,215 +1,22 @@
 "use strict";
 /* ════════════════════════════════════════════════════════════════════════
-   CPose Dashboard — app.js
-   Vanilla JS · Socket.IO · Camera snapshot polling · State machine aware
+   CPose Dashboard — app.js  (Workspace UI, 3-tab layout)
+   Vanilla JS · Socket.IO · Sequential Multicam Demo
 ════════════════════════════════════════════════════════════════════════ */
 
-// ── App state ──────────────────────────────────────────────────────────────
-const S = {
-  cameras:            [],    // parsed from resources.txt
-  storageLimitGb:     10,
-  selectedRes:        {},    // { cam_id: {width, height} }
-  recRunning:         false,
-  anaRunning:         false,
-  poseRunning:        false,
-  anaClipsTotal:      0,
-  poseClipsTotal:     0,
-  poseClipsDone:      0,    // Track clips processed for progress
-  poseLampState:      {},
-  poseClipQueue:      [],
-  poseActiveCamera:   "",
-  poseCurrentClip:    "",
-  clipCount:          0,
-  detectCount:        0,
-  onlineCount:        0,
-  recCount:           0,
-  streamIntervals:    {},    // { cam_id: intervalId }
-  activeTab:          "config",
-  statusPollInterval: null,
-  poseLampPollInterval: null,  // Real-time lamp state polling
-  poseViewerInterval: null,    // Polling for video snapshots
-};
-
-const TAB_TITLES = {
-  config:   "Setup — Configuration & Resources",
-  pose:     "Sequential Multicam Demo — Pose & ADL",
-};
-
-// ── Socket.IO ──────────────────────────────────────────────────────────────
-const POSE_CAMERA_ORDER = ["cam01", "cam02", "cam03", "cam04"];
-
-const socket = io({ transports: ["websocket", "polling"] });
-const $dotSock  = q("#dot-sock");
-const $sockLbl  = q("#sock-label");
-
-socket.on("connect", () => {
-  cls($dotSock, "disconnected"); add($dotSock, "connected");
-  $sockLbl.textContent = "Connected";
-  if (S.statusPollInterval) { clearInterval(S.statusPollInterval); S.statusPollInterval = null; }
-  fetchStorageInfo();
-});
-socket.on("disconnect", () => {
-  cls($dotSock, "connected"); add($dotSock, "disconnected");
-  $sockLbl.textContent = "Disconnected";
-  if (!S.statusPollInterval) {
-    S.statusPollInterval = setInterval(fetchCameraStatusFallback, 2000);
-  }
-});
-
-socket.on("camera_status", (d) => {
-  updateCamCard(d);
-  updateOnlineCount();
-  const msg = `${d.label || "cam"+d.cam_id}: ${d.status}${d.resolution ? " · "+d.resolution : ""}`;
-  addLog(msg, d.cam_id, "");
-});
-
-socket.on("detection_event", (d) => {
-  S.detectCount++;
-  q("#kpi-detects").textContent = S.detectCount;
-  addLog("person detected (conf " + (d.confidence_max || 0).toFixed(2) + ")", d.cam_id, "detect");
-  flashDot(q("#dot-rec"));
-});
-
-socket.on("clip_saved", (d) => {
-  S.clipCount++;
-  q("#kpi-clips").textContent = S.clipCount;
-  addLog(`clip saved: ${d.filename} · ${d.duration_s}s · ${d.size_mb} MB`, d.cam_id, "clip");
-  fetchStorageInfo();
-  fetchVideoList();
-});
-
-socket.on("rec_log", (d) => {
-  addLog(d.message, d.cam_id, "info");
-});
-
-socket.on("analysis_progress",  showAnaProgress);
-socket.on("analysis_complete",  doneAnalysis);
-socket.on("pose_progress",      showPoseProgress);
-socket.on("pose_complete",      donePose);
-socket.on("pose_lamp_state",    syncPoseLampState);
-
-socket.on("storage_warning", (d) => {
-  addLog(`storage ${d.used_gb}/${d.limit_gb} GB (${d.pct}%)`, "system", "warn");
-  applyStorageBar(d.used_gb, d.limit_gb);
-});
-
-socket.on("error", (d) => {
-  addLog(`error [${d.source}]: ${d.message}`, "system", "err");
-});
-
-// ── Tab navigation ─────────────────────────────────────────────────────────
-function initTabNavigation() {
-  const items = document.querySelectorAll(".nav-item[data-tab]");
-  console.log("🔍 initTabNavigation: Found", items.length, "nav-items");
-  items.forEach(el => {
-    console.log("  → Attaching listener to nav-item:", el.dataset.tab);
-    el.addEventListener("click", ev => { 
-      console.log("✅ Click triggered on nav-item:", el.dataset.tab);
-      ev.preventDefault(); 
-      switchTab(el.dataset.tab); 
-    });
-  });
-  
-  // Fallback: add event delegation on parent nav if direct listeners don't work
-  const navParent = document.querySelector(".sidebar-nav");
-  if (navParent) {
-    navParent.addEventListener("click", ev => {
-      const navItem = ev.target.closest(".nav-item[data-tab]");
-      if (navItem) {
-        console.log("⚡ Event delegation triggered on nav-item:", navItem.dataset.tab);
-        ev.preventDefault();
-        switchTab(navItem.dataset.tab);
-      }
-    });
-  }
+// ── Helpers ────────────────────────────────────────────────────────────────
+function q(sel)        { return document.querySelector(sel); }
+function qAll(sel)     { return document.querySelectorAll(sel); }
+function add(el, cls)  { el && el.classList.add(cls); }
+function cls(el,...cs) { el && cs.forEach(c => el.classList.remove(c)); }
+function show(el)      { el && el.classList.remove("hidden"); }
+function hide(el)      { el && el.classList.add("hidden"); }
+function esc(s)        { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+/** Safe addEventListener — skips if element missing */
+function on(id, event, fn) {
+  const el = typeof id === "string" ? q(id) : id;
+  if (el) el.addEventListener(event, fn);
 }
-
-function switchTab(id) {
-  S.activeTab = id;
-  document.querySelectorAll(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.tab === id));
-  document.querySelectorAll(".tab-panel").forEach(el => el.classList.toggle("active", el.id === "tab-"+id));
-  q("#page-title").textContent = TAB_TITLES[id] || id;
-  if (id === "analysis") { fetchVideoList(); }
-  if (id === "results")  { fetchResults(); }
-  if (id === "pose") { 
-    fetchPoseStatus(); 
-    fetchPoseResults();
-    // Auto-start Phase 3 if not already running
-    if (!S.poseRunning) {
-      setTimeout(() => autoStartPose(), 500);
-    }
-  }
-  if (id === "monitor" && S.recRunning) { startAllStreams(); }
-  if (id !== "monitor") { stopAllStreams(); }
-}
-
-// Auto-start Phase 3 with multicam folder
-async function autoStartPose() {
-  const folder = q("#pose-dir")?.value?.trim() || "data/multicam";
-  const overlay = q("#pose-save-overlay")?.checked ?? true;
-  
-  try {
-    const d = await api("/api/pose/start", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder, save_overlay: overlay }),
-    });
-    
-    // Immediately update UI with lamp state
-    S.poseRunning = true;
-    S.poseClipsTotal = d.total_clips || d.clips_total || 0;
-    S.poseCurrentClip = "";
-    
-    q("#btn-start-pose").disabled = true;
-    q("#btn-stop-pose").disabled = false;
-    add(q("#dot-pose"), "online");
-    q("#lbl-pose").textContent = "Running";
-    q("#pose-top-status").textContent = "Running";
-    add(q("#pose-top-status"), "badge-online");
-    
-    hide(q("#pose-idle-state"));
-    hide(q("#pose-done-state"));
-    
-    q("#pose-stat-clips").textContent = "0/" + S.poseClipsTotal;
-    q("#pose-stat-kps").textContent = "0";
-    q("#pose-stat-adl").textContent = "0";
-    q("#pose-stat-tracks").textContent = "0";
-    q("#pose-pct-badge").textContent = "0%";
-    
-    q("#pv-fps").textContent = "0.0";
-    q("#pv-frame").textContent = "0 / 0";
-    
-    // Sync lamp state immediately 
-    syncPoseLampState(d);
-    
-    // Start real-time polling for lamp updates
-    startPoseLampPolling();
-    startPoseViewerPolling();
-    
-    addLog(`Auto-started Phase 3 demo from ${folder}`, "system", "info");
-  } catch (e) {
-    addLog(`Auto-start failed: ${e.message}`, "system", "err");
-  }
-}
-
-// Ensure DOM is ready before setting up listeners
-try {
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initTabNavigation);
-  } else {
-    initTabNavigation();
-  }
-} catch (e) {
-  console.error("Failed to init tab navigation:", e);
-}
-
-// ── Generic helpers ─────────────────────────────────────────────────────────
-function q(sel)          { return document.querySelector(sel); }
-function qAll(sel)       { return document.querySelectorAll(sel); }
-function add(el, cls)    { el && el.classList.add(cls); }
-function cls(el, ...cs)  { el && cs.forEach(c => el.classList.remove(c)); }
-function show(el)        { el && el.classList.remove("hidden"); }
-function hide(el)        { el && el.classList.add("hidden"); }
-function esc(s)          { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
 
 async function api(url, opts = {}) {
   const r = await fetch(url, opts);
@@ -219,244 +26,95 @@ async function api(url, opts = {}) {
   return d;
 }
 
-function defaultPoseLampState() {
-  const state = {};
-  POSE_CAMERA_ORDER.forEach(camId => { state[camId] = "IDLE"; });
-  return state;
-}
-
-function syncPoseLampState(d = {}) {
-  S.poseLampState = { ...defaultPoseLampState(), ...(d.lamp_state || {}) };
-  S.poseClipQueue = Array.isArray(d.clip_queue) ? d.clip_queue : S.poseClipQueue;
-  S.poseActiveCamera = d.active_camera || "";
-  S.poseCurrentClip = d.current_clip || d.clip || S.poseCurrentClip || "";
-  if (Number.isFinite(d.clips_total)) S.poseClipsTotal = d.clips_total;
-  if (Number.isFinite(d.clips_done)) S.poseClipsDone = d.clips_done;
-  renderPoseLamps();
-  renderPoseQueue(Number.isFinite(d.clips_done) ? d.clips_done : null);
-}
-
-function renderPoseLamps() {
-  POSE_CAMERA_ORDER.forEach(camId => {
-    const lamp = q(`.lamp-card[data-cam="${camId}"]`);
-    if (!lamp) return;
-    const state = String(S.poseLampState[camId] || "IDLE").toUpperCase();
-    cls(lamp, "lamp-idle", "lamp-active", "lamp-done", "lamp-alert");
-    add(lamp, "lamp-" + state.toLowerCase());
-    const label = lamp.querySelector(".lamp-state");
-    if (label) label.textContent = state;
-  });
-
-  const badge = q("#pose-active-cam-badge");
-  if (!badge) return;
-  
-  // Determine badge text based on overall lamp state
-  const lampValues = Object.values(S.poseLampState);
-  const allDone = POSE_CAMERA_ORDER.every(cam => S.poseLampState[cam] === "DONE");
-  const anyAlert = lampValues.includes("ALERT");
-  const anyActive = lampValues.includes("ACTIVE");
-  
-  if (allDone) {
-    badge.textContent = "✓ Sequence Complete";
-  } else if (anyAlert) {
-    badge.textContent = "⚠ Alert";
-  } else if (S.poseActiveCamera) {
-    badge.textContent = `▶ Processing ${S.poseActiveCamera.toUpperCase()}`;
-    q("#pose-top-cam").textContent = S.poseActiveCamera.toUpperCase();
-  } else if (anyActive) {
-    badge.textContent = "▶ Processing…";
-  } else {
-    badge.textContent = "Idle";
-    q("#pose-top-cam").textContent = "—";
-  }
-}
-
-function renderPoseQueue(clipsDone = null) {
-  const queue = q("#pose-queue");
-  const count = q("#pose-queue-count");
-  if (!queue || !count) return;
-
-  const items = Array.isArray(S.poseClipQueue) ? S.poseClipQueue : [];
-  const doneCount = clipsDone == null ? -1 : clipsDone;
-  const progressPct = S.poseClipsTotal > 0 ? Math.round((doneCount / S.poseClipsTotal) * 100) : 0;
-  
-  count.textContent = `${items.length} clip${items.length === 1 ? "" : "s"}`;
-  if (!items.length) {
-    queue.innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Start Phase 3 to build the multicam queue</div></div>`;
-    return;
-  }
-
-  // Group by camera for better visual organization
-  const byCam = {};
-  items.forEach((item, index) => {
-    const cam = item.cam_id || "unknown";
-    if (!byCam[cam]) byCam[cam] = [];
-    byCam[cam].push({ ...item, index });
-  });
-  
-  let html = "";
-  POSE_CAMERA_ORDER.forEach(cam => {
-    if (!byCam[cam] || !byCam[cam].length) return;
-    
-    const camItems = byCam[cam];
-    const lampState = S.poseLampState[cam] || "IDLE";
-    const stateIcon = lampState === "DONE" ? "✓" : lampState === "ACTIVE" ? "▶" : lampState === "ALERT" ? "⚠" : "○";
-    
-    camItems.forEach((item, idx) => {
-      const isActive = item.clip_name === S.poseCurrentClip || item.clip_stem === S.poseCurrentClip;
-      const isDone = doneCount >= 0 && item.index < doneCount;
-      const stateClass = isActive ? "is-active" : (isDone ? "is-done" : "");
-      
-      html += `
-        <div class="pose-queue-item ${stateClass}">
-          <span class="pose-queue-cam">${esc(cam)}</span>
-          <span class="pose-queue-name">${esc(item.clip_name || item.clip_stem || "unknown")}</span>
-          <span class="pose-queue-time">${esc(item.clip_time || "")}</span>
-        </div>`;
-    });
-  });
-  
-  queue.innerHTML = html || `<div class="empty" style="padding:16px"><div class="empty-sub">No clips in queue</div></div>`;
-}
-
-// ── Config tab ─────────────────────────────────────────────────────────────
-const $drop     = q("#drop-zone");
-const $fileIn   = q("#file-input");
-const $cfgMsg   = q("#config-msg");
-
-$drop.addEventListener("click", () => $fileIn.click());
-$drop.addEventListener("dragover", ev => { ev.preventDefault(); add($drop, "over"); });
-$drop.addEventListener("dragleave", () => cls($drop, "over"));
-$drop.addEventListener("drop", ev => {
-  ev.preventDefault(); cls($drop, "over");
-  if (ev.dataTransfer.files[0]) uploadConfig(ev.dataTransfer.files[0]);
-});
-$fileIn.addEventListener("change", () => $fileIn.files[0] && uploadConfig($fileIn.files[0]));
-
-async function uploadConfig(file) {
-  const fd = new FormData(); fd.append("file", file);
-  cls($cfgMsg, "hidden", "ok", "err"); show($cfgMsg); $cfgMsg.textContent = "Uploading…";
-  try {
-    const d = await api("/api/config/upload", { method: "POST", body: fd });
-    S.cameras = d.cameras || [];
-    add($cfgMsg, "ok"); $cfgMsg.textContent = `✓ Loaded ${S.cameras.length} camera(s) from resources.txt`;
-    renderConfigCamList(S.cameras);
-  } catch (e) {
-    add($cfgMsg, "err"); $cfgMsg.textContent = "✗ " + e.message;
-  }
-}
-
-async function fetchCameras() {
-  try {
-    const d = await api("/api/config/cameras");
-    S.cameras = d.cameras || [];
-    renderConfigCamList(S.cameras);
-  } catch {}
-}
-
-function renderConfigCamList(cams) {
-  const el = q("#camera-list");
-  q("#cam-count-badge").textContent = cams.length + " camera" + (cams.length !== 1 ? "s" : "");
-  if (!cams.length) {
-    el.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><div class="empty-title">No cameras loaded</div><div class="empty-sub">Upload resources.txt to get started</div></div>`;
-    return;
-  }
-  el.innerHTML = cams.map(c => `
-    <div class="cam-row" id="cfg-cam-${c.cam_id}">
-      <span class="cam-id">${esc(c.cam_id)}</span>
-      <span class="cam-label">${esc(c.label || "cam"+c.cam_id)}</span>
-      <span class="cam-url" title="${esc(c.url)}">${maskRtsp(c.url)}</span>
-      <span class="cam-res" id="res-tag-${c.cam_id}">—</span>
-      <button class="btn btn-ghost btn-xs" onclick="probeCamera('${c.cam_id}','${c.url.replace(/'/g,"\\'")}')" type="button">Probe</button>
-    </div>
-  `).join("");
-}
-
-function maskRtsp(url) {
-  return esc(url.replace(/(rtsp:\/\/)([^:]+):([^@]+)@/, "$1***:***@"));
-}
-
-q("#btn-probe-all").addEventListener("click", async () => {
-  for (const c of S.cameras) await probeCamera(c.cam_id, c.url, false);
-});
-
-q("#btn-load-local-test").addEventListener("click", async () => {
-  try {
-    const d = await api("/api/config/load_local", { method: "POST" });
-    S.cameras = d.cameras || [];
-    renderConfigCams();
-    msg(d.message || "Local videos loaded as cameras", true);
-  } catch(e) {
-    msg(e.message, false);
-  }
-});
-
-async function probeCamera(camId, url, showModal = true) {
-  if (showModal) {
-    q("#probe-title").textContent = "Probing cam" + camId + "…";
-    q("#probe-body").innerHTML = '<div class="spin"></div>';
-    show(q("#modal-probe"));
-  }
-  try {
-    const d = await api("/api/cameras/probe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cam_id: camId, url }),
-    });
-    S.selectedRes[camId] = { width: d.width, height: d.height };
-    const tag = q(`#res-tag-${camId}`);
-    if (tag) tag.textContent = `${d.width}×${d.height}`;
-    if (!showModal) return;
-    q("#probe-title").textContent = "Camera cam" + camId;
-    q("#probe-body").innerHTML = `
-      <dl class="probe-dl">
-        <dt>ID</dt><dd>cam${esc(d.cam_id)}</dd>
-        <dt>Resolution</dt><dd>${d.width} × ${d.height}</dd>
-        <dt>FPS</dt><dd>${d.fps}</dd>
-      </dl>
-      <div class="form-label mb-4">Select recording resolution</div>
-      <div class="res-list">
-        ${(d.resolutions || []).map(r => `
-          <button class="res-btn ${r.width===d.width&&r.height===d.height?"sel":""}"
-            onclick="pickRes('${d.cam_id}',${r.width},${r.height},this)" type="button">
-            ${esc(r.label)}
-          </button>`).join("")}
-      </div>`;
-  } catch (e) {
-    if (showModal) q("#probe-body").innerHTML = `<div class="empty"><div class="empty-title">Probe failed</div><div class="empty-sub">${esc(e.message)}</div><button class="btn btn-ghost mt-3" onclick="probeCamera('${camId}','${url}')">Retry</button></div>`;
-  }
-}
-
-window.probeCamera = probeCamera;
-
-window.pickRes = function(camId, w, h, btn) {
-  S.selectedRes[camId] = { width: w, height: h };
-  const tag = q(`#res-tag-${camId}`); if (tag) tag.textContent = `${w}×${h}`;
-  btn.closest(".res-list").querySelectorAll(".res-btn").forEach(b => cls(b,"sel"));
-  add(btn, "sel");
+// ── App State ──────────────────────────────────────────────────────────────
+const S = {
+  cameras:           [],
+  storageLimitGb:    10,
+  recRunning:        false,
+  anaRunning:        false,
+  poseRunning:       false,
+  poseClipsTotal:    0,
+  poseClipsDone:     0,
+  poseLampState:     {},
+  poseClipQueue:     [],
+  poseActiveCamera:  "",
+  poseCurrentClip:   "",
+  activeTab:         "workspace",
+  poseLampPollInterval: null,
+  poseViewerInterval:   null,
+  statusPollInterval:   null,
+  streamIntervals:      {},
 };
 
-q("#modal-close").addEventListener("click", () => hide(q("#modal-probe")));
+const CAMERA_ORDER = ["cam01","cam02","cam03","cam04"];
 
-// ── Storage limit ──────────────────────────────────────────────────────────
-q("#btn-set-limit").addEventListener("click", async () => {
-  const v = parseFloat(q("#storage-limit").value);
-  S.storageLimitGb = isFinite(v) ? v : 10;
-  try {
-    await api("/api/storage/limit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit_gb: S.storageLimitGb }),
-    });
-    fetchStorageInfo();
-  } catch (e) { addLog(e.message, "system", "err"); }
+const TAB_TITLES = {
+  workspace: "Processing Workspace",
+  results:   "Completed Results",
+  settings:  "Settings & Data Prep",
+};
+
+// ── Socket.IO ──────────────────────────────────────────────────────────────
+const socket = io({ transports: ["websocket","polling"] });
+
+socket.on("connect", () => {
+  const dot = q("#dot-sock"), lbl = q("#sock-label");
+  if (dot) { cls(dot,"disconnected"); add(dot,"connected"); }
+  if (lbl) lbl.textContent = "Connected";
+  if (S.statusPollInterval) { clearInterval(S.statusPollInterval); S.statusPollInterval = null; }
+  fetchStorageInfo();
 });
 
+socket.on("disconnect", () => {
+  const dot = q("#dot-sock"), lbl = q("#sock-label");
+  if (dot) { cls(dot,"connected"); add(dot,"disconnected"); }
+  if (lbl) lbl.textContent = "Disconnected";
+  if (!S.statusPollInterval) {
+    S.statusPollInterval = setInterval(fetchStorageInfo, 5000);
+  }
+});
+
+socket.on("pose_progress",    showPoseProgress);
+socket.on("pose_complete",    donePose);
+socket.on("pose_lamp_state",  syncPoseLampState);
+socket.on("storage_warning",  (d) => {
+  addLog(`storage ${d.used_gb}/${d.limit_gb} GB (${d.pct}%)`, "system", "warn");
+  applyStorageBar(d.used_gb, d.limit_gb);
+});
+socket.on("error", (d) => {
+  addLog(`error [${d.source}]: ${d.message}`, "system", "err");
+});
+
+// ── Tab Navigation ─────────────────────────────────────────────────────────
+function switchTab(id) {
+  S.activeTab = id;
+  qAll(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.tab === id));
+  qAll(".tab-panel").forEach(el => el.classList.toggle("active", el.id === "tab-"+id));
+  const pt = q("#page-title");
+  if (pt) pt.textContent = TAB_TITLES[id] || id;
+
+  if (id === "workspace")  { fetchPoseStatus(); }
+  if (id === "results")    { fetchPoseResults(); }
+  if (id === "settings")   { /* static — no fetch needed */ }
+}
+
+function initTabNav() {
+  // Delegate on parent to avoid missing individual element issues
+  const nav = q(".sidebar-nav");
+  if (nav) {
+    nav.addEventListener("click", ev => {
+      const item = ev.target.closest(".nav-item[data-tab]");
+      if (item) { ev.preventDefault(); switchTab(item.dataset.tab); }
+    });
+  }
+}
+
+// ── Storage ────────────────────────────────────────────────────────────────
 async function fetchStorageInfo() {
   try {
     const d = await api("/api/storage/info");
-    q("#storage-text").textContent = d.used_gb + " GB";
-    q("#storage-detail").textContent = d.file_count + " clip" + (d.file_count !== 1 ? "s" : "");
+    const st = q("#storage-text"); if (st) st.textContent = d.used_gb + " GB";
+    const sd = q("#storage-detail"); if (sd) sd.textContent = d.file_count + " clip" + (d.file_count !== 1 ? "s" : "");
     applyStorageBar(d.used_gb, S.storageLimitGb);
   } catch {}
 }
@@ -464,658 +122,481 @@ async function fetchStorageInfo() {
 function applyStorageBar(used, limit) {
   const pct = limit > 0 ? Math.min(100, (used/limit)*100) : 0;
   const fill = q("#storage-fill");
+  if (!fill) return;
   fill.style.width = pct + "%";
-  cls(fill, "hi", "crit");
-  if (pct > 90) add(fill, "crit");
-  else if (pct > 70) add(fill, "hi");
+  cls(fill,"hi","crit");
+  if (pct > 90) add(fill,"crit");
+  else if (pct > 70) add(fill,"hi");
 }
 
-// ── Phase 1: Recording ─────────────────────────────────────────────────────
-q("#btn-start-rec").addEventListener("click", async () => {
-  if (!S.cameras.length) { addLog("Upload resources.txt first", "system", "warn"); return; }
-  const camsPayload = S.cameras.map(c => ({
-    cam_id: c.cam_id, url: c.url, label: c.label,
-    ...(S.selectedRes[c.cam_id] || {}),
-  }));
+on("#btn-set-limit", "click", async () => {
+  const v = parseFloat(q("#storage-limit")?.value);
+  S.storageLimitGb = isFinite(v) ? v : 10;
   try {
-    await api("/api/recording/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cameras: camsPayload, storage_limit_gb: S.storageLimitGb }),
+    await api("/api/storage/limit", {
+      method: "POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({limit_gb: S.storageLimitGb}),
     });
-    S.recRunning = true; S.clipCount = 0; S.detectCount = 0;
-    q("#kpi-clips").textContent = "0";
-    q("#kpi-detects").textContent = "0";
-    q("#btn-start-rec").disabled = true;
-    q("#btn-stop-rec").disabled = false;
-    add(q("#dot-rec"), "online"); cls(q("#dot-rec"), "offline");
-    q("#lbl-rec").textContent = "Running · person-triggered";
-    q("#kpi-recording").textContent = "Active"; add(q("#kpi-recording"), "green");
-    show(q("#nav-rec-badge"));
-    renderCamGrid(S.cameras);
-    addLog(`Recording started on ${S.cameras.length} camera(s)`, "system", "info");
-    setGlobalStatus("recording");
+    fetchStorageInfo();
+    addLog(`Storage limit set to ${S.storageLimitGb} GB`, "system", "info");
   } catch (e) { addLog(e.message, "system", "err"); }
 });
 
-q("#btn-stop-rec").addEventListener("click", async () => {
-  try { await api("/api/recording/stop", { method: "POST" }); } catch (e) { addLog(e.message, "system", "err"); }
+// ── Settings: Camera config ────────────────────────────────────────────────
+(function initSettings() {
+  const $drop   = q("#drop-zone");
+  const $fileIn = q("#file-input");
+  const $cfgMsg = q("#config-msg");
+
+  if ($drop && $fileIn) {
+    $drop.addEventListener("click", () => $fileIn.click());
+    $drop.addEventListener("dragover", ev => { ev.preventDefault(); add($drop,"over"); });
+    $drop.addEventListener("dragleave", () => cls($drop,"over"));
+    $drop.addEventListener("drop", ev => {
+      ev.preventDefault(); cls($drop,"over");
+      if (ev.dataTransfer.files[0]) uploadConfig(ev.dataTransfer.files[0]);
+    });
+    $fileIn.addEventListener("change", () => $fileIn.files[0] && uploadConfig($fileIn.files[0]));
+  }
+
+  async function uploadConfig(file) {
+    const fd = new FormData(); fd.append("file", file);
+    if ($cfgMsg) { cls($cfgMsg,"hidden","ok","err"); show($cfgMsg); $cfgMsg.textContent = "Uploading…"; }
+    try {
+      const d = await api("/api/config/upload", { method:"POST", body:fd });
+      S.cameras = d.cameras || [];
+      if ($cfgMsg) { add($cfgMsg,"ok"); $cfgMsg.textContent = `✓ Loaded ${S.cameras.length} camera(s)`; }
+      addLog(`Loaded ${S.cameras.length} cameras from resources.txt`, "system", "info");
+    } catch (e) {
+      if ($cfgMsg) { add($cfgMsg,"err"); $cfgMsg.textContent = "✗ " + e.message; }
+    }
+  }
+})();
+
+on("#btn-load-local-test", "click", async () => {
+  try {
+    const d = await api("/api/config/load_local", { method:"POST" });
+    S.cameras = d.cameras || [];
+    addLog(d.message || `Loaded ${S.cameras.length} local videos`, "system", "info");
+    const cfgMsg = q("#config-msg");
+    if (cfgMsg) { cls(cfgMsg,"hidden","err"); add(cfgMsg,"ok"); cfgMsg.textContent = `✓ ${d.message}`; show(cfgMsg); }
+  } catch(e) {
+    addLog(e.message, "system", "err");
+  }
+});
+
+// Phase 1 recording stubs (buttons exist in Settings)
+on("#btn-start-rec", "click", async () => {
+  if (!S.cameras.length) { addLog("Upload resources.txt first", "system", "warn"); return; }
+  const camsPayload = S.cameras.map(c => ({cam_id:c.cam_id, url:c.url, label:c.label}));
+  try {
+    await api("/api/recording/start", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({cameras:camsPayload, storage_limit_gb:S.storageLimitGb}),
+    });
+    S.recRunning = true;
+    const lbl = q("#lbl-rec"); if (lbl) lbl.textContent = "Running";
+    addLog(`Recording started on ${S.cameras.length} cam(s)`, "system", "info");
+  } catch (e) { addLog(e.message, "system", "err"); }
+});
+
+on("#btn-stop-rec", "click", async () => {
+  try { await api("/api/recording/stop", {method:"POST"}); } catch {}
   S.recRunning = false;
-  q("#btn-start-rec").disabled = false;
-  q("#btn-stop-rec").disabled = true;
-  cls(q("#dot-rec"), "online", "recording"); add(q("#dot-rec"), "offline");
-  q("#lbl-rec").textContent = "Idle";
-  q("#kpi-recording").textContent = "Off"; cls(q("#kpi-recording"), "green", "red");
-  hide(q("#nav-rec-badge"));
-  stopAllStreams();
-  setGlobalStatus("idle");
+  const lbl = q("#lbl-rec"); if (lbl) lbl.textContent = "Stopped";
   addLog("Recording stopped", "system", "info");
 });
 
-function setGlobalStatus(s) {
-  const el = q("#global-status");
-  el.className = "badge";
-  const map = { idle:"badge-idle", recording:"badge-recording", armed:"badge-armed" };
-  add(el, map[s] || "badge-idle");
-  el.textContent = { idle:"Idle", recording:"Recording", armed:"Armed" }[s] || s;
-}
-
-// ── Camera grid + live stream ─────────────────────────────────────────────
-function renderCamGrid(cameras) {
-  const grid = q("#camera-grid");
-  if (!cameras.length) {
-    grid.innerHTML = `<div class="cam-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg><p class="empty-title">No cameras configured</p><p>Add cameras in the Configuration tab</p></div>`;
-    return;
-  }
-  grid.innerHTML = cameras.map(c => camCardHTML(c)).join("");
-  if (S.activeTab === "monitor" && S.recRunning) { startAllStreams(); }
-}
-
-function camCardHTML(c) {
-  return `
-  <div class="cam-card" id="cam-card-${c.cam_id}">
-    <div class="cam-head">
-      <span class="cam-name">${esc(c.label || "cam"+c.cam_id)}</span>
-      <div class="cam-badges">
-        <span class="badge badge-idle" id="cam-conn-${c.cam_id}">Connecting</span>
-        <span class="badge badge-idle hidden" id="cam-person-${c.cam_id}">Person</span>
-        <span class="badge badge-idle hidden" id="cam-rec-${c.cam_id}">Recording</span>
-      </div>
-      <div class="cam-actions">
-        <button class="btn btn-icon" title="Refresh stream" onclick="refreshStream('${c.cam_id}')" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
-        </button>
-      </div>
-    </div>
-    <div class="cam-stream-wrap">
-      <img class="cam-stream-img hidden" id="stream-img-${c.cam_id}" alt="Live stream cam${c.cam_id}">
-      <div class="cam-stream-placeholder" id="stream-placeholder-${c.cam_id}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
-        <span>Connecting…</span>
-      </div>
-      <div class="cam-stream-overlay">
-        <span class="badge badge-idle" id="cam-state-badge-${c.cam_id}">idle</span>
-      </div>
-    </div>
-    <div class="cam-meta">
-      <div class="cam-meta-item">
-        <span class="cam-meta-label">Resolution</span>
-        <span class="cam-meta-value" id="cam-res-${c.cam_id}">—</span>
-      </div>
-      <div class="cam-meta-item">
-        <span class="cam-meta-label">FPS</span>
-        <span class="cam-meta-value" id="cam-fps-${c.cam_id}">—</span>
-      </div>
-      <div class="cam-meta-item">
-        <span class="cam-meta-label">Clip Duration</span>
-        <span class="cam-meta-value" id="cam-dur-${c.cam_id}">—</span>
-      </div>
-    </div>
-  </div>`;
-}
-
-window.refreshStream = function(camId) { stopStream(camId); startStream(camId); };
-
-function startAllStreams() {
-  if (!S.cameras.length) return;
-  S.cameras.forEach(c => startStream(c.cam_id));
-}
-
-function startStream(camId) {
-  stopStream(camId);
-  let failCount = 0;
-  const img = q(`#stream-img-${camId}`);
-  const ph  = q(`#stream-placeholder-${camId}`);
-  if (!img) return;
-
-  function loadFrame() {
-    const src = `/api/cameras/${camId}/snapshot?t=${Date.now()}`;
-    const tmp = new Image();
-    tmp.onload = () => {
-      img.src = src;
-      show(img); hide(ph);
-      failCount = 0;
-    };
-    tmp.onerror = () => {
-      failCount++;
-      if (failCount >= 5) {
-        hide(img); show(ph);
-        if (ph) ph.querySelector("span").textContent = "No signal — retrying…";
-      }
-    };
-    tmp.src = src;
-  }
-
-  loadFrame();
-  S.streamIntervals[camId] = setInterval(loadFrame, 150); // ~6-7 fps preview
-}
-
-function stopStream(camId) {
-  if (S.streamIntervals[camId]) {
-    clearInterval(S.streamIntervals[camId]);
-    delete S.streamIntervals[camId];
-  }
-}
-
-function stopAllStreams() {
-  Object.keys(S.streamIntervals).forEach(stopStream);
-}
-
-async function fetchCameraStatusFallback() {
-  try {
-    const d = await api("/api/cameras/status");
-    (d.cameras || []).forEach(updateCamCard);
-    updateOnlineCount();
-  } catch {}
-}
-
-function updateCamCard(d) {
-  const camId = d.cam_id;
-
-  // Connection badge
-  const connBadge = q(`#cam-conn-${camId}`);
-  if (connBadge) {
-    connBadge.className = "badge";
-    const statusMap = {
-      online:    ["badge-online",    "Online"],
-      offline:   ["badge-offline",   "Offline"],
-      recording: ["badge-online",    "Online"],
-      error:     ["badge-offline",   "Error"],
-      connecting:["badge-idle",      "Connecting"],
-    };
-    const [cls_, lbl] = statusMap[d.status] || ["badge-idle", d.status];
-    add(connBadge, cls_);
-    connBadge.textContent = lbl;
-  }
-
-  // Person badge
-  const personBadge = q(`#cam-person-${camId}`);
-  if (personBadge) {
-    if (d.person_detected) {
-      show(personBadge);
-      personBadge.className = "badge badge-person";
-      personBadge.textContent = "Person";
-    } else {
-      hide(personBadge);
-    }
-  }
-
-  // Recording badge
-  const recBadge = q(`#cam-rec-${camId}`);
-  if (recBadge) {
-    if (d.recording) {
-      show(recBadge);
-      recBadge.className = "badge badge-recording";
-      recBadge.textContent = "● Rec";
-    } else if (d.rec_state === "armed") {
-      show(recBadge);
-      recBadge.className = "badge badge-armed";
-      recBadge.textContent = "Armed";
-    } else {
-      hide(recBadge);
-    }
-  }
-
-  // State badge (overlay)
-  const stateBadge = q(`#cam-state-badge-${camId}`);
-  if (stateBadge) {
-    const stateMap = {
-      idle:      ["badge-idle",      "IDLE"],
-      armed:     ["badge-armed",     "ARMED"],
-      recording: ["badge-recording", "REC"],
-      post_roll: ["badge-recording", "POST-ROLL"],
-    };
-    const [sc, sl] = stateMap[d.rec_state] || ["badge-idle", d.rec_state || "IDLE"];
-    stateBadge.className = "badge " + sc;
-    stateBadge.textContent = sl;
-  }
-
-  // Meta values
-  const resEl = q(`#cam-res-${camId}`);
-  const fpsEl = q(`#cam-fps-${camId}`);
-  const durEl = q(`#cam-dur-${camId}`);
-  if (resEl) resEl.textContent = d.resolution || "—";
-  if (fpsEl) fpsEl.textContent = d.fps ? d.fps + " fps" : "—";
-  if (durEl) durEl.textContent = d.recording && d.clip_duration > 0 ? d.clip_duration + "s" : "—";
-
-  // Card highlight
-  const card = q(`#cam-card-${camId}`);
-  if (card) card.classList.toggle("is-recording", !!d.recording);
-}
-
-function updateOnlineCount() {
-  // Count online from all tiles
-  const online = document.querySelectorAll('.badge-online').length;
-  q("#kpi-online").textContent = online;
-  q("#kpi-online-sub").textContent = "of " + S.cameras.length + " configured";
-}
-
-function flashDot(el) {
-  if (!el) return;
-  el.style.opacity = ".3";
-  setTimeout(() => el.style.opacity = "1", 200);
-}
-
-// ── Event log ──────────────────────────────────────────────────────────────
-const btnClearLog = q("#btn-clear-log");
-if (btnClearLog) {
-  btnClearLog.addEventListener("click", () => {
-    q("#log-wrap").innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Events will appear here during recording</div></div>`;
-  });
-}
-
-function addLog(msg, camId, type = "") {
-  const log = q("#log-wrap");
-  if (!log) return;
-  const empty = log.querySelector(".empty"); if (empty) empty.remove();
-  const e = document.createElement("div");
-  e.className = "log-entry " + type;
-  const t = new Date().toLocaleTimeString("en-GB", { hour12: false });
-  const camLabel = camId && camId !== "system" ? `<span class="log-cam">cam${camId}</span>` : "";
-  e.innerHTML = `<span class="log-t">${t}</span>${camLabel}<span class="log-msg">${esc(msg)}</span>`;
-  log.prepend(e);
-  if (log.children.length > 250) log.removeChild(log.lastElementChild);
-}
-
-// ── Phase 2: Analysis ──────────────────────────────────────────────────────
-q("#btn-start-analysis").addEventListener("click", async () => {
-  const folder = q("#video-dir").value.trim() || "data/raw_videos";
+// Phase 2 analysis stubs
+on("#btn-start-analysis", "click", async () => {
   try {
     const d = await api("/api/analysis/start", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video_dir: folder }),
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({video_dir:"data/raw_videos"}),
     });
-    S.anaRunning = true; S.anaClipsTotal = d.clips || 0;
-    q("#btn-start-analysis").disabled = true;
-    q("#btn-stop-analysis").disabled = false;
-    add(q("#dot-ana"), "online"); q("#lbl-ana").textContent = "Running";
-    show(q("#ana-running-state")); hide(q("#ana-idle-state")); hide(q("#ana-done-state"));
-    q("#stat-clips").textContent = "0/" + S.anaClipsTotal;
-    q("#stat-frames").textContent = "0";
-    q("#stat-labels").textContent = "0";
+    S.anaRunning = true;
+    const lbl = q("#lbl-ana"); if (lbl) lbl.textContent = "Running";
+    addLog(`Analysis started: ${d.clips || 0} clips`, "system", "info");
   } catch (e) { addLog(e.message, "system", "err"); }
 });
 
-q("#btn-stop-analysis").addEventListener("click", async () => {
-  try { await api("/api/analysis/stop", { method: "POST" }); } catch {}
-  resetAnaUi();
-});
-
-function showAnaProgress(d) {
-  show(q("#ana-running-state")); hide(q("#ana-idle-state"));
-  q("#ana-clip-name").textContent = d.clip || "—";
-  q("#ana-pct").textContent = (d.pct || 0) + "%";
-  q("#ana-bar").style.width = (d.pct || 0) + "%";
-  if (d.frames_saved !== undefined) q("#stat-frames").textContent = d.frames_saved;
-  if (d.labels_written !== undefined) q("#stat-labels").textContent = d.labels_written;
-}
-
-function doneAnalysis(d) {
+on("#btn-stop-analysis", "click", async () => {
+  try { await api("/api/analysis/stop", {method:"POST"}); } catch {}
   S.anaRunning = false;
-  hide(q("#ana-running-state")); show(q("#ana-done-state"));
-  q("#stat-clips").textContent = `${d.clips_done||0}/${S.anaClipsTotal}`;
-  q("#stat-frames").textContent = d.frames_saved || 0;
-  q("#stat-labels").textContent = d.labels_written || 0;
-  resetAnaUi();
-  fetchResults();
+  const lbl = q("#lbl-ana"); if (lbl) lbl.textContent = "Stopped";
+});
+
+// ── Lamp state ─────────────────────────────────────────────────────────────
+function defaultLampState() {
+  const s = {}; CAMERA_ORDER.forEach(c => s[c] = "IDLE"); return s;
 }
 
-function resetAnaUi() {
-  q("#btn-start-analysis").disabled = false;
-  q("#btn-stop-analysis").disabled = true;
-  cls(q("#dot-ana"), "online"); q("#lbl-ana").textContent = "Idle";
+function syncPoseLampState(d = {}) {
+  S.poseLampState   = { ...defaultLampState(), ...(d.lamp_state || {}) };
+  S.poseClipQueue   = Array.isArray(d.clip_queue) ? d.clip_queue : S.poseClipQueue;
+  S.poseActiveCamera = d.active_camera || "";
+  S.poseCurrentClip  = d.current_clip || d.clip || S.poseCurrentClip || "";
+  if (Number.isFinite(d.clips_total)) S.poseClipsTotal = d.clips_total;
+  if (Number.isFinite(d.clips_done))  S.poseClipsDone  = d.clips_done;
+  renderLamps();
+  renderQueue();
 }
 
-q("#btn-refresh-videos").addEventListener("click", fetchVideoList);
+function renderLamps() {
+  CAMERA_ORDER.forEach(camId => {
+    const lamp = q(`.lamp-card[data-cam="${camId}"]`);
+    if (!lamp) return;
+    const state = String(S.poseLampState[camId] || "IDLE").toUpperCase();
+    cls(lamp,"lamp-idle","lamp-active","lamp-done","lamp-alert");
+    add(lamp,"lamp-"+state.toLowerCase());
+    const lbl = lamp.querySelector(".lamp-state");
+    if (lbl) lbl.textContent = state;
+  });
 
-async function fetchVideoList() {
-  const area = q("#video-list-area");
-  try {
-    const d = await api("/api/videos");
-    const videos = d.videos || [];
-    q("#clip-count-badge").textContent = videos.length + " clips";
-    if (!videos.length) {
-      area.innerHTML = `<div class="empty"><div class="empty-sub">No MP4 clips found in the selected folder</div></div>`;
-      return;
-    }
-    area.innerHTML = `
-      <table>
-        <thead><tr><th>Filename</th><th>Size</th><th>Modified</th><th></th></tr></thead>
-        <tbody>${videos.map(v => `
-          <tr>
-            <td class="td-mono">${esc(v.filename)}</td>
-            <td>${v.size_mb} MB</td>
-            <td class="txt-muted">${new Date(v.mtime*1000).toLocaleString()}</td>
-            <td class="td-right">
-              <button class="btn btn-danger btn-xs" onclick="deleteVideo('${v.filename.replace(/'/g,"\\'")}')">Delete</button>
-            </td>
-          </tr>`).join("")}
-        </tbody>
-      </table>`;
-  } catch (e) {
-    area.innerHTML = errorState(e.message, "fetchVideoList()");
+  // Update active cam badge in header
+  const cam = q("#pose-top-cam");
+  if (!cam) return;
+  if (S.poseActiveCamera) {
+    cam.textContent = S.poseActiveCamera.toUpperCase();
+  } else {
+    cam.textContent = "—";
   }
 }
 
-window.deleteVideo = async function(fn) {
-  if (!confirm("Delete " + fn + "?")) return;
-  try {
-    await api("/api/videos/" + encodeURIComponent(fn), { method: "DELETE" });
-    fetchVideoList(); fetchStorageInfo();
-  } catch (e) { addLog(e.message, "system", "err"); }
-};
+function renderQueue() {
+  const queue = q("#pose-queue");
+  const count = q("#pose-queue-count");
+  if (!queue) return;
 
-// ── Phase 2: Results ───────────────────────────────────────────────────────
-q("#btn-refresh-results").addEventListener("click", fetchResults);
+  const items = Array.isArray(S.poseClipQueue) ? S.poseClipQueue : [];
+  if (count) count.textContent = `${items.length} clip${items.length === 1 ? "" : "s"}`;
 
-async function fetchResults() {
-  const grid = q("#results-grid");
-  try {
-    const d = await api("/api/analysis/results");
-    q("#result-count-label").textContent = (d.results||[]).length + " results";
-    if (!d.results.length) {
-      grid.innerHTML = `<div class="empty col-12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">No outputs yet</div><div class="empty-sub">Run Phase 2 Analysis to generate results</div></div>`;
-      return;
-    }
-    grid.innerHTML = d.results.map(r => `
-      <div class="result-card">
-        <div class="result-card-head"><h3>${esc(r.clip_stem)}</h3></div>
-        <div class="result-card-body">
-          <div class="result-stat"><span>PNG frames</span><strong>${r.frames}</strong></div>
-          <div class="result-stat"><span>Bounding boxes</span><strong>${r.label_count}</strong></div>
-          <div class="result-stat"><span>Label file</span><strong>${esc(r.label_file||"—")}</strong></div>
-        </div>
-      </div>`).join("");
-  } catch (e) {
-    grid.innerHTML = errorState(e.message, "#btn-refresh-results");
+  if (!items.length) {
+    queue.innerHTML = `<div class="empty" style="padding:16px"><div class="empty-sub">Start Processing to build the queue</div></div>`;
+    return;
   }
+
+  let html = "";
+  items.forEach((item, idx) => {
+    const isActive = item.clip_name === S.poseCurrentClip || item.clip_stem === S.poseCurrentClip;
+    const isDone   = idx < S.poseClipsDone;
+    const cls2     = isActive ? "is-active" : isDone ? "is-done" : "";
+    html += `<div class="pose-queue-item ${cls2}">
+      <span class="pose-queue-cam">${esc(item.cam_id||"?")}</span>
+      <span class="pose-queue-name">${esc(item.clip_name||item.clip_stem||"—")}</span>
+      <span class="pose-queue-time">${esc(item.clip_time||"")}</span>
+    </div>`;
+  });
+  queue.innerHTML = html;
 }
 
-// ── Phase 3: Pose & ADL ────────────────────────────────────────────────────
-q("#btn-start-pose").addEventListener("click", async () => {
-  const folder = q("#pose-dir").value.trim() || "data/multicam";
-  const overlay = q("#pose-save-overlay").checked;
+// ── Workspace: Pose & ADL (Phase 3) ───────────────────────────────────────
+on("#btn-start-pose", "click", async () => {
+  const folder  = q("#pose-dir")?.value?.trim() || "data/multicam";
+  const overlay = true; // always save overlay
   try {
     const d = await api("/api/pose/start", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder, save_overlay: overlay }),
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({folder, save_overlay:overlay}),
     });
-    S.poseRunning = true; S.poseClipsTotal = d.total_clips || 0;
+    S.poseRunning = true;
+    S.poseClipsTotal = d.total_clips || 0;
+    S.poseClipsDone  = 0;
     S.poseCurrentClip = "";
-    q("#btn-start-pose").disabled = true;
-    q("#btn-stop-pose").disabled = false;
-    add(q("#dot-pose"), "online"); q("#lbl-pose").textContent = "Running";
-    q("#pose-top-status").textContent = "Running";
-    q("#pose-top-status").className = "badge badge-online";
-    q("#pose-top-clip").textContent = "—";
-    hide(q("#pose-idle-state")); hide(q("#pose-done-state"));
-    q("#pose-stat-clips").textContent = "0/" + S.poseClipsTotal;
-    q("#pose-stat-kps").textContent = "0";
-    q("#pose-stat-adl").textContent = "0";
-    q("#pose-stat-tracks").textContent = "0";
+
+    const btn  = q("#btn-start-pose"); if (btn)  btn.disabled  = true;
+    const stop = q("#btn-stop-pose");  if (stop) stop.disabled = false;
+    add(q("#dot-pose"), "online");
+    const lbl = q("#lbl-pose"); if (lbl) lbl.textContent = "Running";
+    const topStatus = q("#pose-top-status");
+    if (topStatus) { topStatus.textContent = "Running"; topStatus.className = "badge badge-online"; }
+    const clips = q("#pose-stat-clips"); if (clips) clips.textContent = "0/" + S.poseClipsTotal;
+    const kps   = q("#pose-stat-kps");   if (kps)   kps.textContent = "0";
+    const adl   = q("#pose-stat-adl");   if (adl)   adl.textContent = "0";
+    const trk   = q("#pose-stat-tracks");if (trk)   trk.textContent = "0";
+    const pct   = q("#pose-pct-badge");  if (pct)   pct.textContent = "0%";
+    const fps   = q("#pv-fps");         if (fps)   fps.textContent = "0.0";
+    const frm   = q("#pv-frame");       if (frm)   frm.textContent = "0 / 0";
+    const bar   = q("#pose-bar");       if (bar)   bar.style.width = "0%";
+
     syncPoseLampState(d);
-    startPoseLampPolling();
-    startPoseViewerPolling();
-  } catch (e) { addLog(e.message, "system", "err"); }
+    startLampPolling();
+    startViewerPolling();
+    addLog(`Started Phase 3 from ${folder} — ${d.total_clips} clips`, "system", "info");
+  } catch (e) {
+    addLog(`Start failed: ${e.message}`, "system", "err");
+  }
 });
 
-q("#btn-stop-pose").addEventListener("click", async () => {
-  try { await api("/api/pose/stop", { method: "POST" }); } catch {}
-  
-  // Stop polling
-  if (S.poseLampPollInterval) {
-    clearInterval(S.poseLampPollInterval);
-    S.poseLampPollInterval = null;
-  }
-  if (S.poseViewerInterval) {
-    clearInterval(S.poseViewerInterval);
-    S.poseViewerInterval = null;
-  }
-  
-  q("#btn-stop-pose").disabled = true;
-  q("#lbl-pose").textContent = "Stopping";
+on("#btn-stop-pose", "click", async () => {
+  try { await api("/api/pose/stop", {method:"POST"}); } catch {}
+  stopPolling();
+  const stop = q("#btn-stop-pose"); if (stop) stop.disabled = true;
+  const lbl = q("#lbl-pose"); if (lbl) lbl.textContent = "Stopping";
 });
 
+on("#btn-refresh-pose", "click", async () => {
+  await fetchPoseStatus();
+  await fetchPoseResults();
+});
+
+on("#btn-refresh-pose-results", "click", fetchPoseResults);
+
+// ── Pose progress callbacks ────────────────────────────────────────────────
 function showPoseProgress(d) {
-  hide(q("#pose-idle-state"));
-  q("#pose-top-clip").textContent = d.current_clip || d.clip || "—";
-  q("#pose-pct-badge").textContent = (d.pct || d.progress_pct || 0) + "%";
-  q("#pose-bar").style.width = (d.pct || d.progress_pct || 0) + "%";
-  if (Number.isFinite(d.clips_total)) S.poseClipsTotal = d.clips_total;
-  q("#pose-stat-clips").textContent = `${d.clips_done || 0}/${S.poseClipsTotal || 0}`;
-  q("#pose-stat-kps").textContent = d.keypoints_written || 0;
-  q("#pose-stat-adl").textContent = d.adl_events || 0;
-  q("#pose-stat-tracks").textContent = d.active_tracks || 0;
-  
-  if (d.fps !== undefined) q("#pv-fps").textContent = d.fps;
+  const pct = d.pct || d.progress_pct || 0;
+  const bar = q("#pose-bar");       if (bar)  bar.style.width = pct + "%";
+  const pb  = q("#pose-pct-badge"); if (pb)   pb.textContent  = pct + "%";
+  const clp = q("#pose-stat-clips"); if (clp) clp.textContent = `${d.clips_done||0}/${S.poseClipsTotal||0}`;
+  const kps = q("#pose-stat-kps");   if (kps) kps.textContent = d.keypoints_written || 0;
+  const adl = q("#pose-stat-adl");   if (adl) adl.textContent = d.adl_events || 0;
+  const trk = q("#pose-stat-tracks");if (trk) trk.textContent = d.active_tracks || 0;
+  const clip = q("#pose-top-clip");  if (clip) clip.textContent = d.current_clip || d.clip || "—";
+  const fps  = q("#pv-fps");        if (fps)  fps.textContent  = d.fps ?? "0.0";
   if (d.frame_id !== undefined && d.total_frames !== undefined) {
-    q("#pv-frame").textContent = `${d.frame_id} / ${d.total_frames}`;
+    const frm = q("#pv-frame"); if (frm) frm.textContent = `${d.frame_id} / ${d.total_frames}`;
   }
-  
   syncPoseLampState(d);
 }
 
 function donePose(d) {
-  S.poseRunning = false;
+  S.poseRunning    = false;
+  S.poseClipsDone  = d.clips_done || 0;
   syncPoseLampState(d);
-  
-  // Stop polling when complete
-  if (S.poseLampPollInterval) {
-    clearInterval(S.poseLampPollInterval);
-    S.poseLampPollInterval = null;
-  }
-  if (S.poseViewerInterval) {
-    clearInterval(S.poseViewerInterval);
-    S.poseViewerInterval = null;
-  }
-  
-  show(q("#pose-done-state"));
-  q("#pose-stat-clips").textContent = `${d.clips_done||0}/${S.poseClipsTotal}`;
-  q("#pose-stat-kps").textContent = d.keypoints_written || 0;
-  q("#pose-stat-adl").textContent = d.adl_events || 0;
-  q("#pose-stat-tracks").textContent = "0";
-  resetPoseUi("Complete");
+  stopPolling();
+
+  const btn  = q("#btn-start-pose"); if (btn)  btn.disabled  = false;
+  const stop = q("#btn-stop-pose");  if (stop) stop.disabled = true;
+  add(q("#dot-pose"), "online");
+  const lbl = q("#lbl-pose"); if (lbl) lbl.textContent = "Complete";
+  const topStatus = q("#pose-top-status");
+  if (topStatus) { topStatus.textContent = "Complete"; topStatus.className = "badge badge-online"; }
+  const clp = q("#pose-stat-clips"); if (clp) clp.textContent = `${d.clips_done||0}/${S.poseClipsTotal}`;
+  const kps = q("#pose-stat-kps");   if (kps) kps.textContent = d.keypoints_written || 0;
+  const adl = q("#pose-stat-adl");   if (adl) adl.textContent = d.adl_events || 0;
+  const bar = q("#pose-bar");        if (bar) bar.style.width = "100%";
+  const pb  = q("#pose-pct-badge"); if (pb)  pb.textContent  = "100%";
+  addLog(`Phase 3 complete: ${d.clips_done} clips, ${d.keypoints_written} KP rows, elapsed ${d.elapsed_s}s`, "system", "info");
   fetchPoseResults();
 }
 
-function startPoseLampPolling() {
-  // Clear any existing polling
-  if (S.poseLampPollInterval) {
-    clearInterval(S.poseLampPollInterval);
-  }
-  
-  // Poll every 500ms for real-time lamp updates
+// ── Lamp & Viewer Polling ─────────────────────────────────────────────────
+function startLampPolling() {
+  if (S.poseLampPollInterval) clearInterval(S.poseLampPollInterval);
   S.poseLampPollInterval = setInterval(async () => {
     try {
       const d = await api("/api/pose/status");
       if (!d.running) {
-        // Phase 3 completed
-        clearInterval(S.poseLampPollInterval);
-        S.poseLampPollInterval = null;
-        donePose(d);
+        clearInterval(S.poseLampPollInterval); S.poseLampPollInterval = null;
+        if (S.poseRunning) donePose(d);
         return;
       }
-      
-      // Update progress and lamps
       showPoseProgress({
         current_clip: d.current_clip,
-        clips_done: d.clips_done,
-        clips_total: d.clips_total,
+        clips_done:   d.clips_done,
+        clips_total:  d.clips_total,
         progress_pct: d.progress_pct,
-        pct: d.progress_pct,
-        lamp_state: d.lamp_state,
-        active_camera: d.active_camera,
+        pct:          d.progress_pct,
+        lamp_state:   d.lamp_state,
+        active_camera:d.active_camera,
         keypoints_written: d.keypoints_written,
-        adl_events: d.adl_events,
+        adl_events:   d.adl_events,
       });
-    } catch (e) {
-      console.error("Polling error:", e);
-    }
-  }, 500);
+    } catch {}
+  }, 1000);
 }
 
-function startPoseViewerPolling() {
+function startViewerPolling() {
   if (S.poseViewerInterval) clearInterval(S.poseViewerInterval);
-  const imgOrig = q("#pv-orig");
-  const imgProc = q("#pv-proc");
-  const phOrig = q("#pv-orig-ph");
-  const phProc = q("#pv-proc-ph");
-  
+  const imgO = q("#pv-orig"), phO = q("#pv-orig-ph");
+  const imgP = q("#pv-proc"), phP = q("#pv-proc-ph");
+
+  function loadSnapshot(imgEl, phEl, url) {
+    if (!imgEl) return;
+    const tmp = new Image();
+    tmp.onload = () => {
+      imgEl.src = url;
+      imgEl.style.opacity = 1;
+      if (phEl) phEl.style.display = "none";
+    };
+    tmp.onerror = () => {
+      imgEl.style.opacity = 0;
+      if (phEl) phEl.style.display = "";
+    };
+    tmp.src = url;
+  }
+
   S.poseViewerInterval = setInterval(() => {
     if (!S.poseRunning) return;
-    
-    // Load original frame
-    const srcO = `/api/pose/snapshot/original?t=${Date.now()}`;
-    const tagO = new Image();
-    tagO.onload = () => { imgOrig.src = srcO; imgOrig.style.opacity = 1; hide(phOrig); };
-    tagO.onerror = () => { imgOrig.style.opacity = 0; show(phOrig); };
-    tagO.src = srcO;
-
-    // Load processed frame
-    const srcP = `/api/pose/snapshot/processed?t=${Date.now()}`;
-    const tagP = new Image();
-    tagP.onload = () => { imgProc.src = srcP; imgProc.style.opacity = 1; hide(phProc); };
-    tagP.onerror = () => { imgProc.style.opacity = 0; show(phProc); };
-    tagP.src = srcP;
-  }, 150); // ~6 fps roughly
+    const t = Date.now();
+    loadSnapshot(imgO, phO, `/api/pose/snapshot/original?t=${t}`);
+    loadSnapshot(imgP, phP, `/api/pose/snapshot/processed?t=${t}`);
+  }, 200);
 }
 
-function resetPoseUi(label = "Idle") {
-  q("#btn-start-pose").disabled = false;
-  q("#btn-stop-pose").disabled = true;
-  cls(q("#dot-pose"), "online"); q("#lbl-pose").textContent = label;
-  q("#pose-top-status").textContent = label;
-  q("#pose-top-status").className = "badge badge-idle";
+function stopPolling() {
+  if (S.poseLampPollInterval) { clearInterval(S.poseLampPollInterval); S.poseLampPollInterval = null; }
+  if (S.poseViewerInterval)   { clearInterval(S.poseViewerInterval);   S.poseViewerInterval   = null; }
 }
 
-q("#btn-refresh-pose").addEventListener("click", async () => {
-  await fetchPoseStatus();
-  await fetchPoseResults();
-});
-q("#btn-refresh-pose-results").addEventListener("click", fetchPoseResults);
-
+// ── Pose status fetch ──────────────────────────────────────────────────────
 async function fetchPoseStatus() {
   try {
     const d = await api("/api/pose/status");
-    S.poseRunning = !!d.running;
-    S.poseClipsTotal = d.clips_total || 0;
+    S.poseRunning    = !!d.running;
+    S.poseClipsTotal  = d.clips_total || 0;
+    S.poseClipsDone   = d.clips_done  || 0;
     syncPoseLampState(d);
-    q("#pose-stat-clips").textContent = `${d.clips_done || 0}/${S.poseClipsTotal || 0}`;
-    q("#pose-stat-kps").textContent = d.keypoints_written || 0;
-    q("#pose-stat-adl").textContent = d.adl_events || 0;
-    q("#pose-top-clip").textContent = d.current_clip || "—";
-    q("#pose-pct-badge").textContent = (d.progress_pct || 0) + "%";
-    q("#pose-bar").style.width = (d.progress_pct || 0) + "%";
 
+    const clips = q("#pose-stat-clips"); if (clips) clips.textContent = `${d.clips_done||0}/${d.clips_total||0}`;
+    const kps   = q("#pose-stat-kps");   if (kps)   kps.textContent   = d.keypoints_written || 0;
+    const adl   = q("#pose-stat-adl");   if (adl)   adl.textContent   = d.adl_events || 0;
+    const clip  = q("#pose-top-clip");   if (clip)  clip.textContent  = d.current_clip || "—";
+    const pct   = q("#pose-pct-badge");  if (pct)   pct.textContent   = (d.progress_pct||0) + "%";
+    const bar   = q("#pose-bar");        if (bar)   bar.style.width   = (d.progress_pct||0) + "%";
+
+    const topStatus = q("#pose-top-status");
     if (d.running) {
-      q("#btn-start-pose").disabled = true;
-      q("#btn-stop-pose").disabled = false;
+      if (topStatus) { topStatus.textContent = "Running"; topStatus.className = "badge badge-online"; }
+      const btn  = q("#btn-start-pose"); if (btn)  btn.disabled  = true;
+      const stop = q("#btn-stop-pose");  if (stop) stop.disabled = false;
       add(q("#dot-pose"), "online");
-      q("#lbl-pose").textContent = "Running";
-      q("#pose-top-status").textContent = "Running";
-      q("#pose-top-status").className = "badge badge-online";
-      hide(q("#pose-idle-state")); hide(q("#pose-done-state"));
-      if (!S.poseLampPollInterval) startPoseLampPolling();
-      if (!S.poseViewerInterval) startPoseViewerPolling();
-    } else if ((d.clips_done || 0) > 0) {
-      resetPoseUi("Complete");
-      hide(q("#pose-idle-state")); show(q("#pose-done-state"));
+      const lbl = q("#lbl-pose"); if (lbl) lbl.textContent = "Running";
+      if (!S.poseLampPollInterval) startLampPolling();
+      if (!S.poseViewerInterval)   startViewerPolling();
+    } else if (d.clips_done > 0) {
+      if (topStatus) { topStatus.textContent = "Complete"; topStatus.className = "badge badge-online"; }
+      const lbl = q("#lbl-pose"); if (lbl) lbl.textContent = "Complete";
     } else {
-      resetPoseUi("Idle");
-      show(q("#pose-idle-state")); hide(q("#pose-done-state"));
+      if (topStatus) { topStatus.textContent = "Idle"; topStatus.className = "badge badge-idle"; }
+      const lbl = q("#lbl-pose"); if (lbl) lbl.textContent = "Idle";
     }
   } catch (e) {
-    addLog(e.message, "system", "err");
+    addLog("fetchPoseStatus: " + e.message, "system", "err");
   }
 }
 
+// ── Results tab ───────────────────────────────────────────────────────────
 async function fetchPoseResults() {
   const grid = q("#pose-results-grid");
+  if (!grid) return;
   try {
     const d = await api("/api/pose/results");
-    if (!d.results.length) {
-      grid.innerHTML = `<div class="empty"><div class="empty-sub">No pose outputs yet</div></div>`;
+    if (!d.results || !d.results.length) {
+      grid.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><div class="empty-title">No outputs yet</div><div class="empty-sub">Run Phase 3 processing to generate results</div></div>`;
       return;
     }
     grid.innerHTML = d.results.map(r => `
       <div class="result-card">
         <div class="result-card-head flex-row" style="justify-content:space-between; padding-bottom:8px">
-          <strong class="fs-12" style="word-break: break-all">${esc(r.clip_stem)}</strong>
-          ${r.mp4_exists ? `<button class="btn btn-ghost btn-xs" onclick="showPreviewModal('${esc(r.clip_stem)}')">Preview <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>` : ''}
+          <strong class="fs-12" style="word-break:break-all">${esc(r.clip_stem)}</strong>
+          <div class="flex-row" style="gap:4px; flex-shrink:0">
+            ${r.preview_exists && !r.mp4_exists ? `<button class="btn btn-primary btn-xs" onclick="savePoseResult('${esc(r.clip_stem)}')">💾 Save</button>` : ""}
+            ${r.mp4_exists ? `<span class="badge badge-online" title="Permanently saved">Saved</span>` : ""}
+            ${r.preview_exists || r.mp4_exists ? `<button class="btn btn-ghost btn-xs" onclick="openPreview('${esc(r.clip_stem)}',${!!r.mp4_exists})">▶ Preview</button>` : ""}
+          </div>
         </div>
         <div class="result-card-body">
           <div class="result-stat"><span>Keypoint rows</span><strong>${r.keypoints_count}</strong></div>
           <div class="result-stat"><span>ADL events</span><strong>${r.adl_events}</strong></div>
-          <div class="result-stat"><span>Overlay frames</span><strong>${r.overlays}</strong></div>
           <div class="adl-chips mt-2">${renderAdlChips(r.adl_summary)}</div>
         </div>
       </div>`).join("");
   } catch (e) {
-    grid.innerHTML = `<div class="empty"><div class="empty-sub">${esc(e.message)}</div></div>`;
+    grid.innerHTML = `<div class="empty"><div class="empty-sub">Error: ${esc(e.message)}</div><button class="btn btn-ghost mt-3" onclick="fetchPoseResults()">Retry</button></div>`;
   }
-}
-
-function showPreviewModal(clipStem) {
-  const modal = q("#modal-preview");
-  const video = q("#preview-video");
-  // Assuming a static route serves this, but D:\Capstone_Project\data is exposed at /api/video/<subpath>? Let's use standard logic. Wait, do we have an endpoint for static video? 
-  // Let me check app/api/routes.py to see how videos are served. 
-  // Or I can point directly to `/static/...?` No, `data/` is not static by default in Flask. Let's see.
-  video.src = `/api/video/output_process/${clipStem}/${clipStem}_processed.mp4`;
-  q("#preview-title").textContent = clipStem;
-  show(modal);
-}
-
-function closePreviewModal() {
-  const modal = q("#modal-preview");
-  const video = q("#preview-video");
-  video.pause();
-  video.src = "";
-  hide(modal);
 }
 
 function renderAdlChips(summary) {
   const entries = Object.entries(summary || {});
-  if (!entries.length) return '<span class="adl-chip">No ADL labels</span>';
+  if (!entries.length) return `<span class="adl-chip">No ADL labels</span>`;
   return entries.map(([k,v]) => `<span class="adl-chip">${esc(k)} ${v}%</span>`).join("");
 }
 
-// ── Error state helper ─────────────────────────────────────────────────────
-function errorState(msg, retryFn) {
-  return `<div class="empty">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="36" height="36"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-    <div class="empty-title">Failed to load</div>
-    <div class="empty-sub">${esc(msg)}</div>
-    ${retryFn ? `<button class="btn btn-ghost mt-3" onclick="${retryFn}">Retry</button>` : ""}
-  </div>`;
+window.savePoseResult = async function(clipStem) {
+  try {
+    await api("/api/pose/save_result", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({clip_stem:clipStem}),
+    });
+    addLog(`Saved result: ${clipStem}`, "system", "info");
+    fetchPoseResults();
+  } catch(e) {
+    addLog(`Save failed: ${e.message}`, "system", "err");
+  }
+};
+
+window.openPreview = function(clipStem, isSaved) {
+  const modal = q("#modal-preview");
+  const video = q("#preview-video");
+  const title = q("#preview-title");
+  if (!modal || !video) return;
+  video.src = isSaved
+    ? `/api/video/output_process/${clipStem}/${clipStem}_processed.mp4`
+    : `/api/video/output_pose/${clipStem}/${clipStem}_preview.mp4`;
+  if (title) title.textContent = clipStem;
+  show(modal);
+};
+
+window.closePreviewModal = function() {
+  const modal = q("#modal-preview");
+  const video = q("#preview-video");
+  if (video) { video.pause(); video.src = ""; }
+  hide(modal);
+};
+
+// ── Probe modal close ─────────────────────────────────────────────────────
+on("#modal-close", "click", () => hide(q("#modal-probe")));
+
+// ── Event log ────────────────────────────────────────────────────────────
+function addLog(msg, camId, type = "") {
+  const log = q("#log-wrap");
+  if (!log) return;
+  const empty = log.querySelector(".empty"); if (empty) empty.remove();
+  const el = document.createElement("div");
+  el.className = "log-entry " + type;
+  const t = new Date().toLocaleTimeString("en-GB", {hour12:false});
+  const camStr = camId && camId !== "system" ? `<span class="log-cam">${esc(camId)}</span>` : "";
+  el.innerHTML = `<span class="log-t">${t}</span>${camStr}<span class="log-msg">${esc(msg)}</span>`;
+  log.prepend(el);
+  if (log.children.length > 200) log.removeChild(log.lastElementChild);
 }
 
-// ── Init ───────────────────────────────────────────────────────────────────
+// ── Camera stream stubs (used internally if Phase 1 re-enabled) ───────────
+function stopAllStreams() {
+  Object.keys(S.streamIntervals).forEach(id => {
+    clearInterval(S.streamIntervals[id]);
+    delete S.streamIntervals[id];
+  });
+}
+
+function updateOnlineCount() {}  // no-op, kpi elements removed
+
+// ── Helper: esc is already defined, these stubs prevent older socket callbacks crashing ──
+function setGlobalStatus(s) {
+  const el = q("#global-status"); if (!el) return;
+  el.className = "badge";
+  const map = {idle:"badge-idle", recording:"badge-recording"};
+  add(el, map[s] || "badge-idle");
+  el.textContent = {idle:"Idle", recording:"Recording"}[s] || s;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
 (async function init() {
-  S.poseLampState = defaultPoseLampState();
-  renderPoseLamps();
-  renderPoseQueue(0);
-  await fetchCameras();
-  await fetchStorageInfo();
-  await fetchPoseStatus();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+
+  async function boot() {
+    initTabNav();
+    S.poseLampState = defaultLampState();
+    renderLamps();
+    renderQueue();
+    await fetchStorageInfo();
+    await fetchPoseStatus();
+    // Switch to workspace as default
+    switchTab("workspace");
+  }
 })();

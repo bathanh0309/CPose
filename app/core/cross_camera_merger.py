@@ -153,6 +153,8 @@ class CrossCameraIDMerger:
         
         for clip_stem in self.clip_data.keys():
             clip_info = self.clip_data[clip_stem]
+            cam_id_str = self._extract_cam_id(clip_stem)
+            
             for local_id in clip_info["local_ids"]:
                 key = (clip_stem, local_id)
                 
@@ -160,10 +162,15 @@ class CrossCameraIDMerger:
                 matched_global_id = self._find_matching_person(clip_stem, local_id, processed_ids)
                 
                 if matched_global_id is None:
-                    # New person - assign global ID
-                    matched_global_id = self.next_global_id
-                    self.next_global_id += 1
-                    logger.debug(f"New Global ID {matched_global_id} for {clip_stem}:{local_id}")
+                    # New person
+                    if cam_id_str in ("cam01", "cam02"):
+                        matched_global_id = self.next_global_id
+                        self.next_global_id += 1
+                        logger.debug(f"New Global ID {matched_global_id} for {clip_stem}:{local_id}")
+                    else:
+                        # cam03 and cam04 cannot mint IDs
+                        matched_global_id = -1
+                        logger.debug(f"UNRESOLVED for {clip_stem}:{local_id} (cam03/04 cannot mint ID)")
                 else:
                     logger.debug(f"Merging {clip_stem}:{local_id} → Global ID {matched_global_id}")
                 

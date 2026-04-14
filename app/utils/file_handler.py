@@ -75,8 +75,71 @@ def multicam_sort_key(item: Path | str) -> tuple[datetime, int, str]:
 
 
 def sort_multicam_clips(clips: Iterable[Path]) -> list[Path]:
-    """Return clips ordered by capture time first, camera second."""
-    return sorted(list(clips), key=multicam_sort_key)
+    """
+    Route-aware, camera-priority, nearest-next scheduler.
+    Follows priority: cam01 -> cam02 -> cam03 -> cam04
+    Starts strictly from cam01, then finds the next valid temporal clip
+    to continue the route rather than exhausting cameras safely or globally sorting ignoring context.
+    """
+    clip_list = list(clips)
+    if not clip_list:
+        return []
+
+    parsed_clips = []
+    for c in clip_list:
+        parsed = _parse_multicam_timestamp(c)
+        if parsed is not None:
+            dt, cam_idx, _ = parsed
+            cam_str = f"cam{cam_idx:02d}"
+            parsed_clips.append({"path": c, "dt": dt, "cam": cam_str})
+        else:
+            path = Path(c)
+            try:
+                fallback_dt = datetime.fromtimestamp(path.stat().st_mtime)
+            except OSError:
+                fallback_dt = datetime.min
+            cam_str = extract_multicam_camera_id(c) or "unknown"
+            parsed_clips.append({"path": c, "dt": fallback_dt, "cam": cam_str})
+
+    available = parsed_clips.copy()
+    result = []
+    
+    cam_order_map = {cam: i for i, cam in enumerate(MULTICAM_CAMERA_ORDER)}
+
+    current_time = None
+    current_cam_idx = -1
+
+    while available:
+        selected_clip = None
+
+        if current_time is None:
+            # Rule: Start from cam01 first
+            cam01_clips = [c for c in available if c["cam"] == "cam01"]
+            if cam01_clips:
+                selected_clip = min(cam01_clips, key=lambda x: x["dt"])
+            else:
+                selected_clip = min(available, key=lambda x: x["dt"])
+        else:
+            # Rule: choose the clip whose timestamp is closest to current route context
+            # We filter clips that are >= current_time to simulate forward progression.
+            future_clips = [c for c in available if c["dt"] >= current_time]
+
+            if not future_clips:
+                # If everything remaining is in the past, reset the route context to process them.
+                current_time = None
+                current_cam_idx = -1
+                continue
+
+            # Pick the nearest available clip in the future.
+            # If tie, camera traversal priority (cam01, then cam02...) applies.
+            selected_clip = min(future_clips, key=lambda x: (x["dt"], cam_order_map.get(x["cam"], 999)))
+
+        result.append(selected_clip["path"])
+        available.remove(selected_clip)
+        current_time = selected_clip["dt"]
+        current_cam_idx = cam_order_map.get(selected_clip["cam"], 999)
+
+    return result
 
 
 class StorageManager:
@@ -163,6 +226,7 @@ class StorageManager:
             adl_summary = self._read_adl_summary(adl_file) if adl_file else {}
             
             mp4_path = out_process_dir / folder.name / f"{folder.name}_processed.mp4"
+            preview_path = folder / f"{folder.name}_preview.mp4"
 
             results.append(
                 {
@@ -172,6 +236,7 @@ class StorageManager:
                     "overlays": len(overlay_files),
                     "adl_summary": adl_summary,
                     "mp4_exists": mp4_path.exists(),
+                    "preview_exists": preview_path.exists(),
                 }
             )
         return results

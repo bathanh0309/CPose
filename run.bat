@@ -1,8 +1,9 @@
 @echo off
 chcp 65001 >nul
-setlocal
+setlocal EnableDelayedExpansion
+cd /d "%~dp0"
 
-:: CPose - startup script for Windows
+:: CPose - startup script for Windows (cmd-only, no PowerShell profiles)
 set "ROOT=%~dp0"
 set "VENV=%ROOT%venv"
 set "PYTHON=%VENV%\Scripts\python.exe"
@@ -51,12 +52,13 @@ if errorlevel 1 (
 )
 
 :: --- Create required data folders ---
-mkdir "%ROOT%data\config"        2>nul
-mkdir "%ROOT%data\raw_videos"    2>nul
-mkdir "%ROOT%data\output_labels" 2>nul
-mkdir "%ROOT%data\output_pose"   2>nul
-mkdir "%ROOT%data\multicam"      2>nul
-mkdir "%ROOT%models"             2>nul
+if not exist "%ROOT%data\config"         mkdir "%ROOT%data\config"
+if not exist "%ROOT%data\raw_videos"     mkdir "%ROOT%data\raw_videos"
+if not exist "%ROOT%data\output_labels"  mkdir "%ROOT%data\output_labels"
+if not exist "%ROOT%data\output_pose"    mkdir "%ROOT%data\output_pose"
+if not exist "%ROOT%data\output_process" mkdir "%ROOT%data\output_process"
+if not exist "%ROOT%data\multicam"       mkdir "%ROOT%data\multicam"
+if not exist "%ROOT%models"              mkdir "%ROOT%models"
 
 :: --- Warn if model files are missing ---
 if not exist "%ROOT%models\yolov8n.pt" (
@@ -71,14 +73,25 @@ if not exist "%ROOT%models\yolo11n-pose.pt" (
 
 :: --- Create default resources.txt if missing ---
 if not exist "%ROOT%data\config\resources.txt" (
-    echo # Add RTSP camera URLs below, one per line> "%ROOT%data\config\resources.txt"
-    echo # Example: rtsp://admin:pass@192.168.1.10:554/stream>> "%ROOT%data\config\resources.txt"
+    (
+        echo # Add RTSP camera URLs below, one per line
+        echo # Example: rtsp://admin:pass@192.168.1.10:554/stream
+    ) > "%ROOT%data\config\resources.txt"
 )
 
-:: --- Launch (suppress EventletDeprecationWarning via -W flag) ---
+:: --- Launch Flask app (run main.py directly; pushd ensures correct working dir)
 echo [CPose] Starting... Press Ctrl+C to stop.
 echo.
-"%PYTHON%" -W ignore::DeprecationWarning "%ROOT%main.py"
+call "%VENV%\Scripts\activate.bat"
+pushd "%ROOT%"
+"%PYTHON%" -W ignore::DeprecationWarning -u main.py
+set EXITCODE=%ERRORLEVEL%
+popd
+
+if %EXITCODE% NEQ 0 (
+    echo.
+    echo [CPose] Server exited with code %EXITCODE%.
+)
 
 echo.
 echo [CPose] Server stopped.

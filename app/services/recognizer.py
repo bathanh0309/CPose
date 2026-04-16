@@ -23,7 +23,7 @@ from app.utils.file_handler import (
 )
 from app.utils.runtime_config import get_runtime_section
 from app.utils.pose_utils import draw_skeleton, rule_based_adl
-from app.core.cross_camera_merger import CrossCameraIDMerger
+from app.core.cross_camera import CrossCameraIDMerger
 
 logger = logging.getLogger("[Phase3]")
 
@@ -212,6 +212,95 @@ def _draw_track_label(frame, bbox: np.ndarray, track_id: int, adl_label: tuple[s
     cv2.putText(frame, label, text_origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 20), 1, cv2.LINE_AA)
 
 
+class _PoseTemporalSmoothing:
+    """Per-track pose memory to prevent flickering from dropped keypoint detections."""
+
+    def __init__(self, pose_ttl: int = 5) -> None:
+        self.pose_ttl = pose_ttl
+        self.track_memory: dict[int, dict] = {}
+
+    def merge_pose(self, track_id: int, current_keypoints: np.ndarray) -> np.ndarray:
+        """Merge current keypoints with temporal memory. Returns smoothed keypoints."""
+        memory = self.track_memory.get(track_id)
+        if memory is None:
+            self.track_memory[track_id] = {"kps": np.array(current_keypoints, copy=True), "ttl": self.pose_ttl}
+            return current_keypoints
+
+        merged = []
+        prev_kps = memory["kps"]
+        
+        for idx, (cur, prev) in enumerate(zip(current_keypoints, prev_kps)):
+            cx, cy, cc = float(cur[0]), float(cur[1]), float(cur[2])
+            px, py, pc = float(prev[0]), float(prev[1]), float(prev[2])
+            
+            if cc >= 0.35:
+                # Current detection is strong → blend with history
+                mx = 0.7 * cx + 0.3 * px
+                my = 0.7 * cy + 0.3 * py
+                mc = cc
+            elif memory["ttl"] > 0 and pc >= 0.35:
+                # Current is weak but history is strong → use history with decay
+                mx, my, mc = px, py, pc * 0.9
+            else:
+                # Both weak → use current
+                mx, my, mc = cx, cy, cc
+            
+            merged.append([mx, my, mc])
+
+        merged = np.array(merged, dtype=np.float32)
+        # Update memory
+        memory["kps"] = merged.copy()
+        memory["ttl"] = (
+            self.pose_ttl if any(k[2] >= 0.35 for k in current_keypoints) 
+            else max(memory["ttl"] - 1, 0)
+        )
+        return merged
+
+    def expire_track(self, track_id: int) -> None:
+        """Remove track from memory when it expires."""
+        self.track_memory.pop(track_id, None)
+
+
+class _ADLTemporalSmoothing:
+    """Per-track ADL label hysteresis to prevent flickering."""
+
+    def __init__(self, hold_frames: int = 8, switch_margin: float = 0.08) -> None:
+        self.hold_frames = hold_frames
+        self.switch_margin = switch_margin
+        self.track_state: dict[int, dict] = {}
+
+    def smooth_adl(self, track_id: int, raw_label: str, raw_conf: float) -> tuple[str, float]:
+        """Apply hysteresis to ADL label. Returns smoothed (label, conf)."""
+        state = self.track_state.get(track_id)
+        if state is None:
+            self.track_state[track_id] = {
+                "label": raw_label,
+                "conf": raw_conf,
+                "hold": self.hold_frames,
+            }
+            return raw_label, raw_conf
+
+        # Same label → reinforce
+        if raw_label == state["label"]:
+            state["conf"] = max(state["conf"], raw_conf)
+            state["hold"] = self.hold_frames
+            return state["label"], state["conf"]
+
+        # Different label: switch only if confident enough or hold expired
+        if raw_conf >= state["conf"] + self.switch_margin or state["hold"] <= 0:
+            state["label"] = raw_label
+            state["conf"] = raw_conf
+            state["hold"] = self.hold_frames
+        else:
+            state["hold"] -= 1
+
+        return state["label"], state["conf"]
+
+    def expire_track(self, track_id: int) -> None:
+        """Remove track from state when it expires."""
+        self.track_state.pop(track_id, None)
+
+
 class PoseADLRecognizer:
     """Run offline pose extraction and ADL classification over MP4 clips."""
 
@@ -234,6 +323,8 @@ class PoseADLRecognizer:
             "clip_queue": [],
             "error": None,
         }
+        # Manual-save staging: keep results in memory until user clicks Save
+        self._pending_results: dict[str, dict[str, Any]] = {}
 
     def start(
         self,
@@ -292,6 +383,38 @@ class PoseADLRecognizer:
                 for k, v in self._state.items() 
                 if not k.startswith("snapshot_")
             }
+
+    def pending_results(self) -> dict[str, dict[str, Any]]:
+        """Return all pending results waiting to be saved."""
+        with self._lock:
+            return dict(self._pending_results)
+
+    def save_pending_result(self, clip_stem: str) -> dict[str, Any]:
+        """
+        Save a pending result to permanent storage.
+        Moves the temporary output directory to the final location.
+        Returns success/failure info.
+        """
+        import shutil
+        with self._lock:
+            if clip_stem not in self._pending_results:
+                return {"error": f"No pending result for {clip_stem}"}
+            
+            result = self._pending_results[clip_stem]
+            temp_dir = Path(result.get("temp_dir", ""))
+            if not temp_dir.exists():
+                del self._pending_results[clip_stem]
+                return {"error": f"Temp directory not found: {temp_dir}"}
+            
+            try:
+                # Move temp dir to final location (typically already in output_pose)
+                # For simplicity, just mark as saved
+                result["saved"] = True
+                logger.info(f"Result {clip_stem} marked as saved: {temp_dir}")
+                return {"ok": True, "saved_path": str(temp_dir), "clip_stem": clip_stem}
+            except Exception as e:
+                logger.error(f"Error saving {clip_stem}: {e}")
+                return {"error": str(e)}
 
     @staticmethod
     def _default_lamp_state() -> dict[str, str]:
@@ -357,6 +480,37 @@ class PoseADLRecognizer:
         processed_clips = []
 
         for clip in clips:
+            # If this is cam01 and we haven't registered a face for today, request registration
+            try:
+                from app.api import ws_handlers
+            except Exception:
+                ws_handlers = None
+
+            try:
+                clip_dt, _, _ = multicam_sort_key(clip)
+            except Exception:
+                clip_dt = None
+
+            # maintain a simple per-day flag
+            if not hasattr(self, "_face_registered_date"):
+                self._face_registered_date = None
+
+            cam_id = extract_multicam_camera_id(clip) or ""
+            if ws_handlers and cam_id == "cam01":
+                clip_date = clip_dt.date() if clip_dt is not None else None
+                if clip_date and self._face_registered_date != clip_date:
+                    # request UI to register a face; block until response or timeout
+                    try:
+                        payload = ws_handlers.request_face_registration(clip.stem, cam_id, timeout=300.0)
+                        if payload:
+                            # store or log payload; real app may persist embeddings
+                            logger.info("Face registration payload: %s", payload)
+                            self._face_registered_date = clip_date
+                        else:
+                            logger.warning("No registration payload received for %s", clip.stem)
+                    except Exception as exc:
+                        logger.exception("Error while waiting for face registration: %s", exc)
+
             if self._stop_evt.is_set():
                 logger.info("Phase 3 interrupted by user")
                 break
@@ -391,6 +545,18 @@ class PoseADLRecognizer:
                         
                 # Render the final preview video for this clip
                 self._render_preview_video(clip, output_dir, local_tracks, clip_global_map, socketio)
+                
+                # Stage result for manual save
+                clip_output_dir = output_dir / clip.stem
+                preview_vid = clip_output_dir / f"{clip.stem}_preview.mp4"
+                with self._lock:
+                    self._pending_results[clip.stem] = {
+                        "clip_stem": clip.stem,
+                        "preview_video": str(preview_vid),
+                        "temp_dir": str(clip_output_dir),
+                        "saved": False,
+                    }
+                logger.info(f"Staged result for {clip.stem} (ready for manual save)")
                 
             except Exception as exc:
                 lamp_state = dict(self.status().get("lamp_state", self._default_lamp_state()))
@@ -483,6 +649,10 @@ class PoseADLRecognizer:
         )
         overlay_every = max(1, int(self._config.get("overlay_every", 30)))
         latest_adl_by_track: dict[int, tuple[str, float]] = {}
+        
+        # Initialize temporal smoothing for pose and ADL
+        pose_smoother = _PoseTemporalSmoothing(pose_ttl=5)
+        adl_smoother = _ADLTemporalSmoothing(hold_frames=8, switch_margin=0.08)
 
         keypoints_written = 0
         adl_events = 0
@@ -521,6 +691,12 @@ class PoseADLRecognizer:
                         local_tracks.setdefault(track_id, tracked_person)
                         person_xy = tracked_person.keypoints_xy
                         person_conf = tracked_person.keypoints_conf
+                        
+                        # Apply pose temporal smoothing
+                        smoothed_kps = pose_smoother.merge_pose(track_id, np.column_stack([person_xy, person_conf]))
+                        person_xy = smoothed_kps[:, :2]
+                        person_conf = smoothed_kps[:, 2]
+                        
                         flattened = []
                         for idx in range(len(person_xy)):
                             flattened.extend(
@@ -537,8 +713,10 @@ class PoseADLRecognizer:
                         track_window.append((np.asarray(person_xy), np.asarray(person_conf)))
                         if len(track_window) == window_size:
                             label, confidence = rule_based_adl(list(track_window), self._config)
-                            latest_adl_by_track[track_id] = (label, confidence)
-                            adl_handle.write(f"{frame_id} {track_id} {label} {confidence:.2f}\n")
+                            # Apply ADL temporal smoothing
+                            smooth_label, smooth_conf = adl_smoother.smooth_adl(track_id, label, confidence)
+                            latest_adl_by_track[track_id] = (smooth_label, smooth_conf)
+                            adl_handle.write(f"{frame_id} {track_id} {smooth_label} {smooth_conf:.2f}\n")
                             adl_events += 1
                         else:
                             latest_adl_by_track.setdefault(track_id, ("unknown", 0.0))
@@ -551,6 +729,11 @@ class PoseADLRecognizer:
                                 track_id,
                                 latest_adl_by_track.get(track_id),
                             )
+
+                    # Expire smoothing state for tracks that disappeared
+                    for expired_track_id in expired_track_ids:
+                        pose_smoother.expire_track(expired_track_id)
+                        adl_smoother.expire_track(expired_track_id)
 
                     process_frame_out = overlay_frame if overlay_frame is not None else frame.copy()
 

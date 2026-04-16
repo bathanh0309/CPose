@@ -12,11 +12,13 @@ data/output_pose/*
 data/processed_videos/*
 data/video-4-cam/
 data/mp4-gif/output.mp4
+data/multicam/*
 !data/raw_videos/.gitkeep
 !data/output_labels/.gitkeep
 !data/output_pose/.gitkeep
 !data/processed_videos/.gitkeep
 !data/config/.gitkeep
+!data/multicam/.gitkeep
 
 models/*
 !models/.gitkeep
@@ -32,3 +34,5 @@ docs/latex/*.log
 docs/latex/*.png
 
 resources.txt
+
+node_modules/

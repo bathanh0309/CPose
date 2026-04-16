@@ -1,11 +1,3 @@
-"""
-Vector Database using FAISS for Approximate Nearest Neighbor Search
-Replaces O(N) linear scan with O(log N) search.
-
-Author: Senior MLOps Engineer
-Date: 2026-02-02
-"""
-
 import numpy as np
 import logging
 from typing import List, Tuple, Optional

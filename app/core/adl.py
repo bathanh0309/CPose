@@ -1,16 +1,3 @@
-"""
-ADL (Activities of Daily Living) Classification - Compatibility Module
-
-IMPORTANT: This module delegates ALL ADL classification logic to
-`app.utils.pose_utils.rule_based_adl()`, which is the ONE canonical
-ADL classifier for this project (CLAUDE.md §17.2: "chỉ một rule_based_adl() thống nhất").
-
-Do NOT add a separate classifier here. Do NOT define conflicting thresholds.
-
-ADL classes (canonical, from CLAUDE.md §17.3):
-  standing, sitting, walking, lying_down, falling, reaching, bending, unknown
-"""
-
 import math
 import time
 import numpy as np

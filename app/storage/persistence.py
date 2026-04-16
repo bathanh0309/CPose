@@ -1,11 +1,3 @@
-"""
-Persistence Layer for HAVEN Multi-Camera Tracking System
-Handles GlobalID state, embeddings, and metadata across restarts.
-
-Author: Senior MLOps Engineer
-Date: 2026-02-02
-"""
-
 import gc
 import sqlite3
 import numpy as np

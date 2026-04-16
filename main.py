@@ -7,6 +7,7 @@ import logging
 import webbrowser
 import threading
 
+# Import directly from the app package to avoid module/instance confusion
 from app import create_app, socketio
 
 logging.basicConfig(
@@ -15,7 +16,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-app = create_app()
+flask_app = create_app()
 
 
 def _open_browser():
@@ -30,4 +31,4 @@ if __name__ == "__main__":
     print("  Dashboard: http://localhost:5000")
     print("=" * 60)
     threading.Thread(target=_open_browser, daemon=True).start()
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
+    socketio.run(flask_app, host="0.0.0.0", port=5000, debug=False)

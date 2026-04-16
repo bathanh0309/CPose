@@ -1,12 +1,3 @@
-"""
-GlobalIDManager - Master-Slave Multi-Camera ID Assignment
-CRITICAL: Cam1 is the REGISTRATION camera - creates GlobalID + Profile.
-Cam2/3/4 are SLAVES - match only.
-
-Author: Senior MLOps Engineer
-Date: 2026-02-02
-"""
-
 import numpy as np
 import logging
 from typing import Dict, List, Optional, Tuple

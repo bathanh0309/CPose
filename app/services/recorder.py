@@ -1,19 +1,3 @@
-"""
-CPose — app/services/phase1_recorder.py
-Phase 1: RTSP ingestion + Storage-Aware Person-Triggered Recording.
-
-State machine per camera:
-  IDLE      → no person detected
-  ARMED     → person seen, confirming (need N consecutive detections)
-  RECORDING → confirmed person, actively writing clip
-  POST_ROLL → person gone, recording tail before closing clip
-  SAVED     → clip finalized (transient, resets to IDLE)
-
-Architecture:
-  RecorderManager         → manages N CameraWorker threads, exposes snapshots
-  CameraWorker (Thread)   → frame loop + YOLO + FSM + VideoWriter
-  FrameBuffer (deque)     → pre-roll circular buffer
-"""
 from __future__ import annotations
 
 import io

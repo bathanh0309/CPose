@@ -1,10 +1,3 @@
-"""
-Shared settings for migrated reference modules.
-
-These defaults exist to keep `app.detectors.*` importable after moving files
-from repo root into the `app/` package. Adjust as you integrate the modules.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path

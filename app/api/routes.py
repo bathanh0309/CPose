@@ -34,6 +34,22 @@ def _resolve_dir(raw_value: str | None, default: Path) -> Path:
     return candidate if candidate.is_absolute() else (_app_module.BASE_DIR / candidate)
 
 
+def _json_safe(value):
+    """
+    Recursively convert non-JSON-serializable types (bytes, paths, etc.) to JSON-serializable forms.
+    Prevents jsonify() TypeErrors when status contains byte snapshots or other problematic types.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 # ===================================================================
 #                          CONFIG & CAMERA
 # ===================================================================
@@ -122,11 +138,6 @@ def probe_camera():
         "resolutions": info["resolutions"],
     })
 
-
-# ===================================================================
-#                   CAMERA SNAPSHOT & LIVE STATUS
-# ===================================================================
-
 @api_bp.route("/cameras/<cam_id>/snapshot", methods=["GET"])
 def camera_snapshot(cam_id: str):
     """
@@ -155,11 +166,6 @@ def cameras_live_status():
     """
     return jsonify({"cameras": _recorder.camera_status_list()})
 
-
-# ===================================================================
-#                       RECORDING (Phase 1)
-# ===================================================================
-
 @api_bp.route("/recording/start", methods=["POST"])
 def start_recording():
     """
@@ -181,7 +187,6 @@ def start_recording():
     if _recorder.is_running():
         return jsonify({"error": "Recording is already running"}), 409
 
-    # Phase 1 config overrides from body
     phase1_cfg = body.get("phase1_config", {})
 
     _recorder.start(
@@ -211,11 +216,6 @@ def recording_status():
     """
     return jsonify(_recorder.status())
 
-
-# ===================================================================
-#                          VIDEOS MANAGEMENT
-# ===================================================================
-
 @api_bp.route("/videos", methods=["GET"])
 def list_videos():
     """
@@ -239,11 +239,6 @@ def delete_video(filename: str):
 
     target.unlink()
     return jsonify({"message": f"{filename} deleted"})
-
-
-# ===================================================================
-#                    ANALYSIS (Phase 2)
-# ===================================================================
 
 @api_bp.route("/analysis/start", methods=["POST"])
 def start_analysis():
@@ -296,11 +291,6 @@ def analysis_results():
         return jsonify({"results": []})
     return jsonify({"results": _storage.list_results(folder)})
 
-
-# ===================================================================
-#                   POSE & ADL (Phase 3)
-# ===================================================================
-
 @api_bp.route("/pose/start", methods=["POST"])
 def start_pose():
     """
@@ -328,7 +318,7 @@ def start_pose():
         config_path=_app_module.POSE_CONFIG_FILE,
         save_overlay=save_overlay,
     )
-    pose_state = _pose.status()
+    pose_state = _json_safe(_pose.status())
 
     return jsonify({
         "status": "started",
@@ -354,7 +344,7 @@ def pose_status():
     """
     Lấy trạng thái hiện tại của quá trình Pose & ADL recognition (Phase 3).
     """
-    return jsonify(_pose.status())
+    return jsonify(_json_safe(_pose.status()))
 
 
 @api_bp.route("/pose/results", methods=["GET"])
@@ -394,27 +384,29 @@ def pose_snapshot(view: str):
 
 @api_bp.route("/pose/save_result", methods=["POST"])
 def save_pose_result():
+    """
+    Save a pending pose result to permanent storage.
+    The result must have been staged during processing.
+    """
     body = request.get_json(force=True, silent=True) or {}
     clip_stem = body.get("clip_stem")
     if not clip_stem:
         return jsonify({"error": "clip_stem is required"}), 400
-        
-    src_dir = _app_module.OUTPUT_POSE_DIR / clip_stem
-    preview_vid = src_dir / f"{clip_stem}_preview.mp4"
-    if not preview_vid.exists():
-        return jsonify({"error": "Preview video not found"}), 404
-        
-    import shutil
-    dest_dir = _app_module.BASE_DIR / "data" / "output_process" / clip_stem
-    dest_dir.mkdir(parents=True, exist_ok=True)
     
-    # Copy video
-    shutil.copy2(preview_vid, dest_dir / f"{clip_stem}_processed.mp4")
-    # Copy other outputs for completeness
-    for f in src_dir.glob("*.txt"):
-        shutil.copy2(f, dest_dir / f.name)
-        
-    return jsonify({"message": f"Result saved for {clip_stem}", "status": "success"})
+    result = _pose.save_pending_result(clip_stem)
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify({"status": "ok", "message": f"Result saved for {clip_stem}", **result})
+
+
+@api_bp.route("/pose/pending_results", methods=["GET"])
+def pose_pending_results():
+    """
+    Get all pending results waiting to be saved by user.
+    """
+    pending = _json_safe(_pose.pending_results())
+    return jsonify({"pending_results": pending})
 
 
 @api_bp.route("/pose/adl_summary", methods=["GET"])
@@ -434,11 +426,6 @@ def pose_adl_summary():
         return jsonify({"error": f"Pose result not found for clip: {clip_stem}"}), 404
 
     return jsonify({"clip": clip_stem, "adl_distribution": summary})
-
-
-# ===================================================================
-#                       STORAGE MANAGEMENT
-# ===================================================================
 
 @api_bp.route("/storage/info", methods=["GET"])
 def storage_info():

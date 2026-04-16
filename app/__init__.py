@@ -40,26 +40,40 @@ socketio = SocketIO()
 
 
 def create_app() -> Flask:
-    """Create and configure the CPose Flask application."""
+    """Create and configure the CPose Flask application.
+
+    NOTE: local variable is named 'flask_app' (not 'app') to prevent Python
+    from shadowing it when 'import app.api.ws_handlers' binds the top-level
+    'app' package name in this function's local scope.
+    """
     load_dotenv(BASE_DIR / ".env", override=False)
 
-    app = Flask(
+    flask_app = Flask(
         __name__,
         static_folder=str(STATIC_DIR),
         static_url_path="/static",
     )
-    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "cpose-dev-secret")
-    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+    flask_app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "cpose-dev-secret")
+    flask_app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
-    CORS(app)
+    CORS(flask_app)
 
     from app.api import api_bp
 
-    app.register_blueprint(api_bp)
+    flask_app.register_blueprint(api_bp)
 
-    @app.get("/")
+    @flask_app.get("/")
     def dashboard():
         return send_from_directory(str(STATIC_DIR), "index.html")
 
-    socketio.init_app(app, cors_allowed_origins="*", async_mode="eventlet")
-    return app
+    socketio.init_app(flask_app, cors_allowed_origins="*", async_mode="eventlet")
+    # Register websocket handlers (Socket.IO) after socketio init.
+    # 'import app.api.ws_handlers' must come AFTER flask_app is fully set up
+    # because the import would otherwise shadow the local 'app' name.
+    try:
+        import app.api.ws_handlers  # noqa: F401  — registers Socket.IO handlers
+    except Exception:
+        import logging
+        logging.getLogger("[App]").exception("Failed to import ws_handlers")
+
+    return flask_app

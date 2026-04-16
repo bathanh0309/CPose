@@ -16,8 +16,47 @@ from app import socketio
 
 logger = logging.getLogger("[WS]")
 
+import asyncio
+from app.utils.serialize import track_to_json
+from cpose.pipeline.multicam_online_system import MultiCamOnlineSystem
+
 # pending map: clip_stem -> {event: threading.Event, payload: Any}
 _pending: dict[str, dict[str, Any]] = {}
+
+def push_camera_update(tracks: list, timestamp: float | None = None):
+    # Existing helper
+    pass
+
+async def camera_stream_ws(ws, system: MultiCamOnlineSystem):
+    """Loop to push snapshot updates to the UI."""
+    while True:
+        ts, tracks = system.get_current_tracks()
+        payload = {
+            "type": "camera_update",
+            "timestamp": ts,
+            "tracks": [track_to_json(t) for t in tracks],
+        }
+        try:
+            # Note: flask-socketio uses emit, but for pure websocket snippets:
+            # await ws.send_json(payload)
+            socketio.emit("camera_update", payload)
+        except Exception:
+            break
+        await asyncio.sleep(0.1)
+    """Broadcast current track states to all connected UIs."""
+    if timestamp is None:
+        import time
+        timestamp = time.time()
+        
+    payload = {
+        "type": "camera_update",
+        "timestamp": timestamp,
+        "tracks": [track_to_json(t) for t in tracks],
+    }
+    try:
+        socketio.emit("camera_update", payload)
+    except Exception as exc:
+        logger.warning("Failed to emit camera_update: %s", exc)
 
 
 def request_face_registration(clip_stem: str, cam_id: str, timeout: float | None = 300.0) -> dict | None:

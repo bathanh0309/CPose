@@ -2,6 +2,18 @@ project:
   name: CPose
   dashboard_url: http://localhost:5000
 
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+  socket_async_mode: "eventlet"
+  cors_origins: "*"
+
+logging:
+  level: "INFO"
+  to_file: false
+  file_path: "logs/cpose.log"
+
 phase1:
   model: yolov8n.pt
   conf_threshold: 0.35

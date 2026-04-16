@@ -23,6 +23,8 @@ from app.utils.file_handler import (
 )
 from app.utils.runtime_config import get_runtime_section
 from app.utils.pose_utils import draw_skeleton, rule_based_adl
+from app.core.adl_model import ADLModelWrapper
+from cpose.core.adl.skeleton_norm import normalize_skeleton
 from app.core.cross_camera import CrossCameraIDMerger
 
 logger = logging.getLogger("[Phase3]")
@@ -463,6 +465,14 @@ class PoseADLRecognizer:
         started_at = time.time()
         try:
             model = self._load_model(model_path)
+            # Load ADL model (paths could be parameterized in config)
+            adl_cfg = self._config.get("adl_model_cfg", "configs/ctr_gcn_adl.yaml")
+            adl_ckpt = self._config.get("adl_model_ckpt", "weights/ctr_gcn_adl.pth")
+            try:
+                adl_model = ADLModelWrapper(cfg_path=adl_cfg, ckpt_path=adl_ckpt)
+            except Exception as adl_exc:
+                logger.warning(f"Failed to load ADL model, falling back to rule-based: {adl_exc}")
+                adl_model = None
         except Exception as exc:
             self._update_state(running=False, error=str(exc))
             socketio.emit("error", {"source": "phase3", "message": str(exc)})
@@ -524,7 +534,7 @@ class PoseADLRecognizer:
             logger.info("Processing pose clip: %s", clip.name)
 
             try:
-                clip_keypoints, clip_adl, local_tracks = self._process_clip(model, clip, output_dir, save_overlay, socketio)
+                clip_keypoints, clip_adl, local_tracks = self._process_clip(model, adl_model, clip, output_dir, save_overlay, socketio)
                 keypoints_written += clip_keypoints
                 adl_events += clip_adl
                 processed_clips.append(clip)
@@ -620,7 +630,7 @@ class PoseADLRecognizer:
         logger.info("Loading Phase 3 model from %s", model_path)
         return YOLO(str(model_path))
 
-    def _process_clip(self, model, clip: Path, output_dir: Path, save_overlay: bool, socketio) -> tuple[int, int, dict]:
+    def _process_clip(self, model, adl_model, clip: Path, output_dir: Path, save_overlay: bool, socketio) -> tuple[int, int, dict]:
         started_at = time.time()
         cap = cv2.VideoCapture(str(clip))
         if not cap.isOpened():
@@ -712,7 +722,15 @@ class PoseADLRecognizer:
                         track_window = person_windows[track_id]
                         track_window.append((np.asarray(person_xy), np.asarray(person_conf)))
                         if len(track_window) == window_size:
-                            label, confidence = rule_based_adl(list(track_window), self._config)
+                            # Pack features for GCN
+                            xy_seq = np.stack([xy for xy, conf in track_window], axis=0) # (T, V, 2)
+                            conf_seq = np.stack([conf for xy, conf in track_window], axis=0) # (T, V)
+
+                            if adl_model:
+                                label, confidence = adl_model.infer_sequence(xy_seq, conf_seq)
+                            else:
+                                label, confidence = rule_based_adl(list(track_window), self._config)
+
                             # Apply ADL temporal smoothing
                             smooth_label, smooth_conf = adl_smoother.smooth_adl(track_id, label, confidence)
                             latest_adl_by_track[track_id] = (smooth_label, smooth_conf)

@@ -4,7 +4,8 @@ import threading
 from queue import Queue, Empty
 from typing import Optional
 
-from app.api.ws_handlers import push_camera_update
+
+
 
 logger = logging.getLogger("[EventPublisher]")
 
@@ -37,6 +38,7 @@ class EventPublisher:
             self._thread.join(timeout=2.0)
 
     def _run(self):
+        from app.api.ws_handlers import push_camera_update
         logger.info("Event Publisher started.")
         while not self._stop_event.is_set():
             try:

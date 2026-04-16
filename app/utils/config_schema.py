@@ -146,8 +146,23 @@ class StreamProbeConfig(BaseModel):
     timeout_ms: int
     common_resolutions: List[Tuple[int, int, str]]
 
+class ServerConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 5000
+    debug: bool = False
+    socket_async_mode: str = "eventlet"
+    cors_origins: str = "*"
+    secret_key: str = "cpose-dev-secret"
+
+class LoggingConfig(BaseModel):
+    level: str = "INFO"
+    to_file: bool = False
+    file_path: str = "logs/cpose.log"
+
 class AppConfig(BaseModel):
     project: ProjectConfig
+    server: ServerConfig = Field(default_factory=ServerConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     phase1: Phase1Config
     phase2: Phase2Config
     phase3: Phase3Config

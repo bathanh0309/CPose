@@ -8,7 +8,7 @@ from flask import Blueprint, Response, jsonify, request
 import app as _app_module
 from app.services.recorder import RecorderManager
 from app.services.analyzer import Analyzer
-from app.services.recognizer import PoseADLRecognizer
+from app.core.recognizer_service import RecognizerService
 from app.utils.file_handler import StorageManager
 from app.utils.stream_probe import StreamProber
 from app.utils.file_handler import sort_multicam_clips
@@ -19,9 +19,21 @@ logger = logging.getLogger("[API]")
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 # Khởi tạo các service chính (singleton style)
+def _on_socket_emit(event, data):
+    # Tránh circular import bằng cách import tại runtime
+    from app import socketio
+    socketio.emit(event, data)
+
+
+def _on_request_registration(clip_stem, cam_id):
+    # Tránh circular import bằng cách import tại runtime
+    from app.api import ws_handlers
+    return ws_handlers.request_face_registration(clip_stem, cam_id)
+
+
 _recorder = RecorderManager()
 _analyzer = Analyzer()
-_pose = PoseADLRecognizer()
+_pose = RecognizerService(socket_callback=_on_socket_emit, registration_callback=_on_request_registration)
 _storage = StorageManager()
 _prober = StreamProber()
 
@@ -189,12 +201,16 @@ def start_recording():
 
     phase1_cfg = body.get("phase1_config", {})
 
+    from flask import current_app
+    on_clip_ready = current_app.config.get("on_clip_ready_cb")
+
     _recorder.start(
         cameras=cameras,
         storage_limit_gb=storage_limit_gb,
         output_dir=_app_module.RAW_VIDEOS_DIR,
         model_path=_app_module.MODEL_PHASE1,
         config=phase1_cfg,
+        on_clip_ready=on_clip_ready,
     )
 
     return jsonify({"message": "Recording started", "cameras": len(cameras)})

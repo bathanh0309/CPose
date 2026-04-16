@@ -61,6 +61,7 @@ class CameraWorker(threading.Thread):
         storage_limit_getter: Callable[[], float],
         socketio_emit: Callable[[str, dict], None],
         config: dict | None = None,
+        on_clip_ready: Callable[[Path, str], None] | None = None,
     ):
         super().__init__(daemon=True, name=f"cam-{cam_id}")
         self.cam_id = cam_id
@@ -73,6 +74,7 @@ class CameraWorker(threading.Thread):
         self._storage_limit = storage_limit_getter
         self._emit = socketio_emit
         self._stop_evt = threading.Event()
+        self._on_clip_ready = on_clip_ready
 
         cfg = config or {}
         self._conf_threshold    = float(cfg.get("person_conf_threshold",   PERSON_CONF_THRESHOLD))
@@ -374,6 +376,11 @@ class CameraWorker(threading.Thread):
         })
         self._log(f"clip saved: {clip_path.name} ({duration:.1f}s, {size_mb:.1f} MB)")
         logger.info("cam-%s: clip saved %s (%.1fs, %.1fMB)", self.cam_id, clip_path.name, duration, size_mb)
+        
+        # Trigger async AI processing
+        if self._on_clip_ready:
+            self._on_clip_ready(clip_path, self.cam_id)
+            
         return clip_path
 
     def _open_writer(self, w: int, h: int, fps: float) -> tuple[Path, cv2.VideoWriter]:
@@ -466,6 +473,7 @@ class RecorderManager:
         output_dir: Path,
         model_path: Path,
         config: dict | None = None,
+        on_clip_ready: Callable[[Path, str], None] | None = None,
     ) -> None:
         from app import socketio
 
@@ -492,6 +500,7 @@ class RecorderManager:
                     storage_limit_getter=lambda: self._storage_limit_gb,
                     socketio_emit=_emit,
                     config=self._config,
+                    on_clip_ready=on_clip_ready,
                 )
                 self._workers[cam_id] = worker
                 worker.start()

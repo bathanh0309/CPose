@@ -67,7 +67,7 @@ pandas==2.2.3                # Đọc/ghi CSV label, tổng hợp metrics
 # -----------------------------------------------------------------------------
 av==13.1.0                   # PyAV — đọc RTSP/container chuẩn (thay thế cv2.VideoCapture khi cần codec nâng cao)
 imageio==2.36.1              # Đọc ảnh nhiều định dạng (dùng trong tools/)
-Pillow==11.0.0               # Image processing, vẽ text overlay
+Pillow==12.2.0               # Image processing, vẽ text overlay
 
 # -----------------------------------------------------------------------------
 # [9] CONFIGURATION & UTILITIES

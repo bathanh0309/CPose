@@ -109,46 +109,47 @@ Capstone_Project/
 
 ```mermaid
 graph TD
-    subgraph "1. Initialization & Data Loading"
-        A1[User uploads resources.txt] --> A2[Backend: /api/config/upload<br/>Parse camera list]
-        A3[User uploads multicam folder] --> A4[Backend: read .mp4 files<br/>Filter pattern camX_YYYY-MM-DD_HH-mm-ss.mp4]
-        A4 --> A5[Parse timestamp & sort<br/>by time ascending]
-        A5 --> A6[Create ClipQueue with status 'ready']
+    subgraph "1. Khởi tạo & nạp dữ liệu"
+        A1[User tải resources.txt] --> A2["Backend: /api/config/upload\nParse camera list"]
+        A3[User tải folder multicam] --> A4["Backend: đọc file .mp4\nLọc đúng pattern camX_YYYY-MM-DD_HH-mm-ss.mp4"]
+        A4 --> A5["Parse timestamp & sắp xếp\ntheo thời gian tăng dần"]
+        A5 --> A6["Tạo ClipQueue với trạng thái 'ready'"]
     end
 
-    subgraph "2. Main Pipeline (START)"
-        B1[Press START] --> B2{Determine mode}
-        B2 -- resourcesLoaded --> B3[Mode RTSP: record short clips on person detection]
-        B2 -- folderLoaded --> B4[Mode MULTICAM_FOLDER]
-        B4 --> B5[Get next clip from Queue<br/>(time‑sorted)]
+    subgraph "2. Pipeline chính (START)"
+        B1[Nhấn START] --> B2{Xác định mode}
+        B2 -- resourcesLoaded --> B3["Mode RTSP: ghi short clip khi có người"]
+        B2 -- folderLoaded --> B4["Mode MULTICAM_FOLDER"]
+        B4 --> B5["Get next clip from Queue\n(time‑sorted)"]
     end
 
-    subgraph "3. Per‑clip Processing (Sequential)"
-        C1[Turn ON camera lamp] --> C2[Open video & local tracking<br/>(DeepSORT)]
-        C2 --> C3[Pose Estimation<br/>YOLO-pose → 17 keypoints]
-        C3 --> C4[ADL Classification<br/>Rule‑based (torso, knee, velocity)]
-        C4 --> C5[Cross‑camera ReID<br/>+ spatiotemporal gating]
-        C5 --> C6[FAISS Vector DB<br/>search / add embedding]
-        C6 --> C7[Assign Global ID<br/>(keep old if match, create new if needed)]
-        C7 --> C8[Write results:<br/>- Overlay video<br/>- Keypoints, ADL, tracks, timeline JSON]
-        C8 --> C9[Turn OFF lamp & emit socket events<br/>pose_progress, clip_saved]
-        C9 --> C10{More clips in Queue?}
-        C10 -- Yes --> B5
-        C10 -- No --> D[Pipeline finished]
+    subgraph "3. Xử lý từng clip (tuần tự)"
+        C1[Bật đèn camera tương ứng] --> C2["Mở video & local tracking\n(DeepSORT)"]
+        C2 --> C3["Pose Estimation\nYOLO-pose → 17 keypoints"]
+        C3 --> C4["ADL Classification\nRule-based (torso, knee, velocity...)"]
+        C4 --> C5["Cross-camera ReID\n+ spatiotemporal gating"]
+        C5 --> C6["FAISS Vector DB\ntra cứu/ghi embedding"]
+        C6 --> C7["Gán Global ID\n(giữ ID cũ nếu khớp, tạo mới nếu cần)"]
+        C7 --> C8["Ghi kết quả:\n- Video overlay\n- Keypoints, ADL, tracks, timeline JSON"]
+        C8 --> C9["Tắt đèn camera & phát socket event\npose_progress, clip_saved"]
+        C9 --> C10{Còn clip trong Queue?}
+        C10 -- Có --> B5
+        C10 -- Không --> D[Kết thúc pipeline]
     end
 
-    subgraph "4. User Registration"
-        E1[User opens webcam] --> E2[Backend creates session]
-        E2 --> E3[Collect face images & embeddings<br/>InsightFace ArcFace]
-        E3 --> E4[Store embedding + metadata into FAISS]
+    subgraph "4. Đăng ký người dùng (Registration)"
+        E1[User mở webcam] --> E2[Backend tạo session]
+        E2 --> E3["Thu thập ảnh mặt & embedding\nInsightFace ArcFace"]
+        E3 --> E4["Lưu embedding + metadata vào FAISS"]
         E4 --> E5[Emit registration_done]
     end
 
     A2 --> B2
     A6 --> B2
     B3 --> C1
-    C8 --> K[Web Dashboard / SocketIO]
+    C8 --> K["Web Dashboard / SocketIO"]
     E5 --> K
     C6 --> I[(FAISS Vector DB)]
     I --> C6
 
+```

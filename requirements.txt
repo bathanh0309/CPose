@@ -43,7 +43,7 @@ flask==3.1.0                 # Web framework chính của product
 flask-socketio==5.4.1        # Socket.IO server cho real-time events
 flask-cors==5.0.0            # CORS header cho API cross-origin
 python-socketio==5.11.4      # Socket.IO core library (bắt buộc cùng flask-socketio)
-eventlet==0.37.0             # Async worker cho Flask-SocketIO (production)
+eventlet==0.40.3             # Async worker cho Flask-SocketIO (production)
 # gevent==24.2.1             # Thay thế eventlet nếu bị lỗi trên macOS ARM
 
 # -----------------------------------------------------------------------------

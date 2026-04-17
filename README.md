@@ -105,47 +105,50 @@ Capstone_Project/
 
 ```
 
-## 🛠 Công nghệ & Kỹ thuật cốt lõi
-
-### 1. Stack Công nghệ
-- **Backend**: Flask 3.0 (REST API), Flask-SocketIO (Real-time communication), Eventlet (High-performance async).
-- **Computer Vision**:
-  - **YOLOv8/v11/Pose**: Framework chính cho nhận diện người (Object Detection) và ước lượng khung xương (Pose Estimation).
-  - **InsightFace (ArcFace)**: Trích xuất face embeddings 512-chiều phục vụ định danh khuôn mặt.
-  - **FAISS (Facebook AI Similarity Search)**: Vector Database hiệu năng cao dùng để tìm kiếm Identity (ReID và Face).
-- **Frontend**: Vanilla JS (ES6+), CSS Grid/Flexbox, UI Dashboard hiện đại với hiệu ứng Glassmorphism.
-
-### 2. Kiến trúc Hệ thống (Producer-Consumer)
-Hệ thống được thiết kế theo mô hình bất đồng bộ giúp GPU đạt hiệu năng tối đa:
-- **Producer (Phase 1)**: Các CameraWorkers đọc luồng RTSP, chạy Detector nhẹ (YOLO Tiny) để phát hiện chuyển động/người và tự động cắt clips.
-- **Consumer (Phase 3)**: Một RecognizerService quản lý hàng đợi (Job Queue), lấy các clip đã ghi để chạy pipeline nặng (Pose + ADL + ReID) mà không làm lag luồng live stream.
-
-### 3. Phương pháp & Thuật toán
-- **Phân loại ADL (Rule-based)**: Sử dụng các giải pháp hình học (tính góc khớp, vận tốc trọng tâm, tỷ lệ khung hình) để phân loại các hành động: Walking, Standing, Sitting, Bending, Falling, Lying Down.
-- **TFCS-PAR (Temporal-First Camera-Switching with Person Appearance Re-identification)**:
-  - Thuật toán do nhóm phát triển nhằm duy trì **Global ID** xuyên suốt các camera.
-  - Ưu tiên tính liên tục của thời gian (Temporal continuity) kết hợp với ràng buộc không gian (Spatial constraints) và đặc trưng ngoại dạng (Appearance features) để map người từ cam01 -> cam02 -> cam03...
-
-### 4. Sơ đồ luồng dữ liệu (Data Flow)
+## Sơ đồ luồng dữ liệu (Data Flow)
 
 ```mermaid
-graph TD
-    A[RTSP Streams] --> B[Phase 1: Multi-cam Recorder]
-    B -->|Detect Person| C[Save Short Clip]
-    C -->|Enqueue| D[Job Queue]
-    D --> E[Phase 3: Multi-cam Recognizer]
-    E --> F[YOLO Pose Extraction]
-    F --> G[Rule-based ADL]
-    G --> H[Cross-camera ReID]
-    H --> I[FAISS Vector DB]
-    I --> J[Global ID Consistency]
-    J --> K[Web Dashboard / SocketIO]
-    
-    L[Registration Hub] -->|Face Scan| M[InsightFace ArcFace]
-    M -->|Embedding| I
-```
+    graph TD
+    subgraph "1. Khởi tạo & nạp dữ liệu"
+        A1[User tải resources.txt] --> A2[Backend: /api/config/upload<br/>Parse camera list]
+        A3[User tải folder multicam] --> A4[Backend: đọc file .mp4<br/>Lọc đúng pattern camX_YYYY-MM-DD_HH-mm-ss.mp4]
+        A4 --> A5[Parse timestamp & sắp xếp<br/>theo thời gian tăng dần]
+        A5 --> A6[Tạo ClipQueue với trạng thái 'ready']
+    end
 
-### 5. Đặc điểm nổi bật
-- **Sub-millisecond ReID**: Tìm kiếm danh tính trong Vector DB với độ trễ cực thấp.
-- **Robust Tracking**: Hệ thống có khả năng tự động khôi phục ID cho người dùng khi họ quay trở lại vùng quan sát sau một khoảng thời gian vắng mặt (Re-entry).
-- **Responsive Web UI**: Giao diện điều khiển tập trung, hỗ trợ snapshot thời gian thực và log sự kiện chi tiết.
+    subgraph "2. Pipeline chính (START)"
+        B1[Nhấn START] --> B2{Xác định mode}
+        B2 -- resourcesLoaded --> B3[Mode RTSP: ghi short clip khi có người]
+        B2 -- folderLoaded --> B4[Mode MULTICAM_FOLDER]
+        B4 --> B5[Lấy clip tiếp theo từ Queue<br/>(đã sort time-first)]
+    end
+
+    subgraph "3. Xử lý từng clip (tuần tự)"
+        C1[Bật đèn camera tương ứng] --> C2[Mở video & local tracking<br/>(DeepSORT)]
+        C2 --> C3[Pose Estimation<br/>YOLO-pose → 17 keypoints]
+        C3 --> C4[ADL Classification<br/>Rule-based (torso, knee, velocity...)]
+        C4 --> C5[Cross-camera ReID<br/>+ spatiotemporal gating]
+        C5 --> C6[FAISS Vector DB<br/>tra cứu/ghi embedding]
+        C6 --> C7[Gán Global ID<br/>(giữ ID cũ nếu khớp, tạo mới nếu cần)]
+        C7 --> C8[Ghi kết quả:<br/>- Video overlay<br/>- Keypoints, ADL, tracks, timeline JSON]
+        C8 --> C9[Tắt đèn camera & phát socket event<br/>pose_progress, clip_saved]
+        C9 --> C10{Còn clip trong Queue?}
+        C10 -- Có --> B5
+        C10 -- Không --> D[Kết thúc pipeline]
+    end
+
+    subgraph "4. Đăng ký người dùng (Registration)"
+        E1[User mở webcam] --> E2[Backend tạo session]
+        E2 --> E3[Thu thập ảnh mặt & embedding<br/>InsightFace ArcFace]
+        E3 --> E4[Lưu embedding + metadata vào FAISS]
+        E4 --> E5[Emit registration_done]
+    end
+
+    A2 --> B2
+    A6 --> B2
+    B3 --> C1
+    C8 --> K[Web Dashboard / SocketIO]
+    E5 --> K
+    C6 --> I[(FAISS Vector DB)]
+    I --> C6
+```

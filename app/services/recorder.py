@@ -21,23 +21,32 @@ logger = logging.getLogger("[Phase1]")
 
 _PHASE1_CFG = get_runtime_section("phase1")
 
+# Handle Pydantic model conversion to dict
+try:
+    if hasattr(_PHASE1_CFG, "model_dump"):
+        _phase1_dict = _PHASE1_CFG.model_dump()
+    else:
+        _phase1_dict = dict(_PHASE1_CFG)
+except (AttributeError, TypeError):
+    _phase1_dict = {}
+
 # ─── Default tuning constants (all overridable via config) ────────────────────
-PERSON_CONF_THRESHOLD      = float(_PHASE1_CFG.get("person_conf_threshold", 0.65))
-TRIGGER_MIN_CONSECUTIVE    = int(_PHASE1_CFG.get("trigger_min_consecutive", 3))
-PRE_ROLL_SECONDS           = float(_PHASE1_CFG.get("pre_roll_seconds", 3))
-POST_ROLL_SECONDS          = float(_PHASE1_CFG.get("post_roll_seconds", 5))
-REARM_COOLDOWN_SECONDS     = float(_PHASE1_CFG.get("rearm_cooldown_seconds", 5))
-MIN_CLIP_SECONDS           = float(_PHASE1_CFG.get("min_clip_seconds", 3.0))
-MAX_CLIP_SECONDS           = float(_PHASE1_CFG.get("max_clip_seconds", 300.0))
-MIN_BOX_AREA_RATIO         = float(_PHASE1_CFG.get("min_box_area_ratio", 0.0015))
-INFERENCE_EVERY            = int(_PHASE1_CFG.get("inference_every", 3))
-RECONNECT_DELAY            = int(_PHASE1_CFG.get("reconnect_delay_seconds", 5))
-JPEG_QUALITY               = int(_PHASE1_CFG.get("jpeg_quality", 75))
-PERSON_CLASS_ID            = int(_PHASE1_CFG.get("person_class_id", 0))
-SNAPSHOT_FPS               = float(_PHASE1_CFG.get("snapshot_fps", 6.0))
-SNAPSHOT_ACTIVE_TTL_S      = float(_PHASE1_CFG.get("snapshot_active_ttl_s", 10.0))
-RTSP_TRANSPORT_DEFAULT     = str(_PHASE1_CFG.get("rtsp_transport", "tcp")).strip().lower()
-FFMPEG_CAPTURE_OPTIONS     = str(_PHASE1_CFG.get("ffmpeg_capture_options", "")).strip()
+PERSON_CONF_THRESHOLD      = float(_phase1_dict.get("person_conf_threshold", 0.65))
+TRIGGER_MIN_CONSECUTIVE    = int(_phase1_dict.get("trigger_min_consecutive", 3))
+PRE_ROLL_SECONDS           = float(_phase1_dict.get("pre_roll_seconds", 3))
+POST_ROLL_SECONDS          = float(_phase1_dict.get("post_roll_seconds", 5))
+REARM_COOLDOWN_SECONDS     = float(_phase1_dict.get("rearm_cooldown_seconds", 5))
+MIN_CLIP_SECONDS           = float(_phase1_dict.get("min_clip_seconds", 3.0))
+MAX_CLIP_SECONDS           = float(_phase1_dict.get("max_clip_seconds", 300.0))
+MIN_BOX_AREA_RATIO         = float(_phase1_dict.get("min_box_area_ratio", 0.0015))
+INFERENCE_EVERY            = int(_phase1_dict.get("inference_every", 3))
+RECONNECT_DELAY            = int(_phase1_dict.get("reconnect_delay_seconds", 5))
+JPEG_QUALITY               = int(_phase1_dict.get("jpeg_quality", 75))
+PERSON_CLASS_ID            = int(_phase1_dict.get("person_class_id", 0))
+SNAPSHOT_FPS               = float(_phase1_dict.get("snapshot_fps", 6.0))
+SNAPSHOT_ACTIVE_TTL_S      = float(_phase1_dict.get("snapshot_active_ttl_s", 10.0))
+RTSP_TRANSPORT_DEFAULT     = str(_phase1_dict.get("rtsp_transport", "tcp")).strip().lower()
+FFMPEG_CAPTURE_OPTIONS     = str(_phase1_dict.get("ffmpeg_capture_options", "")).strip()
 
 
 class RecState(Enum):

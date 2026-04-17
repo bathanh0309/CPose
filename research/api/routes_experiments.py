@@ -1,20 +1,39 @@
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict
-from pydantic import BaseModel
+# research/api/routes_experiments.py
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+
+from research.schemas.experiment import ExperimentCreate, ExperimentStatus
+from research.schemas.results import ExperimentResultSummary
+from research.services import experiment_runner
+from shared.io import job_store
 
 router = APIRouter()
 
-class ExperimentConfig(BaseModel):
-    name: str
-    model_name: str
-    data_path: str
-    params: Dict = {}
 
-@router.post("/run")
-async def run_experiment(config: ExperimentConfig):
-    # Logic to trigger cpose.pipeline.multicam_analyzer or similar
-    return {"status": "started", "experiment_name": config.name}
+@router.post("/run", response_model=ExperimentStatus)
+def run_experiment(req: ExperimentCreate, background_tasks: BackgroundTasks) -> ExperimentStatus:
+    manifest = req.model_dump()
+    job_id = experiment_runner.submit_experiment(manifest)
 
-@router.get("/list")
-async def list_experiments():
-    return [{"id": "run_001", "status": "finished"}]
+    # Đẩy job chạy nền, API trả về ngay lập tức
+    background_tasks.add_task(experiment_runner.run_job, job_id)
+
+    status = job_store.get_status(job_id)
+    if not status:
+        raise HTTPException(status_code=500, detail="Status file missing")
+    return ExperimentStatus(**status)
+
+
+@router.get("/status/{job_id}", response_model=ExperimentStatus)
+def get_status(job_id: str) -> ExperimentStatus:
+    status = job_store.get_status(job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return ExperimentStatus(**status)
+
+
+@router.get("/results/{job_id}", response_model=ExperimentResultSummary)
+def get_results(job_id: str) -> ExperimentResultSummary:
+    results = job_store.get_results(job_id)
+    if not results:
+        raise HTTPException(status_code=404, detail="Results not found")
+    return ExperimentResultSummary(**results)

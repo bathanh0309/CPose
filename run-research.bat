@@ -1,5 +1,6 @@
 @echo off
 title CPose - Research Server
 echo Starting Research FastAPI Server...
-.venv\Scripts\activate && python research/main.py
+set PYTHONPATH=%CD%
+.venv\Scripts\activate && uvicorn research.main:app --host 0.0.0.0 --port 8000 --reload
 pause

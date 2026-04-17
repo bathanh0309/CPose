@@ -1,19 +1,33 @@
-import os
+# shared/io/paths.py
+import re
 from pathlib import Path
 
-BASE_DIR = Path(__file__).parent.parent.parent.absolute()
+_JOB_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
-DATA_DIR = BASE_DIR / "data"
-MODELS_DIR = BASE_DIR / "models"
-CONFIGS_DIR = BASE_DIR / "configs"
 
-# Sub-dirs
-RAW_VIDEOS_DIR = DATA_DIR / "raw_videos"
-OUTPUT_POSE_DIR = DATA_DIR / "output_pose"
-MULTICAM_DIR = DATA_DIR / "multicam"
-RESEARCH_RUNS_DIR = DATA_DIR / "research_runs"
+def _validate_job_id(job_id: str) -> str:
+    if not _JOB_ID_RE.match(job_id):
+        raise ValueError("Invalid job_id")
+    return job_id
 
-def ensure_dirs():
-    """Create all standard directories if they don't exist"""
-    for d in [DATA_DIR, MODELS_DIR, CONFIGS_DIR, RAW_VIDEOS_DIR, OUTPUT_POSE_DIR, MULTICAM_DIR, RESEARCH_RUNS_DIR]:
-        d.mkdir(parents=True, exist_ok=True)
+
+def get_project_root() -> Path:
+    # shared/io/paths.py -> shared/io -> shared -> root
+    return Path(__file__).resolve().parents[2]
+
+
+def get_data_dir() -> Path:
+    return get_project_root() / "data"
+
+
+def get_research_runs_dir() -> Path:
+    d = get_data_dir() / "research_runs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_run_dir(job_id: str) -> Path:
+    job_id = _validate_job_id(job_id)
+    d = get_research_runs_dir() / f"run_{job_id}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

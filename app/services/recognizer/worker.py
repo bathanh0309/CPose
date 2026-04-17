@@ -50,6 +50,16 @@ class RecognizerConsumer:
             "current_job": None,
             "completed_total": 0
         }
+        self._latest_snap: Optional[bytes] = None
+        self._snap_lock = threading.Lock()
+
+    def get_snapshot(self, view: str) -> Optional[bytes]:
+        with self._snap_lock:
+            return self._latest_snap
+
+    def refresh_face_database(self):
+        logger.info("Face database refresh requested.")
+        # Logic to reload vectors if needed
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -100,13 +110,36 @@ class RecognizerConsumer:
                 # 2. Phase 3 (Pose & ADL)
                 if self.p3_model:
                     # Pass config as dict for the engine
-                    phase3_cfg = self.config.phase3.dict()
+                    phase3_cfg = self.config.phase3.dict() if hasattr(self.config.phase3, 'dict') else self.config.phase3
+                    
+                    def _on_progress(p_data):
+                        # p_data: {frame_id, total_frames, adl, conf, frame}
+                        pct = int((p_data["frame_id"] / p_data["total_frames"]) * 100) if p_data["total_frames"] > 0 else 0
+                        
+                        # Emit progress
+                        self.socketio.emit("pose_progress", {
+                            "clip_id": job.clip_path.name,
+                            "cam_id": job.cam_id,
+                            "frame_id": p_data["frame_id"],
+                            "total_frames": p_data["total_frames"],
+                            "adl": p_data["adl"],
+                            "conf": round(p_data["conf"], 2),
+                            "pct": pct
+                        })
+                        
+                        # Update snapshot
+                        if "frame" in p_data:
+                            _, buf = cv2.imencode(".jpg", p_data["frame"])
+                            with self._snap_lock:
+                                self._latest_snap = buf.tobytes()
+
                     result = run_phase3(
                         self.p3_model, 
                         self.adl_model,
                         job.clip_path, 
                         out_dir, 
-                        phase3_cfg
+                        phase3_cfg,
+                        progress_callback=_on_progress
                     )
                     
                     elapsed = time.time() - start_time

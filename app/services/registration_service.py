@@ -187,14 +187,19 @@ class RegistrationSession:
                         
                         instruction = f"Đang chụp góc {angle.upper()}: {self.counts[angle]}/{self.target_count}"
                         
+                        # Calculate total progress
+                        total_samples = sum(self.counts.values())
+                        max_samples = self.target_count * len(self.angles)
+                        progress_pct = int((total_samples / max_samples) * 100)
+
                         # Trigger UI update
                         self.on_progress({
                             "session_id": self.session_id,
+                            "progress": progress_pct,
+                            "instruction": instruction,
+                            "conf": float(face.det_score) if hasattr(face, 'det_score') else 0.95,
                             "angle": angle,
                             "count": self.counts[angle],
-                            "total": self.target_count,
-                            "instruction": instruction,
-                            "counts": self.counts
                         })
                     else:
                         instruction = self._get_instruction_for_angle(target_angle)

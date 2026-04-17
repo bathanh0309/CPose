@@ -104,3 +104,48 @@ Capstone_Project/
 └── README.md                       # Tài liệu hướng dẫn sử dụng tổng quát
 
 ```
+
+## 🛠 Công nghệ & Kỹ thuật cốt lõi
+
+### 1. Stack Công nghệ
+- **Backend**: Flask 3.0 (REST API), Flask-SocketIO (Real-time communication), Eventlet (High-performance async).
+- **Computer Vision**:
+  - **YOLOv8/v11/Pose**: Framework chính cho nhận diện người (Object Detection) và ước lượng khung xương (Pose Estimation).
+  - **InsightFace (ArcFace)**: Trích xuất face embeddings 512-chiều phục vụ định danh khuôn mặt.
+  - **FAISS (Facebook AI Similarity Search)**: Vector Database hiệu năng cao dùng để tìm kiếm Identity (ReID và Face).
+- **Frontend**: Vanilla JS (ES6+), CSS Grid/Flexbox, UI Dashboard hiện đại với hiệu ứng Glassmorphism.
+
+### 2. Kiến trúc Hệ thống (Producer-Consumer)
+Hệ thống được thiết kế theo mô hình bất đồng bộ giúp GPU đạt hiệu năng tối đa:
+- **Producer (Phase 1)**: Các CameraWorkers đọc luồng RTSP, chạy Detector nhẹ (YOLO Tiny) để phát hiện chuyển động/người và tự động cắt clips.
+- **Consumer (Phase 3)**: Một RecognizerService quản lý hàng đợi (Job Queue), lấy các clip đã ghi để chạy pipeline nặng (Pose + ADL + ReID) mà không làm lag luồng live stream.
+
+### 3. Phương pháp & Thuật toán
+- **Phân loại ADL (Rule-based)**: Sử dụng các giải pháp hình học (tính góc khớp, vận tốc trọng tâm, tỷ lệ khung hình) để phân loại các hành động: Walking, Standing, Sitting, Bending, Falling, Lying Down.
+- **TFCS-PAR (Temporal-First Camera-Switching with Person Appearance Re-identification)**:
+  - Thuật toán do nhóm phát triển nhằm duy trì **Global ID** xuyên suốt các camera.
+  - Ưu tiên tính liên tục của thời gian (Temporal continuity) kết hợp với ràng buộc không gian (Spatial constraints) và đặc trưng ngoại dạng (Appearance features) để map người từ cam01 -> cam02 -> cam03...
+
+### 4. Sơ đồ luồng dữ liệu (Data Flow)
+
+```mermaid
+graph TD
+    A[RTSP Streams] --> B[Phase 1: Multi-cam Recorder]
+    B -->|Detect Person| C[Save Short Clip]
+    C -->|Enqueue| D[Job Queue]
+    D --> E[Phase 3: Multi-cam Recognizer]
+    E --> F[YOLO Pose Extraction]
+    F --> G[Rule-based ADL]
+    G --> H[Cross-camera ReID]
+    H --> I[FAISS Vector DB]
+    I --> J[Global ID Consistency]
+    J --> K[Web Dashboard / SocketIO]
+    
+    L[Registration Hub] -->|Face Scan| M[InsightFace ArcFace]
+    M -->|Embedding| I
+```
+
+### 5. Đặc điểm nổi bật
+- **Sub-millisecond ReID**: Tìm kiếm danh tính trong Vector DB với độ trễ cực thấp.
+- **Robust Tracking**: Hệ thống có khả năng tự động khôi phục ID cho người dùng khi họ quay trở lại vùng quan sát sau một khoảng thời gian vắng mặt (Re-entry).
+- **Responsive Web UI**: Giao diện điều khiển tập trung, hỗ trợ snapshot thời gian thực và log sự kiện chi tiết.

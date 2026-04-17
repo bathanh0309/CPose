@@ -2,7 +2,7 @@ import cv2
 import logging
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional, Callable
 from collections import defaultdict, deque
 
 # Import utilities from the legacy file to reuse logic
@@ -25,7 +25,8 @@ def run_phase3(
     clip_path: Path, 
     output_dir: Path, 
     config: Dict[str, Any],
-    save_overlay: bool = True
+    save_overlay: bool = True,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> Dict[str, Any]:
     """
     Pure Engine for Phase 3: Pose Extraction + ADL Recognition.
@@ -116,6 +117,16 @@ def run_phase3(
                     s_label, s_conf = adl_smoother.smooth_adl(tid, label, conf)
                     adl_h.write(f"{frame_id} {tid} {s_label} {s_conf:.2f}\n")
                     adl_count += 1
+
+                    # Trigger progress callback for one person (main track)
+                    if progress_callback and frame_id % 10 == 0:
+                        progress_callback({
+                            "frame_id": frame_id,
+                            "total_frames": total_frames,
+                            "adl": s_label,
+                            "conf": s_conf,
+                            "frame": frame # Pass raw frame for snapshot extraction if needed
+                        })
             
             # Cleanup smoothing memory
             for etid in expired_track_ids:

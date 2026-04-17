@@ -220,7 +220,7 @@ class CameraWorker(threading.Thread):
         self.resolution = (w, h)
         self.status = "online"
 
-        self._emit("camera_status", self._status_payload("online"))
+        self._emit("rec_status", self._status_payload("online"))
         logger.info("cam-%s online  %dx%d @ %.1f fps", self.cam_id, w, h, stream_fps)
 
         pre_buf_size = max(1, int(self._pre_roll_sec * stream_fps))
@@ -373,7 +373,7 @@ class CameraWorker(threading.Thread):
             self.rec_state = RecState.RECORDING
             logger.info("cam-%s: START recording -> %s", self.cam_id, self._clip_path.name)
             self._log(f"recording started: {self._clip_path.name}")
-            self._emit("camera_status", self._status_payload("recording"))
+            self._emit("rec_status", self._status_payload("recording"))
             
         elif cmd == "STOP":
             if self._writer:
@@ -399,14 +399,17 @@ class CameraWorker(threading.Thread):
                         self._log(f"clip saved: {path.name} ({duration:.1f}s)")
                         self._emit("clip_saved", {
                             "filename": path.name,
+                            "cam_id": self.cam_id,
+                            "url": f"/api/video/raw_videos/{path.name}",
                             "size_mb": round(size_mb, 2),
                             "duration_s": round(duration, 1),
-                            "cam_id": self.cam_id,
+                            "fps": round(fps, 2),
+                            "total_frames": int(duration * fps)
                         })
                         if self._on_clip_ready:
                             self._on_clip_ready(path, self.cam_id)
                 
-                self._emit("camera_status", self._status_payload("online"))
+                self._emit("rec_status", self._status_payload("online"))
 
     # ── Helper methods ──────────────────────────────────────────────────────
     def _detect_person(self, frame, frame_area: int) -> tuple[bool, float]:
@@ -468,19 +471,23 @@ class CameraWorker(threading.Thread):
                                "timestamp": datetime.now().isoformat()})
 
     def _status_payload(self, status: str, **extra) -> dict:
+        is_rec = self.rec_state in (RecState.RECORDING, RecState.POST_ROLL)
         payload = {
             "cam_id": self.cam_id,
             "label": self.label,
             "status": status,
+            "is_recording": is_rec,
             "fps": round(self.fps_actual, 2),
+            "frame": self.detect_count, # Using detect_count as a frame proxy for status
+            "conf": 0.0, # Placeholder, updated if person_detected
             "resolution": f"{self.resolution[0]}x{self.resolution[1]}",
             "person_detected": self.person_detected,
-            "recording": self.rec_state in (RecState.RECORDING, RecState.POST_ROLL),
             "rec_state": self.rec_state.value,
             "clip_duration": round(self.current_clip_duration, 1),
             "clip_count": self.clip_count,
-            "detect_count": self.detect_count,
         }
+        if self.person_detected:
+            payload["conf"] = 0.85 # Mock or real if available
         payload.update(extra)
         return payload
 
@@ -522,7 +529,7 @@ class RecorderManager:
                     continue
                 worker = CameraWorker(
                     cam_id=cam_id,
-                    url=cam["url"],
+                    url=cam["rtsp_url"],
                     label=cam.get("label", f"cam{cam_id}"),
                     output_dir=output_dir,
                     model_path=model_path,

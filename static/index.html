@@ -1,249 +1,692 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPose</title>
-    
-    <!-- Scripts & Styles -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
-    <link rel="stylesheet" href="static/css/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CPose Studio — Điều khiển tập trung</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      font-family: 'Inter', sans-serif;
+    }
+
+    body {
+      background: #f1f5f9;
+      overflow: hidden;
+      height: 100vh;
+    }
+
+    .app-grid {
+      display: grid;
+      grid-template-columns: 280px 1fr 320px;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    .card {
+      background: white;
+      border-radius: 1rem;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .viewer {
+      background: #0f172a;
+      aspect-ratio: 16/9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .btn-sm {
+      padding: 0.3rem 0.7rem;
+      font-size: 0.7rem;
+      font-weight: 600;
+      border-radius: 0.5rem;
+      transition: all 0.1s;
+      cursor: pointer;
+    }
+
+    .btn-sm:active {
+      transform: scale(0.96);
+    }
+
+    /* Bảng có đường kẻ dọc và ngang, điều chỉnh độ rộng cột */
+    .bordered-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.7rem;
+      table-layout: fixed;
+    }
+
+    .bordered-table th,
+    .bordered-table td {
+      border: 1px solid #cbd5e1;
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .bordered-table th:first-child {
+      width: 15%;
+    }
+
+    /* CAM */
+    .bordered-table th:nth-child(2) {
+      width: 12%;
+    }
+
+    /* FPS */
+    .bordered-table th:nth-child(3) {
+      width: 15%;
+    }
+
+    /* FRAME */
+    .bordered-table th:nth-child(4) {
+      width: 12%;
+    }
+
+    /* CONF */
+    .bordered-table th:nth-child(5) {
+      width: 46%;
+    }
+
+    /* ADL - rộng hơn */
+    .bordered-table th {
+      background: #f8fafc;
+      font-weight: 700;
+      color: #1e293b;
+      position: sticky;
+      top: 0;
+    }
+
+    .pill {
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.65rem;
+      font-weight: 800;
+      display: inline-block;
+    }
+
+    .pill-green {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .pill-red {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .pill-blue {
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .rec-led {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+    }
+
+    .rec-led.off {
+      background: #ef4444;
+      box-shadow: none;
+    }
+
+    .rec-led.ready {
+      background: #10b981;
+      box-shadow: 0 0 4px #10b981;
+    }
+
+    .rec-led.recording {
+      background: #ef4444;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+        transform: scale(1.2);
+      }
+
+      100% {
+        opacity: 1;
+      }
+    }
+
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+
+    /* Nút toggle camera (hình con mắt) */
+    .cam-toggle {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.3rem;
+      transition: all 0.1s;
+    }
+
+    .cam-toggle.on {
+      color: #10b981;
+      background: #dcfce7;
+    }
+
+    .cam-toggle.off {
+      color: #ef4444;
+      background: #fee2e2;
+    }
+  </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
-    <div class="app-container h-screen overflow-hidden grid grid-cols-[280px_1fr_320px]">
-        
-        <!-- ASIDE: CONTROL & EVENTS -->
-        <aside class="sidebar bg-white border-r flex flex-col p-4 overflow-hidden">
-            <!-- Logo Header -->
-            <div class="flex items-center gap-3 mb-6">
-                <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
-                    <i class="fas fa-cube text-lg"></i>
-                </div>
-                <div>
-                    <h1 class="font-bold text-lg leading-none">CPose Studio</h1>
-                    <span class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Intelligent Pose System</span>
-                </div>
-            </div>
 
-            <!-- Status Quick View -->
-            <div class="bg-slate-50 border border-slate-100 rounded-xl p-3 mb-4 flex flex-col gap-2">
-                <div class="flex justify-between items-center text-[11px]">
-                    <span class="text-slate-500 font-bold uppercase">System Mode</span>
-                    <span id="systemStatus" class="font-mono text-blue-600 font-bold">STANDBY</span>
-                </div>
-                <div class="flex justify-between items-center text-[11px]">
-                    <span class="text-slate-500 font-bold uppercase">Recording</span>
-                    <span id="recordingState" class="text-red-500 font-bold">OFF</span>
-                </div>
-            </div>
+<body>
+  <div class="app-grid">
 
-            <!-- Main Pipeline Actions -->
-            <div class="flex gap-2 mb-4">
-                <button id="startRecBtn" class="btn-control primary flex-1 py-2 text-sm shadow-sm">
-                    <i class="fas fa-play text-[10px]"></i> REC
-                </button>
-                <button id="startAnalysisBtn" class="btn-control ghost flex-1 py-2 text-sm border-blue-100">
-                    <i class="fas fa-microchip"></i> ADL
-                </button>
-                <button id="stopAllBtn" class="btn-control danger flex-1 py-2 text-sm">■ STOP</button>
-            </div>
-            <div class="grid grid-cols-2 gap-2 mb-6">
-                <button id="refreshBtn" class="btn-control ghost !py-1.5 text-xs"><i class="fas fa-sync"></i> SYNC</button>
-            </div>
+    <!-- ================= CỘT TRÁI (chứa toàn bộ nút điều khiển) ================= -->
+    <aside class="bg-white border-r flex flex-col p-3 overflow-hidden">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white"><i
+            class="fas fa-cube"></i></div>
+        <div>
+          <h1 class="font-bold text-md">CPose Studio</h1><span class="text-[9px] text-slate-400">Intelligent Pose
+            System</span>
+        </div>
+      </div>
 
-            <div class="divider h-px bg-slate-100 mb-4"></div>
+      <!-- Hàng nút START / STOP / REFRESH -->
+      <div class="flex gap-2 mb-3">
+        <button id="startBtn" class="btn-sm bg-blue-600 text-white flex-1"><i class="fas fa-play text-[9px]"></i>
+          START</button>
+        <button id="stopBtn" class="btn-sm bg-red-500 text-white flex-1"><i class="fas fa-stop"></i> STOP</button>
+        <button id="refreshBtn" class="btn-sm bg-slate-200 text-slate-700"><i class="fas fa-sync-alt"></i></button>
+      </div>
 
-            <!-- Recent Event Log -->
-            <div class="flex-1 flex flex-col min-h-0 mt-4">
-                <div class="flex items-center justify-between mb-2">
-                    <h3 class="text-xs font-bold text-slate-500 uppercase">EVENTS</h3>
-                    <button id="leftExportCsvBtn" class="text-blue-600 text-[9px] font-bold hover:underline">CSV</button>
-                </div>
-                <div class="relative mb-2">
-                    <input id="leftEventSearch" type="text" placeholder="Tìm kiếm..." class="w-full text-xs p-2 pl-7 bg-slate-100 border-none rounded-lg focus:ring-2 ring-blue-500">
-                    <i class="fas fa-search absolute left-2.5 top-2.5 text-slate-400 text-[10px]"></i>
-                </div>
-                <div class="table-container flex-1 custom-scroll overflow-y-auto">
-                    <table class="w-full text-xs">
-                        <thead class="sticky top-0 z-10 bg-slate-50">
-                            <tr>
-                                <th class="text-left p-2 w-14 text-slate-500 font-semibold">TIME</th>
-                                <th class="text-left p-2 text-slate-500 font-semibold">EVENT</th>
-                                <th class="text-center p-2 w-12 text-slate-500 font-semibold">CAM</th>
-                            </tr>
-                        </thead>
-                        <tbody id="leftEventTableBody">
-                            <tr><td colspan="3" class="text-center py-10 text-slate-300 italic">Chưa có sự kiện</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </aside>
+      <!-- Khối điều khiển MULTICAM -->
+      <div class="bg-slate-50 rounded-lg p-2 mb-3">
+        <div class="text-[9px] font-bold text-slate-500 uppercase mb-1">MULTICAM</div>
+        <div class="flex flex-wrap gap-2">
+          <label for="resourcesInput" class="btn-sm bg-white border cursor-pointer">TXT</label>
+          <input type="file" id="resourcesInput" class="hidden" accept=".txt">
+          <label for="multicamInput" class="btn-sm bg-white border cursor-pointer">FOLDER</label>
+          <input type="file" id="multicamInput" class="hidden" webkitdirectory directory multiple>
+          <button id="toggleRtspPreviewBtn" class="btn-sm bg-white border">Show</button>
+          <select id="slotSel1" class="text-[9px] p-1 rounded border bg-white"></select>
+          <div class="flex items-center"><span class="rec-led off" id="recLed"></span><span id="recLedText"
+              class="text-[9px] ml-1">OFF</span></div>
+        </div>
+      </div>
 
-        <!-- MAIN CONTENT: CAMERA WORKSPACE -->
-        <main class="main-content flex flex-col p-4 gap-4 overflow-hidden">
-            <!-- 4-Camera Grid Layout -->
-            <div class="camera-grid grid grid-cols-2 gap-4 flex-1 min-h-0">
-                <!-- Camera Slot 1 (Multicam / Main) -->
-                <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
-                    <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-video text-blue-500"></i> MULTICAM VIEW</span>
-                        <div class="flex gap-2 items-center">
-                            <select id="slotSel1" class="bg-white border text-[10px] rounded px-1.5 py-0.5 font-bold"></select>
-                            <label for="resourcesInput" class="cursor-pointer bg-white border px-2 py-0.5 rounded text-[10px] font-bold hover:bg-slate-50 transition-colors">
-                                <i class="fas fa-file-import"></i> TXT
-                            </label>
-                            <input type="file" id="resourcesInput" class="hidden" accept=".txt">
-                            <button id="toggleRtspPreviewBtn" class="bg-white border px-2 py-0.5 rounded text-[10px] font-bold hover:bg-slate-50">
-                                <i id="rtspEyeIcon" class="fas fa-eye text-blue-500"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="viewer-shell flex-1 bg-slate-900 flex items-center justify-center relative">
-                        <img id="slotSnap1" src="" class="w-full h-full object-cover hidden">
-                        <div id="slotEmpty1" class="viewer-empty">DASHBOARD INACTIVE</div>
-                    </div>
-                </div>
+      <!-- Khối điều khiển REGISTRATION -->
+      <div class="bg-slate-50 rounded-lg p-2 mb-3">
+        <div class="text-[9px] font-bold text-slate-500 uppercase mb-1">REGISTRATION</div>
+        <div class="flex gap-2">
+          <button id="openWebcamBtn" class="btn-sm bg-emerald-500 text-white">Open</button>
+          <button id="registerBtn" class="btn-sm bg-orange-500 text-white">New</button>
+        </div>
+      </div>
 
-                <!-- Camera Slot 2: Original Flow -->
-                <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
-                    <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-eye text-emerald-500"></i> ORIGINAL</span>
-                        <div class="flex items-center gap-2">
-                            <span id="recIndicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
-                            <span id="recIndicatorText" class="text-[9px] font-black text-slate-400">READY</span>
-                            <button id="toggleOriginalPreviewBtn" class="preview-toggle" data-visible="true">
-                                <i class="fas fa-eye text-blue-500"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="viewer-shell flex-1 bg-slate-900 relative">
-                        <img id="originalVideo" src="" class="w-full h-full object-cover">
-                        <div id="originalVideoEmpty" class="viewer-empty hidden">CAMERA HIDDEN</div>
-                    </div>
-                </div>
+      <!-- Bảng sự kiện (có đường kẻ) -->
+      <div class="flex-1 flex flex-col min-h-0 mt-1">
+        <div class="flex justify-between items-center mb-1">
+          <span class="text-[10px] font-bold text-slate-500 uppercase">SỰ KIỆN</span>
+          <button id="leftExportCsvBtn" class="text-[9px] text-blue-600 font-bold">CSV</button>
+        </div>
+        <input id="leftEventSearch" type="text" placeholder="Tìm kiếm..."
+          class="text-[10px] p-1 pl-6 bg-slate-100 rounded mb-1">
+        <div class="overflow-y-auto custom-scroll flex-1">
+          <table class="bordered-table">
+            <thead>
+              <tr>
+                <th>TIME</th>
+                <th>EVENT</th>
+                <th class="w-10">CAM</th>
+              </tr>
+            </thead>
+            <tbody id="leftEventTableBody">
+              <tr>
+                <td colspan="3" class="text-center py-6 text-slate-300">Chưa có sự kiện</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
 
-                <!-- Camera Slot 3: Processed Output -->
-                <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
-                    <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-brain text-pink-500"></i> PROCESSED</span>
-                        <button id="toggleProcessedPreviewBtn" class="preview-toggle" data-visible="true">
-                            <i class="fas fa-eye text-blue-500"></i>
-                        </button>
-                    </div>
-                    <div class="viewer-shell flex-1 bg-slate-900 relative">
-                        <img id="processedVideo" src="" class="w-full h-full object-cover">
-                        <div id="processedVideoEmpty" class="viewer-empty hidden">AI VIEW HIDDEN</div>
-                    </div>
-                </div>
+    <!-- ================= CỘT GIỮA (4 camera đã đổi vị trí) ================= -->
+    <main class="p-3 flex flex-col gap-3 overflow-hidden">
+      <!-- Hàng trên: MULTICAM (trái) + REGISTRATION (phải) -->
+      <div class="grid grid-cols-2 gap-3">
+        <!-- MULTICAM (trái trên) -->
+        <div class="card">
+          <div class="flex justify-between items-center px-3 py-2 bg-slate-50/80 border-b text-[10px] font-bold">
+            <span><i class="fas fa-video text-blue-500 mr-1"></i> MULTICAM</span>
+            <!-- Nút toggle riêng cho MULTICAM (đồng bộ với nút Show/Hide bên trái) -->
+            <button id="multicamToggleBtn" class="cam-toggle on"><i class="fas fa-eye"></i></button>
+          </div>
+          <div class="viewer">
+            <img id="slotSnap1" class="w-full h-full object-cover hidden" alt="preview">
+            <div id="slotEmpty1" class="text-white/40 text-[10px]">Chưa có nguồn</div>
+          </div>
+        </div>
+        <!-- REGISTRATION (phải trên) -->
+        <div class="card">
+          <div class="flex justify-between items-center px-3 py-2 bg-slate-50/80 border-b text-[10px] font-bold">
+            <span><i class="fas fa-user-plus text-orange-500"></i> REGISTRATION</span>
+            <button id="regCamToggleBtn" class="cam-toggle off"><i class="fas fa-eye-slash"></i></button>
+          </div>
+          <div class="bg-slate-900 flex-1 relative flex items-center justify-center viewer">
+            <video id="liveWebcam" class="w-full h-full object-cover hidden" autoplay muted playsinline></video>
+            <div id="webcamEmpty" class="absolute inset-0 flex items-center justify-center text-white/40 text-[10px]">
+              Webcam đóng</div>
+          </div>
+        </div>
+      </div>
 
-                <!-- Camera Slot 4: Registration Hub -->
-                <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
-                    <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black"><i class="fas fa-user-plus text-orange-500"></i> REGISTER</span>
-                        <div class="flex gap-2">
-                            <button id="openWebcamBtn" class="webcam-toggle px-3 py-1 rounded text-[10px] font-bold bg-emerald-500 text-white shadow-sm">Open</button>
-                            <button id="registerBtn" class="bg-orange-500 text-white px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-orange-600 transition-all">New</button>
-                        </div>
-                    </div>
-                    <div class="bg-slate-50 flex-1 flex flex-col items-center justify-center p-6 text-center relative">
-                        <div class="absolute inset-0 flex items-center justify-center z-10" id="webcamEmpty">
-                            <div class="text-center">
-                                <i class="fas fa-id-card text-4xl text-slate-300 mb-2"></i>
-                                <p class="text-[10px] text-slate-400">Click "Open" để bắt đầu</p>
-                            </div>
-                        </div>
-                        <video id="liveWebcam" class="w-full h-full object-cover hidden" autoplay muted playsinline></video>
-                    </div>
-                </div>
-            </div>
+      <!-- Hàng dưới: ORIGINAL (trái) + PROCESSED (phải) -->
+      <div class="grid grid-cols-2 gap-3">
+        <!-- ORIGINAL (trái dưới) -->
+        <div class="card">
+          <div class="flex justify-between items-center px-3 py-2 bg-slate-50/80 border-b text-[10px] font-bold">
+            <span><i class="fas fa-eye text-emerald-500"></i> ORIGINAL</span>
+            <button id="originalToggleBtn" class="cam-toggle on"><i class="fas fa-eye"></i></button>
+          </div>
+          <div class="viewer relative">
+            <img id="originalVideo" class="w-full h-full object-cover" alt="original">
+            <div id="originalVideoEmpty"
+              class="absolute inset-0 bg-black/70 flex items-center justify-center text-white text-[9px] hidden">Camera
+              hidden</div>
+          </div>
+        </div>
+        <!-- PROCESSED (phải dưới) -->
+        <div class="card">
+          <div class="flex justify-between items-center px-3 py-2 bg-slate-50/80 border-b text-[10px] font-bold">
+            <span><i class="fas fa-brain text-pink-500"></i> PROCESSED</span>
+            <button id="processedToggleBtn" class="cam-toggle on"><i class="fas fa-eye"></i></button>
+          </div>
+          <div class="viewer relative">
+            <img id="processedVideo" class="w-full h-full object-cover" alt="processed">
+            <div id="processedVideoEmpty"
+              class="absolute inset-0 bg-black/70 flex items-center justify-center text-white text-[9px] hidden">AI view
+              hidden</div>
+          </div>
+        </div>
+      </div>
 
-            <!-- Technical Pipeline Monitor (Middle Bottom) -->
-            <div class="h-[280px] flex flex-col min-h-0 bg-white rounded-xl border p-4 shadow-sm">
-                <div class="flex items-center justify-between mb-3">
-                    <div class="flex items-center gap-2">
-                        <i class="fas fa-microchip text-blue-500"></i>
-                        <h3 class="text-xs font-bold uppercase tracking-tight text-slate-600">METRICS</h3>
-                    </div>
-                    <div class="flex gap-4 text-[10px] font-mono font-bold text-slate-400">
-                        <span id="metricCpu">FPS: --</span>
-                        <span id="metricGpu">BUF: OK</span>
-                        <button id="metricExportCsvBtn" class="text-blue-500 text-[9px] font-bold hover:underline ml-2">CSV</button>
-                    </div>
-                </div>
-                <div class="table-container flex-1 overflow-y-auto custom-scroll">
-                    <table class="w-full text-xs">
-                        <thead class="sticky top-0 z-10 bg-white">
-                            <tr>
-                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">CAM</th>
-                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">FPS</th>
-                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">FRM</th>
-                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">CONF</th>
-                                <th class="text-left p-2 w-16 text-slate-500 font-semibold">ADL</th>
-                            </tr>
-                        </thead>
-                        <tbody id="metricLogsBody">
-                            <tr><td colspan="6" class="text-center py-10 text-slate-300 italic">Chờ dữ liệu...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </main>
+      <!-- Bảng log kỹ thuật (giữ nguyên) -->
+      <div class="card flex flex-col h-[260px]">
+        <div class="flex justify-between items-center px-3 py-2 bg-slate-50/80 border-b text-[10px] font-bold">
+          <span><i class="fas fa-microchip"></i> CAMERA / PIPELINE LOGS</span>
+          <div class="flex gap-2">
+            <input id="metricSearchInput" type="text" placeholder="Filter..."
+              class="text-[9px] p-1 pl-5 rounded bg-slate-100">
+            <button id="metricExportCsvBtn" class="text-blue-600 text-[9px] font-bold">CSV</button>
+            <span id="mStatus" class="pill pill-blue">STANDBY</span>
+          </div>
+        </div>
+        <div class="overflow-y-auto custom-scroll flex-1">
+          <table class="bordered-table">
+            <thead>
+              <tr>
+                <th>CAM</th>
+                <th>FPS</th>
+                <th>FRAME</th>
+                <th>CONF</th>
+                <th>ADL</th>
+              </tr>
+            </thead>
+            <tbody id="metricLogsBody">
+              <tr>
+                <td colspan="5" class="text-center py-6 text-slate-300">Chờ dữ liệu...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
 
-        <!-- RIGHT: CLIPS & LIVE PREVIEW -->
-        <aside class="right-sidebar p-4 bg-white border-l flex flex-col gap-4 overflow-hidden">
-            <div class="flex items-center justify-between mb-2">
-                <h3 class="text-[11px] font-bold text-slate-500 uppercase tracking-widest"><i class="fas fa-layer-group"></i> CLIPS</h3>
-                <button id="batchProcessBtn" class="bg-pink-500 text-white px-2 py-1 rounded text-[9px] font-black uppercase shadow-sm hover:bg-pink-600">RUN</button>
-            </div>
-            
-            <div class="flex flex-col gap-2 mb-2 p-2 bg-slate-50 rounded-xl border border-slate-100">
-                <input type="file" id="multicamInput" class="hidden" webkitdirectory directory multiple>
-                <label for="multicamInput" class="btn-control ghost !py-1.5 w-full text-[10px] cursor-pointer hover:bg-blue-50 hover:text-blue-600 hover:border-blue-100 transition-all">
-                    <i class="fas fa-folder-open"></i> INGEST MULTICAM FOLDER
-                </label>
-            </div>
+    <!-- ================= CỘT PHẢI (Video Clips + Live Preview) ================= -->
+    <aside class="bg-white border-l p-3 flex flex-col gap-3 overflow-hidden">
+      <div class="flex justify-between items-center">
+        <span class="text-[10px] font-bold uppercase"><i class="fas fa-layer-group"></i> VIDEO CLIPS</span>
+        <button id="batchProcessBtn" class="btn-sm bg-pink-500 text-white">RUN</button>
+      </div>
+      <div id="clipQueue" class="flex-1 overflow-y-auto custom-scroll space-y-2">
+        <div class="text-center text-slate-300 text-[10px] py-6">Chưa có clip</div>
+      </div>
+      <div class="border-t pt-2">
+        <div class="text-[9px] font-bold mb-1">LIVE PREVIEW</div>
+        <div class="bg-slate-900 rounded-xl aspect-video relative overflow-hidden">
+          <video id="previewVideoLocal" class="w-full h-full object-cover" controls></video>
+          <div id="previewVideoEmpty"
+            class="absolute inset-0 flex items-center justify-center text-white/40 text-[10px]">Chọn clip để xem</div>
+        </div>
+        <div id="outputDirLabel" class="text-[9px] text-slate-400 mt-1 truncate">NO SELECTION</div>
+      </div>
+    </aside>
+  </div>
 
-            <!-- Clip Queue -->
-            <div id="clipQueue" class="flex-1 overflow-y-auto custom-scroll -mx-2 px-2 flex flex-col gap-3">
-                <div class="viewer-empty opacity-40 text-[10px] !h-32">Chưa có clip xử lý</div>
-            </div>
-
-            <div class="divider h-px bg-slate-100"></div>
-
-            <!-- Live Preview / Selection -->
-            <div class="h-[240px] bg-slate-900 rounded-2xl overflow-hidden relative shadow-2xl group border-[3px] border-slate-200">
-                <div class="absolute top-3 left-3 z-10 flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-pink-500 animate-pulse"></span>
-                    <span id="outputDirLabel" class="text-[9px] text-white font-black uppercase tracking-widest bg-black/40 px-2 py-1 rounded backdrop-blur-md">Live Preview</span>
-                </div>
-                <!-- Video Element -->
-                <video id="previewVideoLocal" class="w-full h-full object-cover" controls></video>
-                <div id="previewVideoEmpty" class="absolute inset-0 flex flex-col items-center justify-center text-white text-[10px] font-black opacity-30 gap-2 bg-slate-950">
-                    <i class="fas fa-play-circle text-2xl"></i>
-                    NO SELECTION
-                </div>
-            </div>
-        </aside>
-
-        <!-- Modals for Registration Flow (Remains standard as previously implemented) -->
-        <div id="regSourceModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] hidden items-center justify-center p-6">... (Logic remains same)</div>
-        <div id="regInfoModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] hidden items-center justify-center p-6">...</div>
-        <div id="regCaptureModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] hidden items-center justify-center p-6">...</div>
-
+  <!-- Registration Modals (giữ nguyên) -->
+  <div id="regSourceModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-5 w-96">
+      <h3 class="font-bold mb-3">Chọn nguồn đăng ký</h3>
+      <div class="flex gap-4 mb-4"><label><input type="radio" name="reg_source" value="local" checked>
+          Webcam</label><label><input type="radio" name="reg_source" value="rtsp"> RTSP</label></div>
+      <div id="rtspSelectGroup" class="hidden mb-4"><select id="regRtspSelect"
+          class="border rounded p-1 w-full text-sm"></select></div>
+      <div class="flex gap-2"><button id="closeRegSourceBtn" class="btn-sm bg-gray-300">Hủy</button><button
+          id="toRegInfoBtn" class="btn-sm bg-blue-600 text-white">Tiếp</button></div>
     </div>
+  </div>
+  <div id="regInfoModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-5 w-96">
+      <h3 class="font-bold mb-3">Thông tin</h3>
+      <input id="regUserName" placeholder="Tên" class="border rounded p-2 w-full mb-2 text-sm">
+      <input id="regUserAge" type="number" placeholder="Tuổi" class="border rounded p-2 w-full mb-2 text-sm">
+      <input id="regUserId" readonly class="border rounded p-2 w-full bg-slate-100 text-sm">
+      <div class="flex gap-2 mt-3"><button id="backToSourceBtn" class="btn-sm bg-gray-300">Quay lại</button><button
+          id="startCaptureBtn" class="btn-sm bg-blue-600 text-white">Bắt đầu chụp</button></div>
+    </div>
+  </div>
+  <div id="regCaptureModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+    <div class="bg-white rounded-xl p-4 w-[800px] flex gap-4">
+      <div class="flex-1 bg-black rounded"><img id="regSnapshot" class="w-full object-contain"></div>
+      <div class="w-60">
+        <div class="font-bold text-center" id="regDisplayTitle">ID: ---</div>
+        <div class="text-center text-2xl font-bold text-blue-600" id="regTotalPct">0%</div><button id="stopRegBtn"
+          class="btn-sm bg-red-500 text-white w-full mt-4">Dừng</button>
+      </div>
+    </div>
+  </div>
 
-    <!-- Modals (Re-inserting full Registration Modals content for completeness) -->
-    <!-- [MODAL LOGIC REMOVED FOR BREVITY IN RESPONSE BUT PRESENT IN FINAL] -->
+  <script>
+    // ---------------------------- STATE & GLOBALS ----------------------------
+    const DUMMY = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+    let state = {
+      system: { running: false, mode: 'idle', resourcesLoaded: false, folderLoaded: false },
+      preview: { multicamVisible: false, originalVisible: true, processedVisible: true, registrationVisible: false },
+      cameras: { rtspList: [], activeRtspCam: null, registrationCamOpen: false, registrationStream: null },
+      clips: [],
+      eventLogs: [],
+      metricLogs: [],
+      maxLogs: 300,
+      selectedClip: null,
+      polling: { multicam: null, original: null, processed: null },
+      registration: { sessionId: null, isCapturing: false, nextUserId: 1, currentUser: null }
+    };
+    let socket = io();
 
-    <div id="toasts" class="fixed bottom-6 right-6 z-[200] flex flex-col gap-3 pointer-events-none"></div>
+    // ---------------------------- HELPERS ----------------------------
+    const $ = id => document.getElementById(id);
+    function nowStr() { return new Date().toLocaleTimeString('vi-VN', { hour12: false }); }
+    function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t ?? ''; return d.innerHTML; }
+    function showToast(msg, type = 'info') { const t = document.createElement('div'); t.className = `fixed bottom-4 right-4 bg-white shadow-lg rounded-lg p-2 text-xs border-l-4 ${type === 'success' ? 'border-green-500' : 'border-red-500'} z-50`; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 3000); }
+    function resetFileInput(id) { $(id).value = ''; }
 
-    <script src="static/js/app.js"></script>
-    <script src="static/js/registration.js"></script>
+    function updateRecLamp(st) {
+      const led = $('#recLed'); const text = $('#recLedText');
+      led.className = 'rec-led';
+      if (st === 'off') { led.classList.add('off'); text.innerText = 'OFF'; }
+      else if (st === 'ready') { led.classList.add('ready'); text.innerText = 'READY'; }
+      else if (st === 'recording') { led.classList.add('recording'); text.innerText = 'REC'; }
+    }
+    function updateMainStatus(txt) { $('#mStatus').innerHTML = txt; }
+
+    function pushEventLog(ev, cam = '--') { state.eventLogs.unshift({ time: nowStr(), event: ev, cam }); if (state.eventLogs.length > state.maxLogs) state.eventLogs.pop(); renderLeftEventTable(); }
+    function renderLeftEventTable() {
+      const q = $('#leftEventSearch').value.trim().toLowerCase();
+      const rows = state.eventLogs.filter(r => !q || `${r.time} ${r.event} ${r.cam}`.toLowerCase().includes(q));
+      const tbody = $('#leftEventTableBody');
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-slate-300">Không có sự kiện</td></tr>'; return; }
+      tbody.innerHTML = rows.map(r => `<tr><td class="font-mono">${r.time}</td><td>${escapeHtml(r.event)}</td><td class="text-center"><span class="bg-blue-100 px-1 rounded">${r.cam}</span></td></tr>`).join('');
+    }
+    function pushMetricLog(d) { state.metricLogs.unshift(d); if (state.metricLogs.length > state.maxLogs) state.metricLogs.pop(); renderMetricTable(); }
+    function renderMetricTable() {
+      const q = $('#metricSearchInput').value.trim().toLowerCase();
+      const rows = state.metricLogs.filter(r => !q || JSON.stringify(r).toLowerCase().includes(q));
+      const tbody = $('#metricLogsBody');
+      if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-slate-300">Chờ dữ liệu...</td></tr>'; return; }
+      tbody.innerHTML = rows.map(r => `<tr><td class="font-bold">${r.cam}</td><td>${r.fps}</td><td>${r.frame}</td><td>${r.conf}</td><td class="uppercase">${r.adl}</td></tr>`).join('');
+    }
+    function downloadCsv(filename, headers, rows) { const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`; const content = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n'); const blob = new Blob(['\ufeff' + content], { type: 'text/csv' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href); }
+    $('#leftExportCsvBtn').onclick = () => downloadCsv('events.csv', ['TIME', 'EVENT', 'CAM'], state.eventLogs.map(l => [l.time, l.event, l.cam]));
+    $('#metricExportCsvBtn').onclick = () => downloadCsv('tech_logs.csv', ['CAM', 'FPS', 'FRAME', 'CONF', 'ADL'], state.metricLogs.map(l => [l.cam, l.fps, l.frame, l.conf, l.adl]));
+
+    // ---------------------------- MULTICAM / RESOURCES ----------------------------
+    async function handleResourcesUpload(e) {
+      const file = e.target.files[0];
+      if (!file || !file.name.endsWith('.txt')) { showToast('Chỉ chấp nhận .txt', 'error'); resetFileInput('resourcesInput'); return; }
+      if (state.system.running) { showToast('Pipeline đang chạy, không thể load resources', 'error'); return; }
+      try {
+        const fd = new FormData(); fd.append('file', file);
+        const res = await fetch('/api/config/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        state.cameras.rtspList = data.cameras || [];
+        state.system.resourcesLoaded = true;
+        state.system.folderLoaded = false;
+        state.system.mode = 'rtsp';
+        const sel = $('#slotSel1'); sel.innerHTML = state.cameras.rtspList.map(c => `<option value="${c.cam_id}">${c.label || c.cam_id}</option>`).join('');
+        updateRecLamp('ready');
+        pushEventLog(`Loaded ${state.cameras.rtspList.length} cameras`, 'SYS');
+        showToast('Resources loaded', 'success');
+      } catch (err) { showToast(err.message, 'error'); } finally { resetFileInput('resourcesInput'); }
+    }
+    function toggleMulticamPreview() {
+      if (!state.system.resourcesLoaded && !state.system.folderLoaded) { showToast('Chưa có nguồn multicam', 'error'); return; }
+      const img = $('#slotSnap1'), empty = $('#slotEmpty1'), btn = $('#toggleRtspPreviewBtn'), toggleBtn = $('#multicamToggleBtn');
+      if (state.preview.multicamVisible) {
+        state.preview.multicamVisible = false;
+        clearInterval(state.polling.multicam); state.polling.multicam = null;
+        img.classList.add('hidden'); empty.classList.remove('hidden');
+        btn.innerText = 'Show';
+        toggleBtn.innerHTML = '<i class="fas fa-eye-slash"></i>'; toggleBtn.className = 'cam-toggle off';
+      } else {
+        state.preview.multicamVisible = true;
+        empty.classList.add('hidden'); img.classList.remove('hidden');
+        btn.innerText = 'Hide';
+        toggleBtn.innerHTML = '<i class="fas fa-eye"></i>'; toggleBtn.className = 'cam-toggle on';
+        const camId = $('#slotSel1').value;
+        if (camId && state.system.resourcesLoaded) {
+          state.polling.multicam = setInterval(() => { img.src = `/api/cameras/${camId}/snapshot?t=${Date.now()}`; }, 400);
+        } else if (state.system.folderLoaded && state.clips.length) {
+          const clip = state.clips[0]; if (clip?.url) img.src = clip.url;
+        }
+      }
+    }
+    async function handleMulticamFolderUpload(e) {
+      const files = Array.from(e.target.files || []);
+      const videoFiles = files.filter(f => /\.(mp4|avi|mov)$/i.test(f.name));
+      if (!videoFiles.length) { showToast('Folder không có video', 'error'); return; }
+      if (state.system.running) { showToast('Pipeline đang chạy', 'error'); return; }
+      const parsed = videoFiles.map(f => ({ id: Math.random().toString(36), file: f, name: f.name, url: URL.createObjectURL(f), cam: 'UNK', status: 'ready', progress: 0, sourceType: 'multicam_file' }));
+      if (state.clips.length) state.clips.forEach(c => { if (c.url?.startsWith('blob:')) URL.revokeObjectURL(c.url); });
+      state.clips = parsed;
+      state.system.folderLoaded = true;
+      state.system.resourcesLoaded = false;
+      state.system.mode = 'multicam_folder';
+      updateRecLamp('ready');
+      renderClipQueue();
+      pushEventLog(`Loaded ${parsed.length} multicam clips`, 'SYS');
+      showToast('Folder loaded', 'success');
+      resetFileInput('multicamInput');
+    }
+    function renderClipQueue() {
+      const q = $('#clipQueue');
+      if (!state.clips.length) { q.innerHTML = '<div class="text-center text-slate-300 text-[10px] py-4">Chưa có clip</div>'; return; }
+      q.innerHTML = state.clips.map(c => `<div class="bg-slate-50 rounded-lg p-2 text-[10px] border" data-id="${c.id}"><div class="font-bold truncate">${c.name}</div><div class="flex justify-between"><span>${c.cam}</span><span class="pill ${c.status === 'ready' ? 'pill-green' : 'pill-blue'}">${c.status}</span></div><div class="w-full bg-gray-200 h-1 mt-1"><div class="bg-pink-500 h-1" style="width:${c.progress || 0}%"></div></div><button class="preview-clip-btn text-blue-600 text-[9px] mt-1" data-id="${c.id}">Preview</button></div>`).join('');
+      q.querySelectorAll('.preview-clip-btn').forEach(btn => btn.onclick = () => selectClipPreview(btn.dataset.id));
+    }
+    function selectClipPreview(id) {
+      const clip = state.clips.find(c => c.id === id);
+      if (!clip) return;
+      const video = $('#previewVideoLocal'), empty = $('#previewVideoEmpty');
+      empty.classList.add('hidden'); video.classList.remove('hidden');
+      video.src = clip.url; video.play().catch(e => console.log);
+      $('#outputDirLabel').innerText = `Playing: ${clip.name}`;
+    }
+    // ---------------------------- ORIGINAL / PROCESSED TOGGLE (camera riêng) ----------------------------
+    function toggleOriginal() {
+      const img = $('#originalVideo'), empty = $('#originalVideoEmpty'), btn = $('#originalToggleBtn');
+      if (state.preview.originalVisible) {
+        state.preview.originalVisible = false;
+        clearInterval(state.polling.original); state.polling.original = null;
+        img.classList.add('hidden'); empty.classList.remove('hidden');
+        btn.innerHTML = '<i class="fas fa-eye-slash"></i>'; btn.className = 'cam-toggle off';
+      } else {
+        state.preview.originalVisible = true;
+        empty.classList.add('hidden'); img.classList.remove('hidden');
+        if (!state.polling.original) state.polling.original = setInterval(() => { $('#originalVideo').src = `/api/pose/snapshot/original?t=${Date.now()}`; }, 300);
+        btn.innerHTML = '<i class="fas fa-eye"></i>'; btn.className = 'cam-toggle on';
+      }
+    }
+    function toggleProcessed() {
+      const img = $('#processedVideo'), empty = $('#processedVideoEmpty'), btn = $('#processedToggleBtn');
+      if (state.preview.processedVisible) {
+        state.preview.processedVisible = false;
+        clearInterval(state.polling.processed); state.polling.processed = null;
+        img.classList.add('hidden'); empty.classList.remove('hidden');
+        btn.innerHTML = '<i class="fas fa-eye-slash"></i>'; btn.className = 'cam-toggle off';
+      } else {
+        state.preview.processedVisible = true;
+        empty.classList.add('hidden'); img.classList.remove('hidden');
+        if (!state.polling.processed) state.polling.processed = setInterval(() => { $('#processedVideo').src = `/api/pose/snapshot/processed?t=${Date.now()}`; }, 300);
+        btn.innerHTML = '<i class="fas fa-eye"></i>'; btn.className = 'cam-toggle on';
+      }
+    }
+    // ---------------------------- WEBCAM TOGGLE (Registration) ----------------------------
+    async function toggleRegistrationWebcam() {
+      const video = $('#liveWebcam'), empty = $('#webcamEmpty'), btn = $('#openWebcamBtn'), toggleBtn = $('#regCamToggleBtn');
+      if (state.cameras.registrationCamOpen) {
+        if (state.cameras.registrationStream) state.cameras.registrationStream.getTracks().forEach(t => t.stop());
+        video.srcObject = null; video.classList.add('hidden'); empty.classList.remove('hidden');
+        state.cameras.registrationCamOpen = false; btn.innerText = 'Open'; btn.classList.remove('bg-red-500'); btn.classList.add('bg-emerald-500');
+        toggleBtn.innerHTML = '<i class="fas fa-eye-slash"></i>'; toggleBtn.className = 'cam-toggle off';
+        pushEventLog('Webcam closed', 'REG');
+      } else {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          video.srcObject = stream; video.classList.remove('hidden'); empty.classList.add('hidden');
+          state.cameras.registrationCamOpen = true; state.cameras.registrationStream = stream;
+          btn.innerText = 'Close'; btn.classList.remove('bg-emerald-500'); btn.classList.add('bg-red-500');
+          toggleBtn.innerHTML = '<i class="fas fa-eye"></i>'; toggleBtn.className = 'cam-toggle on';
+          pushEventLog('Webcam opened', 'REG');
+        } catch (err) { showToast('Cannot open webcam', 'error'); }
+      }
+    }
+    // ---------------------------- START / STOP PIPELINE ----------------------------
+    async function startPipeline() {
+      if (state.system.running) { showToast('Pipeline đang chạy', 'warning'); return; }
+      if (!state.system.resourcesLoaded && !state.system.folderLoaded) { showToast('Chưa có nguồn (resources.txt hoặc folder)', 'error'); return; }
+      const mode = state.system.resourcesLoaded ? 'rtsp' : 'multicam_folder';
+      const payload = { mode, cameras: state.cameras.rtspList.map(c => c.cam_id) };
+      try {
+        const res = await fetch('/api/pose/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!res.ok) throw new Error(await res.text());
+        state.system.running = true; updateRecLamp('recording'); updateMainStatus('RUNNING');
+        pushEventLog(`Pipeline started (${mode})`, 'SYS');
+        if (state.preview.originalVisible && !state.polling.original) toggleOriginal();
+        if (state.preview.processedVisible && !state.polling.processed) toggleProcessed();
+      } catch (err) { showToast(err.message, 'error'); }
+    }
+    async function stopAll() {
+      if (!state.system.running) return;
+      await fetch('/api/pose/stop', { method: 'POST' }).catch(() => { });
+      state.system.running = false; updateRecLamp('ready'); updateMainStatus('STANDBY');
+      pushEventLog('Pipeline stopped', 'SYS');
+      clearInterval(state.polling.original); clearInterval(state.polling.processed); state.polling.original = state.polling.processed = null;
+    }
+    // ---------------------------- REGISTRATION FLOW ----------------------------
+    async function openRegistrationFlow() {
+      try { const res = await fetch('/api/registration/next_id'); const data = await res.json(); state.registration.nextUserId = data.next_id || 1; } catch (e) { }
+      $('#regUserId').value = String(state.registration.nextUserId).padStart(4, '0');
+      $('#regSourceModal').classList.remove('hidden'); $('#regSourceModal').classList.add('flex');
+    }
+    $('#closeRegSourceBtn').onclick = () => $('#regSourceModal').classList.add('hidden');
+    $('#toRegInfoBtn').onclick = () => { $('#regSourceModal').classList.add('hidden'); $('#regInfoModal').classList.remove('hidden'); $('#regInfoModal').classList.add('flex'); };
+    $('#backToSourceBtn').onclick = () => { $('#regInfoModal').classList.add('hidden'); $('#regSourceModal').classList.remove('hidden'); };
+    $('#startCaptureBtn').onclick = async () => {
+      const name = $('#regUserName').value.trim(), age = parseInt($('#regUserAge').value);
+      if (!name) { showToast('Nhập tên', 'error'); return; }
+      if (isNaN(age) || age <= 0) { showToast('Tuổi không hợp lệ', 'error'); return; }
+      const source = document.querySelector('input[name="reg_source"]:checked')?.value;
+      if (source === 'local' && !state.cameras.registrationCamOpen) { showToast('Mở webcam trước', 'error'); return; }
+      const payload = { source, name, age, person_id: state.registration.nextUserId };
+      try {
+        const res = await fetch('/api/registration/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        state.registration.sessionId = data.session_id;
+        state.registration.isCapturing = true;
+        state.registration.currentUser = { id: state.registration.nextUserId, name, age };
+        $('#regInfoModal').classList.add('hidden');
+        $('#regCaptureModal').classList.remove('hidden'); $('#regCaptureModal').classList.add('flex');
+        $('#regDisplayTitle').innerText = `ID: ${state.registration.nextUserId} | ${name} | ${age}`;
+        const interval = setInterval(() => { if (state.registration.sessionId) $('#regSnapshot').src = `/api/registration/snapshot/${state.registration.sessionId}?t=${Date.now()}`; }, 200);
+        window._regInterval = interval;
+        state.registration.nextUserId++;
+      } catch (err) { showToast(err.message, 'error'); }
+    };
+    $('#stopRegBtn').onclick = async () => {
+      if (state.registration.sessionId) await fetch('/api/registration/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: state.registration.sessionId }) });
+      state.registration.isCapturing = false; state.registration.sessionId = null;
+      if (window._regInterval) clearInterval(window._regInterval);
+      $('#regCaptureModal').classList.add('hidden');
+      pushEventLog('Registration stopped', 'REG');
+    };
+    // ---------------------------- SOCKET HANDLERS ----------------------------
+    socket.on('connect', () => pushEventLog('Socket connected', 'SYS'));
+    socket.on('rec_status', (d) => { updateRecLamp(d?.is_recording ? 'recording' : 'ready'); });
+    socket.on('clip_saved', (d) => { state.clips.unshift({ id: Date.now().toString(), name: d.filename, cam: d.cam_id || 'UNK', url: d.url || '', status: 'ready', progress: 0, sourceType: 'rtsp_short' }); renderClipQueue(); pushEventLog(`New clip: ${d.filename}`, d.cam_id); });
+    socket.on('pose_progress', (d) => { pushMetricLog({ cam: d.cam_id || '--', fps: d.fps || 0, frame: d.frame || 0, conf: d.conf ? (d.conf * 100).toFixed(0) + '%' : '--', adl: d.adl || '--' }); });
+    socket.on('analysis_progress', (d) => { pushMetricLog({ cam: '--', fps: '--', frame: `${d.frame_id}/${d.total_frames}`, conf: '--', adl: '--' }); });
+    socket.on('registration_done', (d) => { if (d.status === 'success') showToast('Đăng ký thành công!', 'success'); pushEventLog(`Registration ${d.status}`, 'REG'); $('#regCaptureModal').classList.add('hidden'); state.registration.isCapturing = false; });
+    // ---------------------------- EVENT BINDINGS ----------------------------
+    $('#resourcesInput').addEventListener('change', handleResourcesUpload);
+    $('#multicamInput').addEventListener('change', handleMulticamFolderUpload);
+    $('#toggleRtspPreviewBtn').addEventListener('click', toggleMulticamPreview);
+    $('#multicamToggleBtn').addEventListener('click', toggleMulticamPreview);
+    $('#originalToggleBtn').addEventListener('click', toggleOriginal);
+    $('#processedToggleBtn').addEventListener('click', toggleProcessed);
+    $('#openWebcamBtn').addEventListener('click', toggleRegistrationWebcam);
+    $('#regCamToggleBtn').addEventListener('click', toggleRegistrationWebcam);
+    $('#registerBtn').addEventListener('click', openRegistrationFlow);
+    $('#startBtn').addEventListener('click', startPipeline);
+    $('#stopBtn').addEventListener('click', stopAll);
+    $('#batchProcessBtn').addEventListener('click', startPipeline);
+    $('#refreshBtn').addEventListener('click', () => pushEventLog('Manual sync', 'SYS'));
+    $('#leftEventSearch').addEventListener('input', renderLeftEventTable);
+    $('#metricSearchInput').addEventListener('input', renderMetricTable);
+    // Initial render
+    pushEventLog('Hệ thống đã sẵn sàng', 'SYS');
+    updateRecLamp('off');
+    renderClipQueue();
+    // Đảm bảo các preview polling khởi tạo đúng trạng thái
+    if (state.preview.originalVisible) toggleOriginal();
+    if (state.preview.processedVisible) toggleProcessed();
+  </script>
 </body>
+
 </html>

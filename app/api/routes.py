@@ -32,9 +32,16 @@ def _on_request_registration(clip_stem, cam_id):
     return ws_handlers.request_face_registration(clip_stem, cam_id)
 
 
-_recorder = RecorderManager()
+from flask import current_app
+
+# Các helper để lấy service từ app config (đã được init trong app_factory)
+def get_recorder() -> RecorderManager:
+    return current_app.config["recorder"]
+
+def get_pose() -> RecognizerService:
+    return current_app.config["recognizer"]
+
 _analyzer = Analyzer()
-_pose = RecognizerService(socket_callback=_on_socket_emit, registration_callback=_on_request_registration)
 _storage = StorageManager()
 _prober = StreamProber()
 _registration = RegistrationManager()
@@ -145,7 +152,7 @@ def probe_camera():
 
     return jsonify({
         "cam_id": cam_id,
-        "url": url,
+        "rtsp_url": url,
         "width": info["width"],
         "height": info["height"],
         "fps": info["fps"],
@@ -159,7 +166,7 @@ def camera_snapshot(cam_id: str):
     Nếu camera chưa chạy hoặc chưa có frame nào, trả về HTTP 204 No Content.
     Dùng để hiển thị live view trên giao diện web.
     """
-    jpeg = _recorder.get_snapshot(cam_id)
+    jpeg = get_recorder().get_snapshot(cam_id)
     if jpeg is None:
         return Response(status=204)
 
@@ -178,7 +185,7 @@ def cameras_live_status():
     """
     Trả về trạng thái live của tất cả các camera đang chạy.
     """
-    return jsonify({"cameras": _recorder.camera_status_list()})
+    return jsonify({"cameras": get_recorder().camera_status_list()})
 
 @api_bp.route("/recording/start", methods=["POST"])
 def start_recording():
@@ -214,7 +221,7 @@ def start_recording():
     if not cameras:
         return jsonify({"error": "No valid cameras found or specified"}), 400
 
-    if _recorder.is_running():
+    if get_recorder().is_running():
         return jsonify({"error": "Recording is already running"}), 409
 
     phase1_cfg = body.get("phase1_config", {})
@@ -222,7 +229,7 @@ def start_recording():
     from flask import current_app
     on_clip_ready = current_app.config.get("on_clip_ready_cb")
 
-    _recorder.start(
+    get_recorder().start(
         cameras=cameras,
         storage_limit_gb=storage_limit_gb,
         output_dir=_app_module.RAW_VIDEOS_DIR,
@@ -239,7 +246,7 @@ def stop_recording():
     """
     Dừng quá trình ghi hình đang chạy (Phase 1).
     """
-    _recorder.stop()
+    get_recorder().stop()
     return jsonify({"message": "Recording stopped"})
 
 
@@ -248,7 +255,7 @@ def recording_status():
     """
     Lấy trạng thái hiện tại của quá trình ghi hình.
     """
-    return jsonify(_recorder.status())
+    return jsonify(get_recorder().status())
 
 @api_bp.route("/videos", methods=["GET"])
 def list_videos():
@@ -331,37 +338,46 @@ def start_pose():
     Bắt đầu quá trình nhận diện Pose và ADL (Phase 3).
     Có thể chọn thư mục video đầu vào và bật/tắt việc lưu video overlay.
     """
-    body = request.get_json(force=True, silent=True) or {}
-    video_dir = _resolve_dir(body.get("folder"), _app_module.RAW_VIDEOS_DIR)
-    save_overlay = bool(body.get("save_overlay", True))
+    mode = body.get("mode", "multicam_folder") # "rtsp" | "multicam_folder"
+    cameras_req = body.get("cameras", [])
 
-    if not video_dir.is_dir():
-        return jsonify({"error": f"Directory not found: {video_dir}"}), 400
+    if mode == "rtsp":
+        # RTSP mode starts the recorder, which will then trigger the recognizer via callback
+        all_cams = _storage.parse_resources(_app_module.RESOURCES_FILE)
+        selected_cams = [c for c in all_cams if c.get("cam_id") in cameras_req]
+        if not selected_cams:
+            return jsonify({"error": "No valid cameras for RTSP mode"}), 400
+        
+        get_recorder().start(
+            cameras=selected_cams,
+            storage_limit_gb=float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB)),
+            output_dir=_app_module.RAW_VIDEOS_DIR,
+            model_path=_app_module.MODEL_PHASE1,
+            on_clip_ready=current_app.config.get("on_clip_ready_cb")
+        )
+        return jsonify({"status": "started", "mode": "rtsp", "cameras": len(selected_cams)})
+    
+    else:
+        # Folder mode reads existing files and enqueues them
+        video_dir = _resolve_dir(body.get("folder"), _app_module.RAW_VIDEOS_DIR)
+        if not video_dir.is_dir():
+            return jsonify({"error": f"Directory not found: {video_dir}"}), 400
 
-    if _pose.is_running():
-        return jsonify({"error": "Pose analysis is already running"}), 409
+        clips = sort_multicam_clips(video_dir.glob("*.mp4"))
+        if not clips:
+            return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
 
-    clips = sort_multicam_clips(video_dir.glob("*.mp4"))
-    if not clips:
-        return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
+        # Enqueue clips in order
+        recognizer = get_pose()
+        for clip in clips:
+            cam_id = _app_module.extract_multicam_camera_id(clip) or "unknown"
+            recognizer.enqueue_clip(cam_id, clip)
 
-    _pose.start(
-        clips=clips,
-        output_dir=_app_module.OUTPUT_POSE_DIR,
-        model_path=_app_module.MODEL_PHASE3,
-        config_path=_app_module.POSE_CONFIG_FILE,
-        save_overlay=save_overlay,
-    )
-    pose_state = _json_safe(_pose.status())
-
-    return jsonify({
-        "status": "started",
-        "total_clips": len(clips),
-        "save_overlay": save_overlay,
-        "lamp_state": pose_state.get("lamp_state", {}),
-        "clip_queue": pose_state.get("clip_queue", []),
-        "active_camera": pose_state.get("active_camera", ""),
-    })
+        return jsonify({
+            "status": "started",
+            "mode": "multicam_folder",
+            "total_clips": len(clips)
+        })
 
 
 @api_bp.route("/pose/stop", methods=["POST"])
@@ -369,8 +385,9 @@ def stop_pose():
     """
     Yêu cầu dừng quá trình nhận diện Pose và ADL đang chạy (Phase 3).
     """
-    _pose.stop()
-    return jsonify({"status": "stop_requested"})
+    get_pose().stop()
+    get_recorder().stop()
+    return jsonify({"status": "stopped"})
 
 
 @api_bp.route("/pose/status", methods=["GET"])
@@ -378,7 +395,7 @@ def pose_status():
     """
     Lấy trạng thái hiện tại của quá trình Pose & ADL recognition (Phase 3).
     """
-    return jsonify(_json_safe(_pose.status()))
+    return jsonify(_json_safe(get_pose().get_status()))
 
 
 @api_bp.route("/pose/results", methods=["GET"])
@@ -401,7 +418,7 @@ def pose_snapshot(view: str):
     if view not in ("original", "processed"):
         return jsonify({"error": "Invalid view type"}), 400
 
-    jpeg = _pose.get_snapshot(view)
+    jpeg = get_pose().get_snapshot(view)
     if jpeg is None:
         return Response(status=204)
 
@@ -427,7 +444,7 @@ def save_pose_result():
     if not clip_stem:
         return jsonify({"error": "clip_stem is required"}), 400
     
-    result = _pose.save_pending_result(clip_stem)
+    result = get_pose().save_pending_result(clip_stem)
     if "error" in result:
         return jsonify(result), 400
     
@@ -439,7 +456,7 @@ def pose_pending_results():
     """
     Get all pending results waiting to be saved by user.
     """
-    pending = _json_safe(_pose.pending_results())
+    pending = _json_safe(get_pose().pending_results())
     return jsonify({"pending_results": pending})
 
 
@@ -485,7 +502,7 @@ def set_storage_limit():
     if limit_gb <= 0:
         return jsonify({"error": "limit_gb must be greater than zero"}), 400
 
-    _recorder.set_storage_limit(limit_gb)
+    get_recorder().set_storage_limit(limit_gb)
     return jsonify({"message": f"Storage limit updated to {limit_gb:.2f} GB"})
 
 
@@ -535,7 +552,7 @@ def start_registration():
     def on_done(data):
         _on_socket_emit("registration_done", data)
         if data.get("status") == "success":
-            _pose.refresh_face_database()
+            get_pose().refresh_face_database()
 
     session_id = _registration.start_session(
         source=camera_source,

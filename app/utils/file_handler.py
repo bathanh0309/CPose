@@ -166,7 +166,7 @@ class StorageManager:
             cameras.append({
                 "cam_id": f"{camera_idx:02d}",
                 "label": label,
-                "url": url
+                "rtsp_url": url
             })
             camera_idx += 1
 

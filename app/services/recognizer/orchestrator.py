@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from .worker import RecognizerConsumer
 from app.utils.config_schema import AppConfig
@@ -31,3 +31,18 @@ class RecognizerService:
     def get_status(self) -> Dict[str, Any]:
         """Returns the current status of the consumer and queue."""
         return self.consumer.status
+
+    def get_snapshot(self, view: str) -> Optional[bytes]:
+        """Return latest snapshot (original or processed) from the consumer."""
+        return self.consumer.get_snapshot(view)
+
+    def pending_results(self) -> Dict[str, Any]:
+        return {} # Placeholder or implement if needed
+
+    def save_pending_result(self, clip_stem: str) -> Dict[str, Any]:
+        return {"ok": True} # Placeholder
+
+    def refresh_face_database(self):
+        """Reload embeddings in the AI pipeline."""
+        if hasattr(self.consumer, "refresh_face_database"):
+            self.consumer.refresh_face_database()

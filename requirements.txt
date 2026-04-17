@@ -93,7 +93,7 @@ loguru==0.7.3                # Logging nâng cao, rotation, structured log
 # -----------------------------------------------------------------------------
 # [12] DEV / TESTING (không cần trên production/embedded)
 # -----------------------------------------------------------------------------
-pytest==8.3.4                # Test runner
+pytest==9.0.3                # Test runner
 pytest-asyncio==0.24.0       # Test async FastAPI endpoints
 httpx==0.28.1                # Test HTTP client (đã khai báo trên, bỏ qua nếu trùng)
 

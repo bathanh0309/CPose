@@ -112,7 +112,7 @@ async function startCaptureStep() {
             toggleModal('regInfoModal', false);
             toggleModal('regCaptureModal', true);
             startCapturePolling();
-            logSummary(`Bắt đầu đăng ký: ${regState.name}`, "REG");
+            pushEventLog(`Bắt đầu đăng ký: ${regState.name}`, "REG");
         } else {
             throw new Error(data.error);
         }
@@ -131,7 +131,7 @@ async function stopRegistrationCapture() {
         });
         stopCapturePolling();
         toggleModal('regCaptureModal', false);
-        logSummary(`Dừng đăng ký: ${regState.name}`, "REG");
+        pushEventLog(`Dừng đăng ký: ${regState.name}`, "REG");
     } catch (err) {
         console.error(err);
     }
@@ -169,7 +169,7 @@ function startCapturePolling() {
         if (data.status === 'success') {
             updateRegProgress(100);
             showToast(`Đăng ký thành công: ${regState.name}`, "success");
-            logSummary(`Hoàn tất đăng ký: ${regState.name}`, "REG");
+            pushEventLog(`Hoàn tất đăng ký: ${regState.name}`, "REG");
             setTimeout(() => toggleModal('regCaptureModal', false), 1500);
         } else {
             showToast(`Lỗi đăng ký: ${data.message}`, "danger");

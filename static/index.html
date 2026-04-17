@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPose Studio | Intelligent Pose System</title>
+    <title>CPose</title>
     
     <!-- Scripts & Styles -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -43,43 +43,42 @@
             </div>
 
             <!-- Main Pipeline Actions -->
-            <div class="flex flex-col gap-2 mb-6">
-                <button id="startRecBtn" class="btn-control primary w-full shadow-lg shadow-blue-100">
-                    <i class="fas fa-play text-[10px]"></i> START RECORDER
+            <div class="flex gap-2 mb-4">
+                <button id="startRecBtn" class="btn-control primary flex-1 py-2 text-sm shadow-sm">
+                    <i class="fas fa-play text-[10px]"></i> REC
                 </button>
-                <button id="startAnalysisBtn" class="btn-control ghost w-full font-bold text-blue-600 border-blue-100 italic">
-                    <i class="fas fa-microchip text-[10px]"></i> START ANALYZER
+                <button id="startAnalysisBtn" class="btn-control ghost flex-1 py-2 text-sm border-blue-100">
+                    <i class="fas fa-microchip"></i> ADL
                 </button>
-                <div class="grid grid-cols-2 gap-2 mt-1">
-                    <button id="stopAllBtn" class="btn-control danger !py-1.5 text-xs">STOP ALL</button>
-                    <button id="refreshBtn" class="btn-control ghost !py-1.5 text-xs"><i class="fas fa-sync"></i> SYNC</button>
-                </div>
+                <button id="stopAllBtn" class="btn-control danger flex-1 py-2 text-sm">■ STOP</button>
+            </div>
+            <div class="grid grid-cols-2 gap-2 mb-6">
+                <button id="refreshBtn" class="btn-control ghost !py-1.5 text-xs"><i class="fas fa-sync"></i> SYNC</button>
             </div>
 
             <div class="divider h-px bg-slate-100 mb-4"></div>
 
             <!-- Recent Event Log -->
-            <div class="flex-1 flex flex-col min-h-0">
+            <div class="flex-1 flex flex-col min-h-0 mt-4">
                 <div class="flex items-center justify-between mb-2">
-                    <h3 class="text-xs font-bold text-slate-500 uppercase">Recent Events</h3>
-                    <button id="leftExportCsvBtn" class="text-blue-600 text-[10px] font-bold hover:underline">EXPORT CSV</button>
+                    <h3 class="text-xs font-bold text-slate-500 uppercase">EVENTS</h3>
+                    <button id="leftExportCsvBtn" class="text-blue-600 text-[9px] font-bold hover:underline">CSV</button>
                 </div>
                 <div class="relative mb-2">
-                    <input id="leftEventSearch" type="text" placeholder="Tìm sự kiện..." class="w-full text-xs p-2 pl-8 bg-slate-100 border-none rounded-lg focus:ring-2 ring-blue-500">
-                    <i class="fas fa-search absolute left-3 top-2.5 text-slate-400 text-[10px]"></i>
+                    <input id="leftEventSearch" type="text" placeholder="Tìm kiếm..." class="w-full text-xs p-2 pl-7 bg-slate-100 border-none rounded-lg focus:ring-2 ring-blue-500">
+                    <i class="fas fa-search absolute left-2.5 top-2.5 text-slate-400 text-[10px]"></i>
                 </div>
                 <div class="table-container flex-1 custom-scroll overflow-y-auto">
-                    <table>
-                        <thead class="sticky top-0 z-10">
+                    <table class="w-full text-xs">
+                        <thead class="sticky top-0 z-10 bg-slate-50">
                             <tr>
-                                <th class="w-16">TIME</th>
-                                <th>EVENT</th>
-                                <th class="w-12 text-center">CAM</th>
+                                <th class="text-left p-2 w-14 text-slate-500 font-semibold">TIME</th>
+                                <th class="text-left p-2 text-slate-500 font-semibold">EVENT</th>
+                                <th class="text-center p-2 w-12 text-slate-500 font-semibold">CAM</th>
                             </tr>
                         </thead>
-                        <tbody id="eventLogsBody">
-                            <!-- JS updates via prepend -->
-                            <tr><td colspan="3" class="text-center py-10 text-slate-300 italic text-xs">Chưa có sự kiện</td></tr>
+                        <tbody id="leftEventTableBody">
+                            <tr><td colspan="3" class="text-center py-10 text-slate-300 italic">Chưa có sự kiện</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -114,11 +113,13 @@
                 <!-- Camera Slot 2: Original Flow -->
                 <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
                     <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-eye text-emerald-500"></i> ORIGINAL STREAM</span>
+                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-eye text-emerald-500"></i> ORIGINAL</span>
                         <div class="flex items-center gap-2">
                             <span id="recIndicator" class="w-2 h-2 rounded-full bg-slate-300"></span>
                             <span id="recIndicatorText" class="text-[9px] font-black text-slate-400">READY</span>
-                            <button id="toggleOriginalPreviewBtn" class="text-[9px] font-black text-blue-600 px-2 border rounded hover:bg-slate-50">Hide Cam</button>
+                            <button id="toggleOriginalPreviewBtn" class="preview-toggle" data-visible="true">
+                                <i class="fas fa-eye text-blue-500"></i>
+                            </button>
                         </div>
                     </div>
                     <div class="viewer-shell flex-1 bg-slate-900 relative">
@@ -130,8 +131,10 @@
                 <!-- Camera Slot 3: Processed Output -->
                 <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
                     <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-brain text-pink-500"></i> PROCESSED ADL</span>
-                        <button id="toggleProcessedPreviewBtn" class="text-[9px] font-black text-blue-600 px-2 border rounded hover:bg-slate-50">Hide Cam</button>
+                        <span class="text-[11px] font-black flex items-center gap-2"><i class="fas fa-brain text-pink-500"></i> PROCESSED</span>
+                        <button id="toggleProcessedPreviewBtn" class="preview-toggle" data-visible="true">
+                            <i class="fas fa-eye text-blue-500"></i>
+                        </button>
                     </div>
                     <div class="viewer-shell flex-1 bg-slate-900 relative">
                         <img id="processedVideo" src="" class="w-full h-full object-cover">
@@ -142,15 +145,20 @@
                 <!-- Camera Slot 4: Registration Hub -->
                 <div class="card-premium flex flex-col h-full bg-white rounded-xl border overflow-hidden shadow-sm">
                     <div class="flex justify-between items-center px-4 py-2 border-b bg-slate-50/50">
-                        <span class="text-[11px] font-black"><i class="fas fa-user-plus text-orange-500"></i> REGISTRATION</span>
-                        <button id="registerBtn" class="bg-orange-500 text-white px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all">Register Person</button>
-                    </div>
-                    <div class="bg-slate-50 flex-1 flex flex-col items-center justify-center p-6 text-center">
-                        <div class="w-16 h-16 bg-white border-2 border-orange-100 rounded-full flex items-center justify-center mb-3">
-                            <i class="fas fa-id-card text-2xl text-orange-400"></i>
+                        <span class="text-[11px] font-black"><i class="fas fa-user-plus text-orange-500"></i> REGISTER</span>
+                        <div class="flex gap-2">
+                            <button id="openWebcamBtn" class="webcam-toggle px-3 py-1 rounded text-[10px] font-bold bg-emerald-500 text-white shadow-sm">Open</button>
+                            <button id="registerBtn" class="bg-orange-500 text-white px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-orange-600 transition-all">New</button>
                         </div>
-                        <h4 class="text-xs font-black text-slate-700 mb-1">Face Registry Hub</h4>
-                        <p class="text-[10px] text-slate-400 leading-relaxed px-10">Chuẩn bị nguồn Camera và thông tin định danh trước khi ghi tên người mới vào hệ thống.</p>
+                    </div>
+                    <div class="bg-slate-50 flex-1 flex flex-col items-center justify-center p-6 text-center relative">
+                        <div class="absolute inset-0 flex items-center justify-center z-10" id="webcamEmpty">
+                            <div class="text-center">
+                                <i class="fas fa-id-card text-4xl text-slate-300 mb-2"></i>
+                                <p class="text-[10px] text-slate-400">Click "Open" để bắt đầu</p>
+                            </div>
+                        </div>
+                        <video id="liveWebcam" class="w-full h-full object-cover hidden" autoplay muted playsinline></video>
                     </div>
                 </div>
             </div>
@@ -160,28 +168,27 @@
                 <div class="flex items-center justify-between mb-3">
                     <div class="flex items-center gap-2">
                         <i class="fas fa-microchip text-blue-500"></i>
-                        <h3 class="text-xs font-bold uppercase tracking-tight text-slate-600">Pipeline Implementation Metrics</h3>
+                        <h3 class="text-xs font-bold uppercase tracking-tight text-slate-600">METRICS</h3>
                     </div>
                     <div class="flex gap-4 text-[10px] font-mono font-bold text-slate-400">
-                        <span id="metricCpu">FPS MONITOR</span>
-                        <span id="metricGpu">BUFFER: OK</span>
+                        <span id="metricCpu">FPS: --</span>
+                        <span id="metricGpu">BUF: OK</span>
+                        <button id="metricExportCsvBtn" class="text-blue-500 text-[9px] font-bold hover:underline ml-2">CSV</button>
                     </div>
                 </div>
                 <div class="table-container flex-1 overflow-y-auto custom-scroll">
-                    <table>
-                        <thead class="sticky top-0 z-10">
+                    <table class="w-full text-xs">
+                        <thead class="sticky top-0 z-10 bg-white">
                             <tr>
-                                <th class="w-16">CAM</th>
-                                <th class="w-12">FPS</th>
-                                <th class="w-20">FRAME</th>
-                                <th class="w-16">CONF</th>
-                                <th class="w-24">ADL ACTION</th>
-                                <th>MESSAGE / SYSTEM EVENT</th>
+                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">CAM</th>
+                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">FPS</th>
+                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">FRM</th>
+                                <th class="text-left p-2 w-12 text-slate-500 font-semibold">CONF</th>
+                                <th class="text-left p-2 w-16 text-slate-500 font-semibold">ADL</th>
                             </tr>
                         </thead>
-                        <tbody id="metricLogsBody" class="font-mono text-[11px]">
-                            <!-- JS updates via prepend -->
-                            <tr><td colspan="6" class="text-center py-10 text-slate-300 italic">Hệ thống đang chờ dữ liệu...</td></tr>
+                        <tbody id="metricLogsBody">
+                            <tr><td colspan="6" class="text-center py-10 text-slate-300 italic">Chờ dữ liệu...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -190,9 +197,9 @@
 
         <!-- RIGHT: CLIPS & LIVE PREVIEW -->
         <aside class="right-sidebar p-4 bg-white border-l flex flex-col gap-4 overflow-hidden">
-            <div class="flex items-center justify-between">
-                <h3 class="text-xs font-bold text-slate-500 uppercase tracking-widest"><i class="fas fa-layer-group"></i> Video Clips</h3>
-                <button id="batchProcessBtn" class="bg-pink-500 text-white px-2 py-1 rounded-[6px] text-[9px] font-black uppercase hover:bg-pink-600 shadow-lg shadow-pink-100">Process All</button>
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-[11px] font-bold text-slate-500 uppercase tracking-widest"><i class="fas fa-layer-group"></i> CLIPS</h3>
+                <button id="batchProcessBtn" class="bg-pink-500 text-white px-2 py-1 rounded text-[9px] font-black uppercase shadow-sm hover:bg-pink-600">RUN</button>
             </div>
             
             <div class="flex flex-col gap-2 mb-2 p-2 bg-slate-50 rounded-xl border border-slate-100">

@@ -250,15 +250,34 @@ tbody tr:hover { background-color: #f8fafc; }
 .pill.green { background: #dcfce7; color: #166534; }
 .pill.blue { background: #dbeafe; color: #1e40af; }
 
-/* Registration Overlays */
-.overlay-info {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    background: rgba(0,0,0,0.6);
-    color: white;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 10px;
-    backdrop-filter: blur(4px);
+/* Preview Toggle Button Styles */
+.preview-toggle {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    color: #3b82f6;
+}
+.preview-toggle:hover {
+    background-color: #e2e8f0;
+}
+.preview-toggle.hidden-cam {
+    color: #64748b;
+}
+.preview-toggle.hidden-cam i {
+    content: "\f070"; /* FontAwesome eye-slash icon */
+}
+
+/* Webcam Toggle Button States */
+.webcam-toggle {
+    transition: all 0.2s ease;
+}
+.webcam-toggle.webcam-open {
+    background-color: #ef4444 !important; /* Red when open */
+}
+.webcam-toggle.webcam-open:hover {
+    background-color: #dc2626 !important;
 }

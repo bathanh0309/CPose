@@ -5,8 +5,15 @@ const state = {
     mode: 'standby', // 'rtsp', 'multicam_folder'
     system: {
         resourcesLoaded: false,
-        folderLoaded: false,
-        webcamOpen: false
+        folderLoaded: false
+    },
+    cameras: {
+        registrationCamOpen: false
+    },
+    preview: {
+        rtspVisible: true,
+        originalVisible: true,
+        processedVisible: true
     },
     cams: [],
     clips: [],
@@ -14,11 +21,6 @@ const state = {
     metricLogs: [], // Middle technical logs
     maxLogs: 300,
     selectedClip: null,
-    ui: {
-        rtspVisible: true,
-        originalVisible: true,
-        processedVisible: true
-    },
     polling: {
         multicam: null,
         registration: null,
@@ -37,17 +39,17 @@ document.addEventListener('DOMContentLoaded', () => {
     initSocket();
     bindEvents();
     refreshSystemState();
-    logSummary("Hệ thống đã sẵn sàng", "SYS");
+    pushEventLog("Hệ thống đã sẵn sàng", "SYS");
 });
 
 function initSocket() {
     socket.on('connect', () => {
-        logSummary("Kết nối Socket.IO thành công", "WS");
+        pushEventLog("Kết nối Socket.IO thành công", "WS");
         updateMainStatus("CONNECTED", "green text-emerald-500");
     });
 
     socket.on('disconnect', () => {
-        logSummary("Mất kết nối Socket.IO - Hệ thống đang Offline", "WS");
+        pushEventLog("Mất kết nối Socket.IO - Hệ thống đang Offline", "WS");
         updateMainStatus("DISCONNECTED", "danger text-red-500");
     });
 
@@ -66,7 +68,7 @@ function initSocket() {
 
     socket.on('clip_saved', (data) => {
         // data: { filename, cam_id, duration, path, ... }
-        logSummary(`Clip mới: ${data.filename}`, data.cam_id);
+        pushEventLog(`Clip mới: ${data.filename}`, data.cam_id);
         const newClip = {
             id: Date.now(),
             name: data.filename,
@@ -95,7 +97,7 @@ function initSocket() {
 
     socket.on('error', (data) => {
         showToast(data.message || "Lỗi hệ thống", "danger");
-        logSummary(`Lỗi: ${data.message}`, "ERR");
+        pushEventLog(`Lỗi: ${data.message}`, "ERR");
     });
 }
 
@@ -105,7 +107,6 @@ function bindEvents() {
     document.getElementById('startAnalysisBtn').addEventListener('click', startAnalyzer);
     document.getElementById('stopAllBtn').addEventListener('click', stopAll);
     document.getElementById('refreshBtn').addEventListener('click', refreshSystemState);
-    document.getElementById('clearBtn').addEventListener('click', clearLogs);
 
     // File Inputs
     document.getElementById('resourcesInput').addEventListener('change', handleResourcesUpload);
@@ -160,14 +161,14 @@ async function startRecorder() {
             state.running = true;
             updateMainStatus("RECORDER ACTIVE", "blue");
             updateRecLamp("recording");
-            logSummary("Bắt đầu Phase 1: RTSP Recorder", "SYS");
+            pushEventLog("Bắt đầu Phase 1: RTSP Recorder", "SYS");
             startPreviewPolling();
         } else {
             throw new Error(data.error || "Lỗi khởi động Recorder");
         }
     } catch (err) {
         showToast(err.message, "danger");
-        logSummary(`Lỗi Recorder: ${err.message}`, "ERR");
+        pushEventLog(`Lỗi Recorder: ${err.message}`, "ERR");
     } finally {
         setMainButtonsBusy(false);
     }
@@ -194,14 +195,14 @@ async function startAnalyzer() {
             state.running = true;
             updateMainStatus("ANALYZER ACTIVE", "green");
             updateRecLamp("ready");
-            logSummary("Bắt đầu Phase 2: Batch Analysis", "SYS");
+            pushEventLog("Bắt đầu Phase 2: Batch Analysis", "SYS");
             showToast(`Đang phân tích ${data.clips} clips...`, "success");
         } else {
             throw new Error(data.error || "Lỗi khởi động Analyzer");
         }
     } catch (err) {
         showToast(err.message, "danger");
-        logSummary(`Lỗi Analyzer: ${err.message}`, "ERR");
+        pushEventLog(`Lỗi Analyzer: ${err.message}`, "ERR");
     } finally {
         setMainButtonsBusy(false);
     }
@@ -220,7 +221,7 @@ async function stopAll() {
         state.mode = 'standby';
         updateMainStatus("STOPPED", "danger");
         updateRecLamp("ready");
-        logSummary("Đã dừng tất cả tiến trình", "SYS");
+        pushEventLog("Đã dừng tất cả tiến trình", "SYS");
         stopPreviewPolling();
     } catch (err) {
         showToast("Lỗi khi dừng hệ thống", "danger");
@@ -259,7 +260,7 @@ async function handleResourcesUpload(e) {
             populateRtspSelect(state.cams);
             updateRecLamp("ready");
             showToast("Đã tải cấu hình RTSP", "success");
-            logSummary(`Nạp thành công ${state.cams.length} Cams`, "CFG");
+            pushEventLog(`Nạp thành công ${state.cams.length} Cams`, "CFG");
             updateMainStatus("RTSP READY");
         } else {
             throw new Error(data.error);
@@ -280,7 +281,7 @@ function handleMulticamFolderUpload(e) {
         return;
     }
 
-    logSummary(`Nạp Folder Multicam: ${videos.length} clips`, "IO");
+    pushEventLog(`Nạp Folder Multicam: ${videos.length} clips`, "IO");
     
     // Cleanup old URLs
     cleanupClipObjectUrls(state.clips);
@@ -318,13 +319,13 @@ function handleMulticamFolderUpload(e) {
 // ===================================================================
 
 function toggleMulticamPreview() {
-    state.ui.rtspVisible = !state.ui.rtspVisible;
+    state.preview.rtspVisible = !state.preview.rtspVisible;
     const btn = document.getElementById('toggleRtspPreviewBtn');
     const icon = document.getElementById('rtspEyeIcon');
     const img = document.getElementById('slotSnap1');
     const empty = document.getElementById('slotEmpty1');
 
-    if (state.ui.rtspVisible) {
+    if (state.preview.rtspVisible) {
         img.classList.remove('hidden');
         empty.classList.add('hidden');
         icon.className = 'fas fa-eye scale-90 text-blue-600';
@@ -336,64 +337,64 @@ function toggleMulticamPreview() {
 }
 
 function toggleOriginalPreview() {
-    state.ui.originalVisible = !state.ui.originalVisible;
-    const btn = document.getElementById('toggleOriginalPreviewBtn');
     const img = document.getElementById('originalVideo');
     const empty = document.getElementById('originalVideoEmpty');
+    const btn = document.getElementById('toggleOriginalPreviewBtn');
+    const icon = btn.querySelector('i');
 
-    if (state.ui.originalVisible) {
-        img.classList.remove('hidden');
-        empty.classList.add('hidden');
-        btn.textContent = "Hide Cam";
-        btn.classList.replace('bg-blue-100', 'bg-slate-100');
-    } else {
+    if (state.preview.originalVisible) {
+        state.preview.originalVisible = false;
+        if (state.polling.original) clearInterval(state.polling.original);
+        img.src = '';
         img.classList.add('hidden');
         empty.classList.remove('hidden');
-        btn.textContent = "Show Cam";
-        btn.classList.replace('bg-slate-100', 'bg-blue-100');
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+        btn.classList.add('hidden-cam');
+    } else {
+        state.preview.originalVisible = true;
+        empty.classList.add('hidden');
+        img.classList.remove('hidden');
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+        btn.classList.remove('hidden-cam');
+        startPreviewPolling();
     }
 }
 
 function toggleProcessedPreview() {
-    state.ui.processedVisible = !state.ui.processedVisible;
-    const btn = document.getElementById('toggleProcessedPreviewBtn');
     const img = document.getElementById('processedVideo');
     const empty = document.getElementById('processedVideoEmpty');
+    const btn = document.getElementById('toggleProcessedPreviewBtn');
+    const icon = btn.querySelector('i');
 
-    if (state.ui.processedVisible) {
-        img.classList.remove('hidden');
-        empty.classList.add('hidden');
-        btn.textContent = "Hide Cam";
-    } else {
+    if (state.preview.processedVisible) {
+        state.preview.processedVisible = false;
+        if (state.polling.processed) clearInterval(state.polling.processed);
+        img.src = '';
         img.classList.add('hidden');
         empty.classList.remove('hidden');
-        btn.textContent = "Show Cam";
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+        btn.classList.add('hidden-cam');
+    } else {
+        state.preview.processedVisible = true;
+        empty.classList.add('hidden');
+        img.classList.remove('hidden');
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+        btn.classList.remove('hidden-cam');
+        startPreviewPolling();
     }
 }
 
-function toggleRegistrationWebcam() {
-    const btn = document.getElementById('openWebcamBtn');
+async function toggleRegistrationWebcam() {
     const video = document.getElementById('liveWebcam');
     const empty = document.getElementById('webcamEmpty');
+    const btn = document.getElementById('openWebcamBtn');
 
-    if (!state.system.webcamOpen) {
-        // Open
-        navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => {
-                video.srcObject = stream;
-                video.play();
-                video.classList.remove('hidden');
-                empty.classList.add('hidden');
-                state.system.webcamOpen = true;
-                btn.textContent = "Close";
-                btn.classList.replace('danger', 'primary');
-                logSummary("Đã mở Webcam", "WEBCAM");
-            })
-            .catch(err => {
-                showToast("Không thể mở Webcam: " + err.message, "danger");
-            });
-    } else {
-        // Close
+    if (state.cameras.registrationCamOpen) {
+        // Close Webcam
         const stream = video.srcObject;
         if (stream) {
             stream.getTracks().forEach(track => track.stop());
@@ -401,10 +402,27 @@ function toggleRegistrationWebcam() {
         video.srcObject = null;
         video.classList.add('hidden');
         empty.classList.remove('hidden');
-        state.system.webcamOpen = false;
-        btn.textContent = "Open";
-        btn.classList.replace('primary', 'danger');
-        logSummary("Đã đóng Webcam", "WEBCAM");
+        state.cameras.registrationCamOpen = false;
+        btn.textContent = 'Open';
+        btn.classList.remove('webcam-open', 'bg-red-500');
+        btn.classList.add('bg-emerald-500');
+        pushEventLog("Webcam closed", "REG");
+    } else {
+        // Open Webcam
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.classList.remove('hidden');
+            empty.classList.add('hidden');
+            state.cameras.registrationCamOpen = true;
+            btn.textContent = 'Close';
+            btn.classList.remove('bg-emerald-500');
+            btn.classList.add('webcam-open');
+            pushEventLog("Webcam opened", "REG");
+        } catch (err) {
+            showToast("Could not access webcam: " + err.message, "danger");
+            pushEventLog("Webcam error: " + err.message, "REG");
+        }
     }
 }
 
@@ -412,8 +430,8 @@ function toggleRegistrationWebcam() {
 //                          LOGGING & TABLES
 // ===================================================================
 
-function logSummary(event, camId = "--") {
-    const tbody = document.getElementById('eventLogsBody');
+function pushEventLog(event, camId = "--") {
+    const tbody = document.getElementById('leftEventTableBody');
     if (!tbody) return;
 
     if (state.eventLogs.length === 0) tbody.innerHTML = ""; // Clear placeholder
@@ -422,9 +440,9 @@ function logSummary(event, camId = "--") {
     
     const row = document.createElement('tr');
     row.innerHTML = `
-        <td class="text-slate-400 font-mono text-[10px]">${time}</td>
-        <td class="font-medium text-slate-700">${escapeHtml(event)}</td>
-        <td class="text-center"><span class="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold">${camId}</span></td>
+        <td class="text-slate-400 font-mono text-[10px] p-2">${time}</td>
+        <td class="font-medium text-slate-700 p-2">${escapeHtml(event)}</td>
+        <td class="text-center p-2"><span class="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold">${camId}</span></td>
     `;
     
     tbody.prepend(row);
@@ -447,12 +465,12 @@ function pushMetricLog(data) {
     const adlClass = isDangerous ? 'text-red-500 font-bold' : 'text-emerald-600 font-bold';
 
     row.innerHTML = `
-        <td class="font-bold text-slate-700">CAM-${data.cam}</td>
-        <td class="text-blue-600 font-black">${data.fps}</td>
-        <td class="text-slate-400">#${data.frame}</td>
-        <td class="font-bold">${data.conf}</td>
-        <td class="${adlClass} uppercase">${data.adl}</td>
-        <td class="text-slate-500 italic truncate max-w-[200px]">${escapeHtml(data.event || '--')}</td>
+        <td class="font-bold text-slate-700 p-2">CAM-${data.cam}</td>
+        <td class="text-blue-600 font-black p-2">${data.fps}</td>
+        <td class="text-slate-400 p-2">#${data.frame}</td>
+        <td class="font-bold p-2">${data.conf}</td>
+        <td class="${adlClass} uppercase p-2">${data.adl}</td>
+        <td class="text-slate-500 italic truncate max-w-[200px] p-2">${escapeHtml(data.event || '--')}</td>
     `;
 
     tbody.prepend(row);
@@ -593,12 +611,12 @@ function startPreviewPolling() {
     if (state.polling.original) return;
     
     state.polling.original = setInterval(() => {
-        if (!state.ui.originalVisible) return;
+        if (!state.preview.originalVisible) return;
         document.getElementById('originalVideo').src = `/api/pose/snapshot/original?t=${Date.now()}`;
     }, 200);
 
     state.polling.processed = setInterval(() => {
-        if (!state.ui.processedVisible) return;
+        if (!state.preview.processedVisible) return;
         document.getElementById('processedVideo').src = `/api/pose/snapshot/processed?t=${Date.now()}`;
     }, 200);
 }
@@ -618,8 +636,8 @@ function stopPreviewPolling() {
 function clearLogs() {
     state.eventLogs = [];
     state.metricLogs = [];
-    renderLeftEventTable();
-    renderMetricTable();
+    document.getElementById('leftEventTableBody').innerHTML = '<tr><td colspan="3" class="text-center py-10 text-slate-300 italic">Chưa có sự kiện</td></tr>';
+    document.getElementById('metricLogsBody').innerHTML = '<tr><td colspan="6" class="text-center py-10 text-slate-300 italic">Chờ dữ liệu...</td></tr>';
     showToast("Đã xóa trắng log", "info");
 }
 
@@ -662,11 +680,11 @@ function playClip(id) {
     player.play();
     
     document.getElementById('outputDirLabel').textContent = `PLAYING: ${clip.name}`;
-    logSummary(`Mở xem clip: ${clip.name}`, clip.cam);
+    pushEventLog(`Mở xem clip: ${clip.name}`, clip.cam);
 }
 
 function refreshSystemState() {
-    logSummary("Đang đồng bộ trạng thái hệ thống...", "SYS");
+    pushEventLog("Đang đồng bộ trạng thái hệ thống...", "SYS");
     // Fetch and sync UI
     fetch('/api/config/cameras')
         .then(res => res.json())

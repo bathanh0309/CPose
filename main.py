@@ -5,7 +5,6 @@ Main Entry Point. Orchestrates startup and runs the server.
 import logging
 import webbrowser
 import threading
-import os
 
 from app import create_app, socketio, get_config
 

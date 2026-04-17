@@ -1,165 +1,264 @@
-/* --- CPose Premium Design System (Light Yellow Edition) --- */
 :root {
-  --bg-main: #fefce8; /* Vàng nhạt */
-  --surface: #ffffff;
-  --panel: #fef3c7; /* Vàng đậm hơn chút cho panel */
-  --ink: #0f172a;
-  --ink-dim: #64748b;
-  --accent: #2563eb;
-  --accent-soft: rgba(37, 99, 235, 0.1);
-  --success: #10b981;
-  --danger: #ef4444;
-  --line: rgba(15, 23, 42, 0.08);
-  --radius: 14px;
-  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+    --bg-main: #f1f5f9;
+    --panel-bg: #ffffff;
+    --accent: #2563eb;
+    --danger: #ef4444;
+    --success: #10b981;
+    --border-color: #e2e8f0;
+    --text-main: #1e293b;
+    --text-muted: #64748b;
 }
 
-* { box-sizing: border-box; }
 body {
-  background-color: var(--bg-main);
-  color: var(--ink);
-  font-family: 'Inter', system-ui, sans-serif;
-  margin: 0;
-  height: 100vh;
-  overflow: hidden;
+    background-color: var(--bg-main);
+    font-family: 'Inter', sans-serif;
+    color: var(--text-main);
+    overflow: hidden;
+    height: 100vh;
 }
 
-/* Scrollbar Minimalist */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.2); }
-
-/* Layout Grid */
+/* 3-Column Layout Implementation */
 .app-container {
-  display: grid;
-  grid-template-columns: 280px 1fr 300px;
-  height: 100vh;
-  gap: 0;
+    display: grid;
+    grid-template-columns: 280px 1fr 300px; /* Fixed Left, Fluid Center, Fixed Right */
+    height: 100vh;
+    width: 100vw;
 }
 
 .sidebar {
-  background-color: var(--panel);
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--sidebar-bg);
+    overflow: hidden;
 }
 
 .main-content {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 12px;
-  gap: 12px;
+    display: flex;
+    flex-direction: column;
+    padding: 1.25rem;
+    gap: 1.25rem;
+    background: var(--bg-main);
+    overflow-y: auto;
 }
 
-/* Card Styles */
+/* Card & Component Styles */
 .card-premium {
-  background: var(--surface);
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+    background: white;
+    border-radius: 1.25rem;
+    border: 1px solid var(--border);
+    box-shadow: var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: transform 0.2s ease;
 }
 
 .card-head {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: 700;
-  font-size: 13px;
-  color: var(--ink-dim);
+    display: flex;
+    justify-content: space-between;
+    items-center;
+    padding: 0.75rem 1rem;
+    background: white;
+    font-size: 0.75rem;
+    font-weight: 700;
 }
 
-/* Camera Grid */
-.camera-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
+/* Viewer Shells - Professional 16:9 Compact */
 .viewer-shell {
-  aspect-ratio: 16/9;
-  background: #000;
-  position: relative;
-  overflow: hidden;
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9; /* Tỉ lệ nằm ngang chuẩn */
+    background: #020617;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 0 0 1rem 1rem;
+    max-height: 220px; /* Thu gọn chiều cao để UI gọn gàng */
+}
+
+.viewer-shell img, .viewer-shell video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover; /* Lấp đầy khung hình chữ nhật */
 }
 
 .viewer-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #4b5563;
-  font-size: 11px;
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.9);
+    color: rgba(255, 255, 255, 0.2);
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    gap: 0.5rem;
 }
 
-/* Inputs & Buttons (Shrinked) */
+/* Button & UI Miniatures */
 .btn-mini {
-  padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    transition: all 0.2s;
+    cursor: pointer;
+    border: none;
+    outline: none;
 }
 
-.btn-mini.primary { background: var(--accent); color: #fff; }
-.btn-mini.danger { background: var(--danger); color: #fff; }
-.btn-mini.surface { background: #f1f5f9; color: var(--ink); border: 1px solid var(--line); }
-.btn-mini:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-mini:active { transform: scale(0.95); }
+.btn-mini:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.input-mini {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 11px;
-  outline: none;
+.btn-mini.primary { background: var(--accent); color: white; }
+.btn-mini.primary:hover { background: #1d4ed8; box-shadow: 0 4px 12px rgba(37,99,235,0.2); }
+
+.btn-mini.danger { background: var(--danger); color: white; }
+.btn-mini.danger:hover { background: #dc2626; box-shadow: 0 4px 12px rgba(239,68,68,0.2); }
+
+.btn-mini.surface { background: #f1f5f9; color: #475569; border: 1px solid rgba(0,0,0,0.05); }
+.btn-mini.surface:hover { background: #e2e8f0; }
+
+/* Bảng sự kiện & kỹ thuật chuyên nghiệp */
+.table-container {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
-.input-mini:focus { border-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
-/* Table Theme */
-.table-mini {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
+thead th {
+    background: #f8fafc;
+    color: #64748b;
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 10;
 }
 
-.table-mini th {
-  background: #f8fafc;
-  padding: 10px;
-  text-align: left;
-  color: var(--ink-dim);
-  border-bottom: 2px solid var(--line);
+tbody td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #1e293b;
 }
 
-.table-mini td {
-  padding: 10px;
-  border-bottom: 1px solid var(--line);
+tbody tr:hover { background-color: #f8fafc; }
+
+/* Nút bấm gọn gàng và đồng nhất */
+.btn-control {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 13px;
+    border: none;
+    cursor: pointer;
 }
 
-.log-row:hover { background: #fffbeb; }
+.btn-control:active { transform: scale(0.96); }
+.btn-control.primary { background: var(--accent); color: white; }
+.btn-control.success { background: var(--success); color: white; }
+.btn-control.danger { background: var(--danger); color: white; }
+.btn-control.ghost { background: #f1f5f9; color: #475569; border: 1px solid var(--border-color); }
 
-/* Status pill */
+/* Indicators */
+#recIndicator.active {
+    background: #10b981;
+    box-shadow: 0 0 8px rgba(16,185,129,0.5);
+    animation: pulse-green 2s infinite;
+}
+
+#recIndicator.recording {
+    background: #ef4444;
+    box-shadow: 0 0 8px rgba(239,68,68,0.5);
+    animation: pulse-red 1s infinite;
+}
+
+@keyframes pulse-green {
+    0% { opacity: 1; }
+    50% { opacity: 0.4; transform: scale(1.1); }
+    100% { opacity: 1; }
+}
+
+@keyframes pulse-red {
+    0% { opacity: 1; }
+    50% { opacity: 0.3; transform: scale(1.2); }
+    100% { opacity: 1; }
+}
+
+/* Custom Scrollbars */
+.custom-scroll::-webkit-scrollbar { width: 4px; }
+.custom-scroll::-webkit-scrollbar-track { background: transparent; }
+.custom-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 10px; }
+
+.custom-scroll-dark::-webkit-scrollbar { width: 4px; }
+.custom-scroll-dark::-webkit-scrollbar-track { background: transparent; }
+.custom-scroll-dark::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+
+/* Grid for Cameras - Compact Layout */
+.camera-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-gap: 1rem;
+    flex: 1;
+    min-height: 0;
+}
+
+/* Toasts */
+.toast {
+    padding: 0.75rem 1.25rem;
+    border-radius: 1rem;
+    background: white;
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+    border-left: 4px solid var(--accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+    animation: slide-in 0.3s ease-out;
+}
+
+@keyframes slide-in {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+/* Badges */
 .pill {
-  padding: 2px 8px;
-  border-radius: 20px;
-  font-size: 10px;
-  font-weight: 700;
+    padding: 0.2rem 0.6rem;
+    border-radius: 2rem;
+    font-weight: 800;
+    font-size: 8px;
+    letter-spacing: 0.5px;
 }
-.pill.green { background: #d1fae5; color: #065f46; }
+.pill.green { background: #dcfce7; color: #166534; }
+.pill.blue { background: #dbeafe; color: #1e40af; }
 
-/* Utility */
-.hidden { display: none !important; }
+/* Registration Overlays */
+.overlay-info {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(0,0,0,0.6);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    backdrop-filter: blur(4px);
+}

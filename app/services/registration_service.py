@@ -4,6 +4,7 @@ import time
 import cv2
 import numpy as np
 import os
+import json
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
@@ -24,6 +25,7 @@ class RegistrationSession:
         source: str,
         user_name: str,
         user_id: str,
+        user_age: str,
         on_progress: Callable[[Dict[str, Any]], None],
         on_done: Callable[[Dict[str, Any]], None],
         detector_model: Any = None
@@ -32,6 +34,7 @@ class RegistrationSession:
         self.source = source
         self.user_name = user_name
         self.user_id = user_id
+        self.user_age = user_age
         self.on_progress = on_progress
         self.on_done = on_done
         
@@ -62,7 +65,7 @@ class RegistrationSession:
         self.running = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
-        logger.info(f"Registration session {self.session_id} started for {self.user_name}")
+        logger.info(f"Registration session {self.session_id} started for {self.user_name} (ID: {self.user_id}, Age: {self.user_age})")
 
     def stop(self):
         self.running = False
@@ -70,6 +73,7 @@ class RegistrationSession:
             self.thread.join(timeout=2.0)
         if self.cap:
             self.cap.release()
+            self.cap = None
         logger.info(f"Registration session {self.session_id} stopped")
 
     def get_snapshot(self):
@@ -80,12 +84,6 @@ class RegistrationSession:
         return None
 
     def _estimate_angle(self, face):
-        """
-        Estimate angle from face.pose (yaw, pitch, roll).
-        InsightFace pose is in degrees.
-        yaw: horizontal (negative = left, positive = right)
-        pitch: vertical (negative = up, positive = down)
-        """
         if not hasattr(face, 'pose'):
             return "unknown"
         
@@ -106,16 +104,21 @@ class RegistrationSession:
         if pitch > PITCH_THRES:
             return "down"
         
-        return "mid" # transitional angle
+        return "mid"
 
     def _is_blurry(self, image, threshold=80):
+        if image is None or image.size == 0: return True
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         variance = cv2.Laplacian(gray, cv2.CV_64F).var()
         return variance < threshold
 
     def _run(self):
         # Open camera
-        source_val = 0 if self.source == "local" else self.source
+        try:
+            source_val = int(self.source) if self.source.isdigit() else (0 if self.source == "local" else self.source)
+        except:
+            source_val = self.source
+            
         self.cap = cv2.VideoCapture(source_val)
         
         if not self.cap.isOpened():
@@ -139,29 +142,31 @@ class RegistrationSession:
             faces = self.model.get(frame)
             
             output_frame = frame.copy()
-            # Draw box
+            # Draw UI Box (Yellow-like Cyan)
             cv2.rectangle(output_frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
             
-            instruction = "Vui lòng đưa mặt vào giữa khung hình"
+            instruction = "Đang chờ mặt..."
             target_angle = self._get_next_needed_angle()
             
             if not target_angle:
-                # All captured!
                 instruction = "Đang hoàn tất..."
                 self.running = False
                 self._finalize()
                 break
 
             if len(faces) == 0:
-                instruction = "Không thấy khuôn mặt"
+                instruction = "Vui lòng đưa mặt vào giữa khung hình"
             elif len(faces) > 1:
                 instruction = "Chỉ để một người trong khung hình"
             else:
                 face = faces[0]
                 fx1, fy1, fx2, fy2 = map(int, face.bbox)
                 
-                # Draw face bbox
-                cv2.rectangle(output_frame, (fx1, fy1), (fx2, fy2), (0, 255, 0), 1)
+                # Draw face bbox overlay with info
+                cv2.rectangle(output_frame, (fx1, fy1), (fx2, fy2), (0, 255, 0), 2)
+                # Overlay Info above bbox
+                info_str = f"ID:{self.user_id} | {self.user_name} ({self.user_age})"
+                cv2.putText(output_frame, info_str, (fx1, fy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 
                 # Check if face is within the square box
                 is_inside = fx1 > x1 and fy1 > y1 and fx2 < x2 and fy2 < y2
@@ -180,7 +185,7 @@ class RegistrationSession:
                         self.embeddings[angle].append(emb)
                         self.counts[angle] += 1
                         
-                        instruction = f"Đang chụp góc {angle}: {self.counts[angle]}/{self.target_count}"
+                        instruction = f"Đang chụp góc {angle.upper()}: {self.counts[angle]}/{self.target_count}"
                         
                         # Trigger UI update
                         self.on_progress({
@@ -197,9 +202,11 @@ class RegistrationSession:
             with self.lock:
                 self.current_output_frame = output_frame
             
-            time.sleep(0.03) # ~30fps
+            time.sleep(0.01) # Low latency
 
-        self.cap.release()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
 
     def _get_next_needed_angle(self):
         for angle in self.angles:
@@ -210,17 +217,16 @@ class RegistrationSession:
     def _get_instruction_for_angle(self, angle):
         instructions = {
             "center": "Nhìn thẳng",
-            "left": "Nghiêng mặt sang trái",
-            "right": "Nghiêng mặt sang phải",
-            "up": "Ngẩng mặt lên",
-            "down": "Cúi mặt xuống"
+            "left": "Nghiêng mặt sang TRÁI",
+            "right": "Nghiêng mặt sang PHẢI",
+            "up": "NGẨNG mặt lên",
+            "down": "CÚI mặt xuống"
         }
         return instructions.get(angle, "Nhìn thẳng")
 
     def _finalize(self):
         logger.info(f"Finalizing registration for {self.user_name}")
         
-        # Aggregate all embeddings
         all_embs = []
         for angle in self.angles:
             all_embs.extend(self.embeddings[angle])
@@ -229,26 +235,31 @@ class RegistrationSession:
             self.on_done({"status": "error", "message": "No embeddings captured"})
             return
 
-        # Mean embedding
         mean_emb = np.mean(all_embs, axis=0)
         mean_emb = mean_emb / np.linalg.norm(mean_emb)
         
-        # Save to database
+        # Save to database using user_id as directory
         user_dir = Path(FACE_DATA_PATH) / self.user_id
         user_dir.mkdir(parents=True, exist_ok=True)
         
-        save_path = user_dir / f"{int(time.time())}.npy"
+        save_path = user_dir / "embedding.npy"
         np.save(str(save_path), mean_emb)
         
-        # Also save metadata if needed (e.g., name)
-        # For now, CPose seems to use directory name as ID
-        # We might need a mapping of ID -> Name if not already there
+        # Save metadata info.json
+        meta_path = user_dir / "info.json"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "id": self.user_id,
+                "name": self.user_name,
+                "age": self.user_age,
+                "timestamp": int(time.time())
+            }, f, indent=4, ensure_ascii=False)
         
         self.on_done({
             "status": "success",
             "user_id": self.user_id,
             "user_name": self.user_name,
-            "message": f"Đăng ký thành công cho {self.user_name}"
+            "message": f"Đăng ký thành công: {self.user_name} (ID: {self.user_id})"
         })
 
 class RegistrationManager:
@@ -264,7 +275,6 @@ class RegistrationManager:
 
     def _get_detector(self):
         if self.detector is None:
-            # Lazy load detector
             try:
                 self.detector = FaceAnalysis(name="buffalo_s")
                 self.detector.prepare(ctx_id=0, det_size=(640, 640))
@@ -272,19 +282,42 @@ class RegistrationManager:
                 logger.error(f"Failed to initialize FaceAnalysis: {e}")
         return self.detector
 
-    def start_session(self, source, user_name, on_progress, on_done):
+    def get_next_id(self):
+        """Sequential auto-increment ID generator"""
+        try:
+            path = Path(FACE_DATA_PATH)
+            if not path.exists(): return "0001"
+            
+            # List all directories that are numeric-ish
+            ids = []
+            for d in path.iterdir():
+                if d.is_dir():
+                    try:
+                        ids.append(int(d.name))
+                    except:
+                        pass
+            
+            if not ids: return "0001"
+            return f"{max(ids) + 1:04d}"
+        except:
+            return "0001"
+
+    def start_session(self, source, user_name, user_age, person_id, on_progress, on_done):
         with self.lock:
-            # Generate ID
+            # Check for existing sessions
+            if len(self.sessions) > 0:
+                # Stop existing sessions to avoid camera lock
+                for sid in list(self.sessions.keys()):
+                    self.stop_session(sid)
+
             session_id = f"reg_{int(time.time())}"
-            # user_id should be auto-increment or derived from name
-            # For now, let's use name-timestamp
-            user_id = user_name.replace(" ", "_").lower() + "_" + str(int(time.time()))[-4:]
             
             session = RegistrationSession(
                 session_id=session_id,
                 source=source,
                 user_name=user_name,
-                user_id=user_id,
+                user_id=person_id,
+                user_age=user_age,
                 on_progress=on_progress,
                 on_done=on_done,
                 detector_model=self._get_detector()

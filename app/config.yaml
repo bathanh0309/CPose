@@ -15,7 +15,7 @@ logging:
   file_path: "logs/cpose.log"
 
 phase1:
-  model: yolov8n.pt
+  model: models/product/yolov8n.pt
   conf_threshold: 0.35
   pre_buffer_sec: 3
   post_buffer_sec: 3
@@ -39,13 +39,13 @@ phase1:
   ffmpeg_capture_options: ""
 
 phase2:
-  model: yolo11n.pt
+  model: models/product/yolo11n.pt
   person_class_id: 0
   conf_threshold: 0.50
   progress_every: 10
 
 phase3:
-  model: yolo11n-pose.pt
+  model: models/product/yolo11n-pose.pt
   person_class_id: 0
   conf_threshold: 0.45
   keypoint_conf_min: 0.30
@@ -136,7 +136,7 @@ tracker:
   half: true
 
 detectors:
-  yolo_path: models/yolov8n.pt
+  yolo_path: models/product/yolov8n.pt
   face_data_path: data/face_db
   face_min_size: 50
   face_similarity_threshold: 0.4

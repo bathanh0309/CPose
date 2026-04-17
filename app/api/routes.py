@@ -500,15 +500,26 @@ def serve_video(filepath):
 #                          FACE REGISTRATION
 # ===================================================================
 
+@api_bp.route("/registration/next_id", methods=["GET"])
+def get_next_registration_id():
+    """
+    Lấy ID tiếp theo trong chuỗi tăng dần (0001, 0002...).
+    """
+    next_id = _registration.get_next_id()
+    return jsonify({"next_id": next_id})
+
+
 @api_bp.route("/registration/start", methods=["POST"])
 def start_registration():
     """
-    Bắt đầu session đăng ký khuôn mặt đa góc.
+    Bắt đầu session đăng ký khuôn mặt đa góc với đầy đủ metadata.
     """
     body = request.get_json(force=True, silent=True) or {}
     source = body.get("source")
     rtsp_url = body.get("rtsp_url")
     user_name = body.get("name")
+    user_age = body.get("age", "??")
+    person_id = body.get("person_id") or _registration.get_next_id()
 
     if not user_name:
         return jsonify({"error": "Name is required"}), 400
@@ -523,18 +534,19 @@ def start_registration():
         
     def on_done(data):
         _on_socket_emit("registration_done", data)
-        # Refresh face database in recognizer if success
         if data.get("status") == "success":
             _pose.refresh_face_database()
 
     session_id = _registration.start_session(
         source=camera_source,
         user_name=user_name,
+        user_age=user_age,
+        person_id=person_id,
         on_progress=on_progress,
         on_done=on_done
     )
 
-    return jsonify({"session_id": session_id, "status": "started"})
+    return jsonify({"session_id": session_id, "status": "started", "person_id": person_id})
 
 
 @api_bp.route("/registration/stop", methods=["POST"])

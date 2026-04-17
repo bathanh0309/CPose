@@ -1,11 +1,10 @@
 from typing import List
 import numpy as np
-from ultralytics import YOLO
-from .base import BaseDetector, Detection
+from ..model_provider import get_model
 
 class YOLOUltraDetector(BaseDetector):
     def __init__(self, model_path: str, conf_threshold: float = 0.25):
-        self.model = YOLO(model_path)
+        self.model = get_model(model_path)
         self.conf_threshold = conf_threshold
 
     def detect(self, frame: np.ndarray) -> List[Detection]:

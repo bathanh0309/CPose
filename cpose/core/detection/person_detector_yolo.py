@@ -24,6 +24,6 @@ class PersonDetector(BaseDetector):
     @classmethod
     def from_config(cls, cfg: dict):
         return cls(
-            model_path=cfg.get("model_path", "models/yolo11n.pt"),
+            model_path=cfg.get("model_path", "models/product/yolo11n.pt"),
             conf_threshold=cfg.get("conf", 0.5)
         )

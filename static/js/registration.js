@@ -1,154 +1,226 @@
-/**
- * Face Registration Module - Premium Thin Edition
- */
+/* CPose Studio - Face Registration Logic */
 
-class FaceRegistration {
-    constructor(socket) {
-        this.socket = socket;
-        this.sessionId = null;
-        this.isCapturing = false;
-        this.currentSnapshotInterval = null;
+const regState = {
+    source: 'local', // local | rtsp
+    rtspUrl: '',
+    name: '',
+    age: '',
+    personId: '',
+    sessionId: null,
+    polling: null,
+    progress: 0
+};
 
-        // Elements
-        this.sourceModal = document.getElementById('regSourceModal');
-        this.infoModal = document.getElementById('regInfoModal');
-        this.captureModal = document.getElementById('regCaptureModal');
-        this.rtspGroup = document.getElementById('rtspSelectGroup');
-        this.rtspSelect = document.getElementById('regRtspSelect');
-        this.userNameInput = document.getElementById('regUserName');
-        this.snapshotImg = document.getElementById('regSnapshot');
-        this.totalFill = document.getElementById('regTotalFill');
-        this.totalPct = document.getElementById('regTotalPct');
-        this.instructions = document.getElementById('regInstructions');
-        
-        this.init();
+document.addEventListener('DOMContentLoaded', () => {
+    bindRegistrationEvents();
+});
+
+function bindRegistrationEvents() {
+    // Open Main Modal
+    document.getElementById('registerBtn').addEventListener('click', openRegistrationFlow);
+
+    // Source Modal
+    document.getElementById('closeRegSourceBtn').addEventListener('click', () => toggleModal('regSourceModal', false));
+    document.getElementById('toRegInfoBtn').addEventListener('click', moveToInfoStep);
+    
+    const sourceRadios = document.getElementsByName('reg_source');
+    sourceRadios.forEach(r => r.addEventListener('change', (e) => {
+        regState.source = e.target.value;
+        document.getElementById('rtspSelectGroup').classList.toggle('hidden', regState.source !== 'rtsp');
+        if (regState.source === 'rtsp') populateRtspRegList();
+    }));
+
+    // Info Modal
+    document.getElementById('backToSourceBtn').addEventListener('click', () => {
+        toggleModal('regInfoModal', false);
+        toggleModal('regSourceModal', true);
+    });
+    document.getElementById('startCaptureBtn').addEventListener('click', startCaptureStep);
+
+    // Capture Modal
+    document.getElementById('stopRegBtn').addEventListener('click', stopRegistrationCapture);
+}
+
+// ===================================================================
+//                          FLOW STEPS
+// ===================================================================
+
+async function openRegistrationFlow() {
+    // Reset state
+    regState.name = '';
+    regState.age = '';
+    regState.progress = 0;
+    
+    // Fetch Next ID
+    try {
+        const res = await fetch('/api/registration/next_id');
+        const data = await res.json();
+        regState.personId = data.next_id || "0001";
+        document.getElementById('regUserId').value = regState.personId;
+    } catch (err) {
+        console.error("Failed to fetch next_id", err);
     }
 
-    init() {
-        document.getElementById('registerBtn')?.addEventListener('click', () => this.openSourceModal());
-        document.getElementById('closeRegSourceBtn').onclick = () => this.closeSourceModal();
-        document.getElementById('toRegInfoBtn').onclick = () => this.openInfoModal();
-        document.getElementById('backToSourceBtn').onclick = () => this.backToSource();
-        document.getElementById('startCaptureBtn').onclick = () => this.startRegistration();
-        document.getElementById('stopRegBtn').onclick = () => this.stopRegistration();
-        
-        document.getElementsByName('reg_source').forEach(r => {
-            r.addEventListener('change', () => {
-                this.rtspGroup.classList.toggle('hidden', r.value !== 'rtsp');
-            });
+    toggleModal('regSourceModal', true);
+}
+
+function moveToInfoStep() {
+    if (regState.source === 'rtsp') {
+        regState.rtspUrl = document.getElementById('regRtspSelect').value;
+        if (!regState.rtspUrl) {
+            showToast("Vui lòng chọn RTSP Camera", "warning");
+            return;
+        }
+    }
+    
+    toggleModal('regSourceModal', false);
+    toggleModal('regInfoModal', true);
+}
+
+async function startCaptureStep() {
+    const name = document.getElementById('regUserName').value.trim();
+    const age = document.getElementById('regUserAge').value.trim();
+
+    if (!name) {
+        showToast("Vui lòng nhập tên", "warning");
+        return;
+    }
+
+    regState.name = name;
+    regState.age = age || "??";
+
+    // Prepare UI
+    document.getElementById('regDisplayTitle').textContent = `ID: ${regState.personId} | Tên: ${regState.name} | Tuổi: ${regState.age}`;
+    updateRegProgress(0);
+
+    try {
+        const res = await fetch('/api/registration/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source: regState.source,
+                rtsp_url: regState.rtspUrl,
+                name: regState.name,
+                age: regState.age,
+                person_id: regState.personId
+            })
         });
 
-        this.socket.on('registration_progress', (data) => this.handleProgress(data));
-        this.socket.on('registration_done', (data) => this.handleDone(data));
-    }
-
-    openSourceModal() {
-        this.sourceModal.classList.remove('hidden');
-        this.loadCameras();
-    }
-
-    closeSourceModal() {
-        this.sourceModal.classList.add('hidden');
-    }
-
-    backToSource() {
-        this.infoModal.classList.add('hidden');
-        this.sourceModal.classList.remove('hidden');
-    }
-
-    openInfoModal() {
-        this.sourceModal.classList.add('hidden');
-        this.infoModal.classList.remove('hidden');
-        this.userNameInput.focus();
-    }
-
-    async loadCameras() {
-        try {
-            const res = await fetch('/api/config/cameras');
-            const data = await res.json();
-            this.rtspSelect.innerHTML = data.cameras.map(c => `<option value="${c.source}">${c.id} - ${c.source}</option>`).join('');
-        } catch (e) {}
-    }
-
-    async startRegistration() {
-        const name = this.userNameInput.value.trim();
-        if (!name) return alert("Vui lòng nhập tên");
-
-        const source = document.querySelector('input[name="reg_source"]:checked').value;
-        const rtsp_url = this.rtspSelect.value;
-
-        try {
-            const res = await fetch('/api/registration/start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source, rtsp_url, name })
-            });
-            const data = await res.json();
-            if (data.session_id) {
-                this.sessionId = data.session_id;
-                this.isCapturing = true;
-                this.infoModal.classList.add('hidden');
-                this.captureModal.classList.remove('hidden');
-                document.getElementById('regDisplayTitle').textContent = `ĐANG CHỤP: ${name}`;
-                this.resetUI();
-                this.startSnapshotLoop();
-            }
-        } catch (e) { alert("Lỗi kết nối server"); }
-    }
-
-    startSnapshotLoop() {
-        this.currentSnapshotInterval = setInterval(() => {
-            if (this.isCapturing && this.sessionId) {
-                this.snapshotImg.src = `/api/registration/snapshot/${this.sessionId}?t=${Date.now()}`;
-            }
-        }, 100);
-    }
-
-    handleProgress(data) {
-        if (data.session_id !== this.sessionId) return;
-        this.instructions.textContent = data.instruction;
-        const total = Object.values(data.counts || {}).reduce((a, b) => a + b, 0);
-        const pct = Math.min(100, Math.round((total / 25) * 100));
-        this.totalFill.style.width = `${pct}%`;
-        this.totalPct.textContent = `${pct}%`;
-    }
-
-    handleDone(data) {
-        if (data.session_id !== this.sessionId) return;
-        this.isCapturing = false;
-        clearInterval(this.currentSnapshotInterval);
-        this.instructions.textContent = data.status === 'success' ? "HOÀN TẤT!" : "LỖI!";
-        setTimeout(() => {
-            alert(data.message);
-            this.captureModal.classList.add('hidden');
-            this.sessionId = null;
-        }, 1500);
-    }
-
-    async stopRegistration() {
-        this.isCapturing = false;
-        clearInterval(this.currentSnapshotInterval);
-        if (this.sessionId) {
-            await fetch('/api/registration/stop', {
-                method: 'POST',
-                body: JSON.stringify({ session_id: this.sessionId })
-            }).catch(()=>{});
+        const data = await res.json();
+        if (res.ok) {
+            regState.sessionId = data.session_id;
+            toggleModal('regInfoModal', false);
+            toggleModal('regCaptureModal', true);
+            startCapturePolling();
+            logSummary(`Bắt đầu đăng ký: ${regState.name}`, "REG");
+        } else {
+            throw new Error(data.error);
         }
-        this.captureModal.classList.add('hidden');
-        this.sessionId = null;
-    }
-
-    resetUI() {
-        this.totalFill.style.width = '0%';
-        this.totalPct.textContent = '0%';
-        this.instructions.textContent = "Chuẩn bị...";
+    } catch (err) {
+        showToast(err.message, "danger");
     }
 }
 
-// Ensure init
-const bootReg = setInterval(() => {
-    if (window.appSocket) {
-        window.faceRegistration = new FaceRegistration(window.appSocket);
-        clearInterval(bootReg);
+async function stopRegistrationCapture() {
+    if (!regState.sessionId) return;
+    
+    try {
+        await fetch('/api/registration/stop', {
+            method: 'POST',
+            body: JSON.stringify({ session_id: regState.sessionId })
+        });
+        stopCapturePolling();
+        toggleModal('regCaptureModal', false);
+        logSummary(`Dừng đăng ký: ${regState.name}`, "REG");
+    } catch (err) {
+        console.error(err);
     }
-}, 500);
+}
+
+// ===================================================================
+//                          UI & POLLING
+// ===================================================================
+
+function startCapturePolling() {
+    if (regState.polling) return;
+
+    // Snapshot Polling
+    regState.polling = setInterval(() => {
+        const snap = document.getElementById('regSnapshot');
+        snap.src = `/api/registration/snapshot/${regState.sessionId}?t=${Date.now()}`;
+    }, 150);
+
+    // Socket.io for progress
+    socket.on('registration_progress', (data) => {
+        if (data.session_id !== regState.sessionId) return;
+        
+        const pct = data.progress || 0;
+        updateRegProgress(pct);
+        
+        const instr = document.getElementById('regInstructions');
+        instr.textContent = data.message || "Vui lòng giữ nguyên vị trí";
+    });
+
+    socket.on('registration_done', (data) => {
+        if (data.session_id !== regState.sessionId) return;
+        
+        stopCapturePolling();
+        
+        if (data.status === 'success') {
+            updateRegProgress(100);
+            showToast(`Đăng ký thành công: ${regState.name}`, "success");
+            logSummary(`Hoàn tất đăng ký: ${regState.name}`, "REG");
+            setTimeout(() => toggleModal('regCaptureModal', false), 1500);
+        } else {
+            showToast(`Lỗi đăng ký: ${data.message}`, "danger");
+            toggleModal('regCaptureModal', false);
+        }
+    });
+}
+
+function stopCapturePolling() {
+    clearInterval(regState.polling);
+    regState.polling = null;
+    socket.off('registration_progress');
+    socket.off('registration_done');
+    
+    // Reset snapshot
+    document.getElementById('regSnapshot').src = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+}
+
+function updateRegProgress(pct) {
+    const circle = document.getElementById('regProgressCircle');
+    const label = document.getElementById('regTotalPct');
+    
+    const radius = circle.r.baseVal.value;
+    const circumference = 2 * Math.PI * radius;
+    
+    const offset = circumference - (pct / 100) * circumference;
+    circle.style.strokeDasharray = `${circumference} ${circumference}`;
+    circle.style.strokeDashoffset = offset;
+    
+    label.textContent = `${Math.round(pct)}%`;
+}
+
+function toggleModal(id, show) {
+    const el = document.getElementById(id);
+    if (show) {
+        el.classList.remove('hidden');
+        el.classList.add('flex');
+    } else {
+        el.classList.add('hidden');
+        el.classList.remove('flex');
+    }
+}
+
+function populateRtspRegList() {
+    const sel = document.getElementById('regRtspSelect');
+    // Global state.cams from app.js
+    if (window.state && window.state.cams) {
+        sel.innerHTML = window.state.cams.map(c => `
+            <option value="${c.cam_url || c.rtsp_url}">${c.label || c.cam_id}</option>
+        `).join('');
+    } else {
+        sel.innerHTML = '<option value="">Chưa có camera RTSP</option>';
+    }
+}

@@ -1,0 +1,10 @@
+*.pt
+*.weights
+*.onnx
+.venv
+*.pyc
+*.mp4
+*.json
+*.txt
+
+data

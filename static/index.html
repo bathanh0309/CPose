@@ -64,90 +64,96 @@
 
     <!-- CENTER COLUMN: Live Webcam + Video Viewers + Summary -->
     <main class="center-col">
-      <section class="live-webcam-section">
-        <div class="webcam-and-register-row">
-          <section class="register-panel">
-            <div class="register-head" style="display:flex; justify-content:space-between; align-items:center;">
-              <h3 style="margin:0;">Register person</h3>
-              <span id="registerStatus" class="hidden"
-                style="color:#ef4444; font-size:10px; font-weight:700; padding:2px 6px; background:rgba(239,68,68,0.1); border-radius:4px;">Yêu
-                cầu ĐK</span>
-            </div>
-            <div class="register-form-stacked">
-              <input type="text" id="personName" placeholder="Tên" class="form-input" />
-              <input type="number" id="personAge" placeholder="Tuổi" class="form-input" />
-              <input type="text" id="personId" placeholder="ID" class="form-input" />
+      <!-- Progress moved to Bottom -->
+      <input id="resourcesInput" class="hidden" type="file" accept=".txt" />
 
-              <div class="register-buttons-row" style="grid-template-columns: 1fr;">
-                <button class="btn btn-action-green" id="registerBtn" style="width: 100%;">Đăng ký person</button>
-              </div>
-              <div id="pipelineProgressContainer" class="hidden" style="margin-top: 12px;">
-                <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px; color:#555; font-weight:600;">
-                  <span>Tiến độ xử lý</span>
-                  <span id="pipelineProgressText">0%</span>
-                </div>
-                <div style="width:100%; height:8px; background:#e2e8f0; border-radius:4px; overflow:hidden;">
-                  <div id="pipelineProgressBar" style="height:100%; width:0%; background:#10b981; transition:width 0.3s ease;"></div>
+      <!-- 2. THE MAIN 2X2 CAMERA GRID -->
+      <section class="live-webcam-section" style="margin-bottom: 20px;">
+        <div class="camera-grid" id="cameraGrid">
+          <!-- TOP-LEFT: Multicam View -->
+          <article class="viewer-card card live-slot" data-slot="rtsp">
+            <div class="viewer-head">
+              <div style="display:flex; align-items:center; gap:8px; flex:1;">
+                <h2 style="font-size:12px; margin:0;">Multicam View</h2>
+                <select class="form-input cam-slot-selector" id="slotSel1" style="font-size:9px; padding:1px 4px; width:auto; min-width:70px;"></select>
+                <div style="display:flex; gap:4px; margin-left:auto;">
+                  <label class="btn btn-action-green" for="resourcesInput" style="font-size:9px; padding:2px 6px; cursor:pointer;">Load RTSP</label>
+                  <button class="btn btn-action-red" id="startRecordingBtn" style="font-size:9px; padding:2px 6px;">Rec</button>
+                  <button class="btn hidden" id="stopRecordingBtn" style="font-size:9px; padding:2px 6px; background:#64748b; color:#fff;">Stop</button>
                 </div>
               </div>
             </div>
-          </section>
-          <article class="viewer-card card webcam-card">
-            <div class="viewer-head">
-              <div>
-                <h2>Live Webcam</h2>
-                <span class="viewer-sub" id="webcamMeta"></span>
-              </div>
-              <div class="viewer-actions">
-                <button id="openWebcamBtn" class="btn btn-action-green" style="padding:4px 8px; font-size:10px;">Open
-                  cam</button>
-                <button id="closeWebcamBtn" class="btn btn-action-red" style="padding:4px 8px; font-size:10px;">Close
-                  cam</button>
-              </div>
+            <div class="viewer-shell">
+              <img id="slotSnap1" class="slot-img" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />
+              <div class="slot-empty" id="slotEmpty1">Chọn cam RTSP</div>
             </div>
-            <div class="webcam-shell hidden" id="webcamShell">
-              <video id="liveWebcam" muted playsinline preload="metadata"></video>
-            </div>
-            <div class="viewer-empty" id="webcamEmpty"></div>
           </article>
+
+          <!-- TOP-RIGHT: Registration Cam -->
+          <article class="viewer-card card live-slot" data-slot="webcam">
+            <div class="viewer-head">
+              <div style="display:flex; align-items:center; gap:8px; flex:1;">
+                <h2 style="font-size:12px; margin:0;">Registration Cam</h2>
+                <div style="display:flex; gap:4px; margin-left:auto;">
+                  <button id="registerBtn" class="btn btn-action-green" style="padding:2px 6px; font-size:9px; background:#10b981;">Register</button>
+                  <button id="openWebcamBtn" class="btn btn-action-green" style="padding:2px 6px; font-size:9px;">Open</button>
+                  <button id="closeWebcamBtn" class="btn btn-action-red" style="padding:2px 6px; font-size:9px;">Close</button>
+                </div>
+              </div>
+            </div>
+            <div class="viewer-shell">
+              <video id="liveWebcam" muted playsinline preload="metadata" style="width:100%; height:100%; object-fit:contain;"></video>
+              <div class="viewer-empty" id="webcamEmpty">Webcam đã đóng</div>
+            </div>
+          </article>
+
+          <!-- BOTTOM-LEFT: Original View -->
+          <article class="viewer-card card live-slot" data-slot="original">
+            <div class="viewer-head">
+              <h2 style="font-size:12px; margin:0;">Original View</h2>
+              <div class="viewer-btn-group">
+                <button id="openOriginal" class="view-btn view-btn-green" style="padding:2px 6px; font-size:9px;">Open</button>
+                <button id="closeOriginal" class="view-btn view-btn-red-sm" style="padding:2px 6px; font-size:9px;">Close</button>
+              </div>
+            </div>
+            <div class="viewer-shell" id="originalShell">
+              <img id="originalVideo" style="width:100%; height:100%; object-fit:contain;" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />
+              <div class="viewer-empty" id="originalEmpty">Chưa có video</div>
+            </div>
+          </article>
+
+          <!-- BOTTOM-RIGHT: Processed View -->
+          <article class="viewer-card card live-slot" data-slot="processed">
+            <div class="viewer-head">
+              <h2 style="font-size:12px; margin:0;">Processed View</h2>
+              <div class="viewer-btn-group">
+                <button id="openProcessed" class="view-btn view-btn-green" style="padding:2px 6px; font-size:9px;">Open</button>
+                <button id="closeProcessed" class="view-btn view-btn-red-sm" style="padding:2px 6px; font-size:9px;">Close</button>
+              </div>
+            </div>
+            <div class="viewer-shell" id="processedShell">
+              <img id="processedVideo" style="width:100%; height:100%; object-fit:contain;" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />
+              <div class="viewer-empty" id="processedEmpty">Chưa có video</div>
+            </div>
+          </article>
+        </div>
+
+        <!-- NEW: Shared Progress at Bottom of Grid -->
+        <div id="pipelineProgressContainer" class="hidden" style="margin-top: 15px; background: rgba(255,255,255,0.7); padding: 10px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.05);">
+          <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:5px; color:#555; font-weight:700;">
+            <span id="pipelineProgressText">Tiến độ xử lý: 0%</span>
+            <span id="mStatus">Ready</span>
+          </div>
+          <div style="width:100%; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
+            <div id="pipelineProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg, #10b981, #34d399); transition:width 0.4s ease;"></div>
+          </div>
         </div>
       </section>
 
-      <section class="viewers-container">
-        <div class="viewers-row">
-          <article class="viewer-card card">
-            <div class="viewer-head">
-              <div>
-                <h2>Original</h2>
-              </div>
-              <div class="viewer-btn-group">
-                <button id="openOriginal" class="view-btn view-btn-green">Open</button>
-                <button id="closeOriginal" class="view-btn view-btn-red-sm">Close</button>
-              </div>
-            </div>
-            <div class="viewer-shell hidden" id="originalShell">
-              <img id="originalVideo" style="width:100%;height:100%;object-fit:contain;background:#000;" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />
-            </div>
-            <div class="viewer-empty" id="originalEmpty"></div>
-          </article>
 
-          <article class="viewer-card card">
-            <div class="viewer-head">
-              <div>
-                <h2>Processed</h2>
-              </div>
-              <div class="viewer-btn-group">
-                <button id="openProcessed" class="view-btn view-btn-green">Open</button>
-                <button id="closeProcessed" class="view-btn view-btn-red-sm">Close</button>
-              </div>
-            </div>
-            <div class="viewer-shell hidden" id="processedShell">
-              <img id="processedVideo" style="width:100%;height:100%;object-fit:contain;background:#000;" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />
-            </div>
-            <div class="viewer-empty" id="processedEmpty"></div>
-          </article>
-        </div>
-      </section>
+
+
+
 
 
       <section class="summary card" style="padding: 12px; overflow-x: auto;">
@@ -211,19 +217,126 @@
     </div>
   </div>
 
-  <!-- Registration Modal -->
-  <div class="register-modal hidden" id="registerModal">
-    <div class="modal-overlay" id="registerOverlay"></div>
-    <div class="modal-content">
+  <!-- Registration Step 1: Source Selection -->
+  <div class="register-modal hidden" id="regSourceModal">
+    <div class="modal-overlay" id="regSourceOverlay"></div>
+    <div class="modal-content premium-modal">
       <div class="modal-head">
-        <span id="registerTitle">Đăng ký khuôn mặt</span>
-        <button class="close-btn" id="closeRegisterBtn">&times;</button>
+        <span>Chọn nguồn Camera</span>
+        <button class="close-btn" id="closeRegSourceBtn">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="form-row"><label>Tên</label><input id="reg_name" type="text" /></div>
-        <div class="form-row"><label>Tuổi</label><input id="reg_age" type="number" /></div>
-        <div class="form-row"><label>ID</label><input id="reg_id" type="text" /></div>
-        <div style="margin-top:10px;text-align:right;"><button class="btn primary" id="registerSubmitBtn">Gửi</button>
+        <div class="source-options">
+          <label class="source-card">
+            <input type="radio" name="reg_source" value="local" checked>
+            <div class="source-card-content">
+              <span class="source-icon">📷</span>
+              <span class="source-title">Local Webcam</span>
+              <span class="source-desc">Sử dụng webcam mặc định của máy tính</span>
+            </div>
+          </label>
+          <label class="source-card">
+            <input type="radio" name="reg_source" value="rtsp">
+            <div class="source-card-content">
+              <span class="source-icon">🌐</span>
+              <span class="source-title">IP Camera (RTSP)</span>
+              <span class="source-desc">Chọn một camera từ hệ thống</span>
+            </div>
+          </label>
+        </div>
+        <div id="rtspSelectGroup" class="form-row hidden" style="margin-top: 15px;">
+          <label>Chọn Cam</label>
+          <select id="regRtspSelect" class="form-input"></select>
+        </div>
+        <div style="margin-top:20px; text-align:right;">
+          <button class="btn btn-action-green" id="toRegInfoBtn">Tiếp tục</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Registration Step 2: User info -->
+  <div class="register-modal hidden" id="regInfoModal">
+    <div class="modal-overlay" id="regInfoOverlay"></div>
+    <div class="modal-content premium-modal">
+      <div class="modal-head">
+        <span>Thông tin người dùng</span>
+        <button class="close-btn" id="backToSourceBtn">&larr;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>Họ tên</label>
+          <input id="regUserName" type="text" class="form-input" placeholder="Nhập tên người dùng..." autofocus />
+        </div>
+        <p style="font-size: 11px; color: #64748b; margin-top: 10px;">ID sẽ được hệ thống tự động khởi tạo.</p>
+        <div style="margin-top:20px; text-align:right;">
+          <button class="btn btn-action-green" id="startCaptureBtn">Bắt đầu chụp</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Registration Step 3: Capture Screen -->
+  <div class="register-modal hidden" id="regCaptureModal">
+    <div class="modal-overlay" id="regCaptureOverlay"></div>
+    <div class="modal-content capture-modal-content">
+      <div class="capture-container">
+        <div class="capture-video-wrapper">
+          <img id="regSnapshot" class="reg-snapshot" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" />
+          <div class="capture-instructions" id="regInstructions">Vui lòng điều chỉnh mặt vào khung</div>
+          
+          <!-- Crosshair / Square box overlay handled on backend, but we can add a subtle UI wrapper -->
+          <div class="capture-frame-overlay"></div>
+        </div>
+        
+        <div class="capture-sidebar">
+          <div class="sidebar-head">
+            <h3 id="regDisplayTitle">Đăng ký: ...</h3>
+            <button class="btn-close-capture" id="stopRegBtn">&times;</button>
+          </div>
+          
+          <div class="capture-stats">
+            <div class="progress-total">
+              <div class="progress-header">
+                <span>Tiến độ tổng hợp</span>
+                <span id="regTotalPct">0%</span>
+              </div>
+              <div class="progress-track">
+                <div id="regTotalBar" class="progress-fill" style="width: 0%"></div>
+              </div>
+            </div>
+            
+            <div class="angle-stats-grid">
+              <div class="angle-item" data-angle="center">
+                <span class="angle-label">Thẳng</span>
+                <div class="angle-dots" id="dots-center"></div>
+              </div>
+              <div class="angle-item" data-angle="left">
+                <span class="angle-label">Trái</span>
+                <div class="angle-dots" id="dots-left"></div>
+              </div>
+              <div class="angle-item" data-angle="right">
+                <span class="angle-label">Phải</span>
+                <div class="angle-dots" id="dots-right"></div>
+              </div>
+              <div class="angle-item" data-angle="up">
+                <span class="angle-label">Trên</span>
+                <div class="angle-dots" id="dots-up"></div>
+              </div>
+              <div class="angle-item" data-angle="down">
+                <span class="angle-label">Dưới</span>
+                <div class="angle-dots" id="dots-down"></div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="capture-tips">
+            <h4>Mẹo:</h4>
+            <ul>
+              <li>Giữ khuôn mặt rõ ràng, không đeo kính râm hay khẩu trang.</li>
+              <li>Chờ highlight xanh cho từng góc.</li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>
@@ -235,6 +348,7 @@
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"
     integrity="sha384-mkQ3/7FUtcGyoppY6bz/PORUfTfs4FWIQ6DuhFoiYT/dV4oS4NbvGzYI7mkl3Hm" crossorigin="anonymous"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/registration.js"></script>
 </body>
 
 </html>

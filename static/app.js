@@ -7,9 +7,14 @@ let _pending_register_clip = null;
 function initSocket() {
   if (!window.io) return;
   socket = io();
+  window.appSocket = socket;
 
   socket.on("connect", () => {
     console.info("Socket connected to server");
+  });
+
+  socket.on("rec_status", (msg) => {
+    handleRecordingStatus(msg);
   });
 
   socket.on("pose_progress", (msg) => {
@@ -105,10 +110,13 @@ const refs = {
   modalTitle: $("modalTitle"),
   openWebcamBtn: $("openWebcamBtn"),
   closeWebcamBtn: $("closeWebcamBtn"),
-  personName: $("personName"),
-  personAge: $("personAge"),
-  personId: $("personId"),
+  resourcesInput: $("resourcesInput"),
+  startRecordingBtn: $("startRecordingBtn"),
+  stopRecordingBtn: $("stopRecordingBtn"),
   registerBtn: $("registerBtn"),
+  slots: [
+    { sel: $("slotSel1"), img: $("slotSnap1"), empty: $("slotEmpty1"), meta: $("slotMeta1") }
+  ]
 };
 
 let lamps = {};
@@ -421,8 +429,9 @@ function renderDynamicCameras() {
     tbody.innerHTML = uniqueCams.map(cam => `
       <tr>
         <td>
-          <div style="display:flex; justify-content:center; align-items:center;">
-             <div class="lamp ${state.lampState[cam] || 'idle'}" id="lamp_${cam}" style="width:24px; height:24px; border-width: 1px;"></div>
+          <div style="display:flex; justify-content:center; align-items:center; gap: 8px;">
+             <input type="checkbox" data-cam="${cam}" checked style="cursor:pointer;" />
+             <div class="lamp ${state.lampState[cam] || 'idle'}" id="lamp_${cam}" style="width:20px; height:20px; border-width: 1px;"></div>
           </div>
         </td>
         <td>${cam}</td>
@@ -435,9 +444,27 @@ function renderDynamicCameras() {
     `).join("");
   }
   
-  uniqueCams.forEach(cam => {
-    lamps[cam] = $(`lamp_${cam}`);
-    if (!state.lampState[cam]) state.lampState[cam] = "idle";
+    uniqueCams.forEach(cam => {
+      lamps[cam] = $(`lamp_${cam}`);
+      if (!state.lampState[cam]) state.lampState[cam] = "idle";
+    });
+
+    syncSlotSelectors();
+}
+
+function syncSlotSelectors() {
+  refs.slots.forEach(slot => {
+    const currentVal = slot.sel.value;
+    slot.sel.innerHTML = '<option value="">-- None --</option>';
+    uniqueCams.forEach(cam => {
+      const opt = document.createElement("option");
+      opt.value = cam;
+      opt.textContent = cam;
+      slot.sel.appendChild(opt);
+    });
+    if (uniqueCams.includes(currentVal)) {
+      slot.sel.value = currentVal;
+    }
   });
 }
 
@@ -853,6 +880,124 @@ function registerSubject() {
   _pending_register_clip = null;
 }
 
+function initGridRefresh() {
+  setInterval(() => {
+    // Only refresh the RTSP slot
+    const slot = refs.slots[0];
+    if (!slot) return;
+    
+    const camId = slot.sel.value;
+    if (!camId) {
+      slot.img.classList.add("hidden");
+      slot.empty.classList.remove("hidden");
+      slot.meta.textContent = "Offline";
+      return;
+    }
+    
+    slot.img.classList.remove("hidden");
+    slot.empty.classList.add("hidden");
+    slot.img.src = `/api/cameras/${camId}/snapshot?t=${Date.now()}`;
+    
+    const lamp = state.lampState[camId] || "idle";
+    slot.meta.textContent = lamp.charAt(0).toUpperCase() + lamp.slice(1);
+    slot.meta.style.color = lamp === "active" ? "#10b981" : "#64748b";
+  }, 250); 
+}
+
+async function importCameras(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch("/api/config/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (data.cameras) {
+      toast(`Loaded ${data.cameras.length} cameras`, "success");
+      uniqueCams = data.cameras.map(c => c.id);
+      renderDynamicCameras();
+    } else {
+      toast(data.error || "Upload failed", "error");
+    }
+  } catch (e) {
+    toast("Connection error", "error");
+  }
+  event.target.value = "";
+}
+
+async function startShortRecording() {
+  // Get currently selected cameras from checkboxes in summary table
+  const selectedCams = [];
+  document.querySelectorAll(".summary-table input[type='checkbox']:checked").forEach(cb => {
+    const camId = cb.dataset.cam;
+    selectedCams.push(camId);
+  });
+
+  if (selectedCams.length === 0) {
+    // If none selected, use all available cameras
+    selectedCams.push(...uniqueCams);
+  }
+
+  if (selectedCams.length === 0) {
+    toast("No cameras to record", "warning");
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/recording/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cameras: selectedCams,
+        storage_limit_gb: 1,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      toast("Recording started", "success");
+    } else {
+      toast(data.error || "Failed to start", "error");
+    }
+  } catch (e) {
+    toast("Connection error", "error");
+  }
+}
+
+async function stopShortRecording() {
+  try {
+    const res = await fetch("/api/recording/stop", { method: "POST" });
+    if (res.ok) {
+      toast("Recording stopped", "info");
+      // Refresh videos list after a short delay
+      setTimeout(() => {
+        logEvent("SYS", "Recording done, check Video queue", "1.00", "--");
+      }, 1000);
+    }
+  } catch (e) {
+    toast("Connection error", "error");
+  }
+}
+
+function handleRecordingStatus(msg) {
+  const isRunning = msg.running;
+  if (refs.startRecordingBtn) refs.startRecordingBtn.classList.toggle("hidden", isRunning);
+  if (refs.stopRecordingBtn) refs.stopRecordingBtn.classList.toggle("hidden", !isRunning);
+  
+  if (isRunning) {
+    setWorkspaceState("RECORDING", "running");
+  } else {
+    // Check if we were recording before
+    if (refs.workspaceState && refs.workspaceState.textContent === "RECORDING") {
+       setWorkspaceState("READY", "ready");
+    }
+  }
+}
+
 function boot() {
   // initialize Socket.IO after DOM ready
   initSocket();
@@ -881,44 +1026,14 @@ function boot() {
   refs.closePreviewBtn.addEventListener("click", hidePreviewModal);
   refs.modalOverlay.addEventListener("click", hidePreviewModal);
 
-  refs.openWebcamBtn.addEventListener("click", openWebcam);
+  refs.resourcesInput.addEventListener("change", importCameras);
+  refs.startRecordingBtn.addEventListener("click", startShortRecording);
+  refs.stopRecordingBtn.addEventListener("click", stopShortRecording);
+
+  if (refs.openWebcamBtn) refs.openWebcamBtn.addEventListener("click", openWebcam);
   if (refs.closeWebcamBtn) refs.closeWebcamBtn.addEventListener("click", closeWebcam);
-  refs.registerBtn.addEventListener("click", registerSubject);
 
-  // registration modal handlers
-  const registerModal = document.getElementById("registerModal");
-  const closeRegisterBtn = document.getElementById("closeRegisterBtn");
-  const registerSubmitBtn = document.getElementById("registerSubmitBtn");
-
-  function closeRegisterModal() {
-    if (!registerModal) return;
-    registerModal.classList.add("hidden");
-  }
-
-  function openRegisterModal(cam, clipStem) {
-    if (!registerModal) return;
-    document.getElementById("reg_name").value = "";
-    document.getElementById("reg_age").value = "";
-    document.getElementById("reg_id").value = "";
-    registerModal.classList.remove("hidden");
-  }
-
-  window.openRegisterModal = openRegisterModal;
-
-  if (closeRegisterBtn) closeRegisterBtn.addEventListener("click", closeRegisterModal);
-  if (registerSubmitBtn) registerSubmitBtn.addEventListener("click", () => {
-    const payload = {
-      clip_stem: _pending_register_clip || "",
-      name: document.getElementById("reg_name").value,
-      age: document.getElementById("reg_age").value,
-      person_id: document.getElementById("reg_id").value,
-    };
-    if (socket && socket.connected) {
-      socket.emit("register_face_done", payload);
-    }
-    closeRegisterModal();
-    _pending_register_clip = null;
-  });
+  initGridRefresh();
 
   renderDynamicCameras();
   showViewer("original", true);

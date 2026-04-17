@@ -12,6 +12,7 @@ from app.core.recognizer_service import RecognizerService
 from app.utils.file_handler import StorageManager
 from app.utils.stream_probe import StreamProber
 from app.utils.file_handler import sort_multicam_clips
+from app.services.registration_service import RegistrationManager
 
 logger = logging.getLogger("[API]")
 
@@ -36,6 +37,7 @@ _analyzer = Analyzer()
 _pose = RecognizerService(socket_callback=_on_socket_emit, registration_callback=_on_request_registration)
 _storage = StorageManager()
 _prober = StreamProber()
+_registration = RegistrationManager()
 
 
 def _resolve_dir(raw_value: str | None, default: Path) -> Path:
@@ -186,7 +188,23 @@ def start_recording():
     và các cấu hình bổ sung cho Phase 1.
     """
     body = request.get_json(force=True, silent=True) or {}
-    cameras = body.get("cameras") or []
+    selected_cams = body.get("cameras") or []
+    
+    if isinstance(selected_cams, str):
+        selected_cams = [selected_cams]
+
+    # Bổ sung logic map từ ID string sang dict cấu hình đầy đủ nhằm tránh lỗi TypeError
+    all_cams = _storage.parse_resources(_app_module.RESOURCES_FILE)
+    cameras = []
+    
+    # Nếu danh sách gửi lên là string (ID), ta tìm trong resources.txt
+    if len(selected_cams) > 0 and isinstance(selected_cams[0], str):
+        for c in all_cams:
+            if c.get("cam_id") in selected_cams or c.get("label") in selected_cams:
+                cameras.append(c)
+    else:
+        # Nếu đã là dict (Cách A), dùng luôn
+        cameras = selected_cams
 
     try:
         storage_limit_gb = float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB))
@@ -194,7 +212,7 @@ def start_recording():
         return jsonify({"error": "storage_limit_gb must be numeric"}), 400
 
     if not cameras:
-        return jsonify({"error": "No cameras specified"}), 400
+        return jsonify({"error": "No valid cameras found or specified"}), 400
 
     if _recorder.is_running():
         return jsonify({"error": "Recording is already running"}), 409
@@ -476,3 +494,77 @@ def serve_video(filepath):
     from flask import send_from_directory
     data_dir = _app_module.BASE_DIR / "data"
     return send_from_directory(data_dir, filepath)
+
+
+# ===================================================================
+#                          FACE REGISTRATION
+# ===================================================================
+
+@api_bp.route("/registration/start", methods=["POST"])
+def start_registration():
+    """
+    Bắt đầu session đăng ký khuôn mặt đa góc.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    source = body.get("source")
+    rtsp_url = body.get("rtsp_url")
+    user_name = body.get("name")
+
+    if not user_name:
+        return jsonify({"error": "Name is required"}), 400
+    
+    if source == "rtsp" and not rtsp_url:
+        return jsonify({"error": "RTSP URL is required for RTSP source"}), 400
+    
+    camera_source = "local" if source == "local" else rtsp_url
+    
+    def on_progress(data):
+        _on_socket_emit("registration_progress", data)
+        
+    def on_done(data):
+        _on_socket_emit("registration_done", data)
+        # Refresh face database in recognizer if success
+        if data.get("status") == "success":
+            _pose.refresh_face_database()
+
+    session_id = _registration.start_session(
+        source=camera_source,
+        user_name=user_name,
+        on_progress=on_progress,
+        on_done=on_done
+    )
+
+    return jsonify({"session_id": session_id, "status": "started"})
+
+
+@api_bp.route("/registration/stop", methods=["POST"])
+def stop_registration():
+    """
+    Dừng session đăng ký khuôn mặt.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    session_id = body.get("session_id")
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+    
+    _registration.stop_session(session_id)
+    return jsonify({"message": "Stopped"})
+
+
+@api_bp.route("/registration/snapshot/<session_id>", methods=["GET"])
+def registration_snapshot(session_id: str):
+    """
+    Trả về snapshot của session đăng ký đang chạy.
+    """
+    jpeg = _registration.get_snapshot(session_id)
+    if jpeg is None:
+        return Response(status=204)
+
+    return Response(
+        jpeg,
+        mimetype="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )

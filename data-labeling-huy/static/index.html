@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuralTrans - Data Collection Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-slate-50 p-6 font-sans relative min-h-screen">
+    <div class="max-w-7xl mx-auto">
+        <header
+            class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-200 pb-5">
+            <div>
+                <h1 class="text-3xl font-bold text-slate-800">Data Collection & Auto-Labeling</h1>
+                <p class="text-sm text-slate-500 mt-1">Background Service Status: <strong id="service-status"
+                        class="text-slate-500 font-medium">Idle</strong></p>
+            </div>
+            <div class="mt-4 md:mt-0 flex gap-2">
+                <button onclick="toggleService('start')"
+                    class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium transition shadow-sm">▶
+                    Start Service</button>
+                <button onclick="toggleService('stop')"
+                    class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded text-sm font-medium transition shadow-sm">⏹
+                    Stop Service</button>
+            </div>
+        </header>
+
+        <div
+            class="mb-6 bg-white rounded-lg shadow border border-slate-200 p-5 flex flex-col md:flex-row items-center gap-4">
+            <div class="flex-1">
+                <h2 class="text-md font-semibold text-slate-800">Cấu hình nguồn (RTSP)</h2>
+                <p class="text-xs text-slate-500 mt-0.5">Upload file <code
+                        class="bg-slate-100 px-1 rounded">resources.txt</code>. Định dạng: <code
+                        class="bg-slate-100 px-1 rounded">Tên_Cam__Link_RTSP</code></p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span id="upload-status" class="text-sm text-slate-500 italic">Chưa nạp file</span>
+                <label
+                    class="bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded text-sm font-medium cursor-pointer transition flex items-center gap-2">
+                    📄 Nạp cấu hình
+                    <input type="file" accept=".txt" class="hidden" onchange="handleFileUpload(event)">
+                </label>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 bg-white rounded-lg shadow border border-slate-200 p-5">
+                <h2 class="text-lg font-semibold mb-4 border-b pb-2">Camera Status (Phase 1)</h2>
+                <div class="overflow-x-auto h-64 overflow-y-auto">
+                    <table class="w-full text-left text-sm relative">
+                        <thead class="bg-slate-100 text-slate-600 sticky top-0">
+                            <tr>
+                                <th class="p-3 rounded-tl-md">Cam Name</th>
+                                <th class="p-3">Status</th>
+                                <th class="p-3 rounded-tr-md">FPS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="camera-status-body" class="divide-y divide-slate-100">
+                            <tr>
+                                <td colspan="3" class="p-6 text-center text-slate-400">Vui lòng nạp cấu hình nguồn
+                                    (resources.txt)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow border border-slate-200 p-5 flex flex-col">
+                <div class="flex justify-between items-center mb-4 border-b pb-2">
+                    <h2 class="text-lg font-semibold">Live Monitor</h2>
+                    <select id="live-cam-select"
+                        class="text-sm border border-slate-300 rounded p-1 outline-none max-w-[150px]">
+                        <option value="">-- Trống --</option>
+                    </select>
+                </div>
+
+                <div
+                    class="bg-slate-900 rounded aspect-video flex items-center justify-center text-slate-500 mb-4 relative">
+                    <span id="stream-text">RTSP Stream</span>
+                </div>
+
+                <div class="flex gap-2 mt-auto">
+                    <button
+                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-medium transition">Play
+                        View</button>
+                    <button
+                        class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 py-2 rounded text-sm font-medium transition">Stop
+                        View</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-6 bg-white rounded-lg shadow border border-slate-200 p-5">
+            <div class="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-4 border-b pb-2 gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold">Auto-Labeling Queue (Phase 2)</h2>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2">
+                    <div class="flex items-center gap-2 mr-2">
+                        <button onclick="handleOutputFolderSelection()"
+                            class="bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded text-sm font-medium cursor-pointer transition flex items-center gap-1.5 shadow-sm">
+                            📂 Select Output Folder
+                        </button>
+                        <span id="output-folder-name" class="text-xs truncate max-w-[160px]"></span>
+                    </div>
+
+                    <label
+                        class="bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded text-sm font-medium cursor-pointer transition flex items-center gap-2">
+                        📁 Select Videos
+                        <input type="file" multiple accept="video/mp4" class="hidden"
+                            onchange="handleVideoSelection(event)">
+                    </label>
+                    <button onclick="checkAndShowModal()"
+                        class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-medium transition flex items-center gap-2 shadow-sm">
+                        ▶ Process
+                    </button>
+                    <button onclick="promptStopProcessing()"
+                        class="bg-slate-700 hover:bg-slate-800 text-white px-4 py-1.5 rounded text-sm font-medium transition flex items-center gap-2 shadow-sm">
+                        ⏹ Stop All
+                    </button>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto max-h-80 overflow-y-auto">
+                <table class="w-full text-left text-sm relative">
+                    <thead class="bg-slate-100 text-slate-600 sticky top-0 z-10">
+                        <tr>
+                            <th class="p-3 rounded-tl-md w-12 text-center">
+                                <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"
+                                    class="w-4 h-4 cursor-pointer">
+                            </th>
+                            <th class="p-3">Video File</th>
+                            <th class="p-3">Size</th>
+                            <th class="p-3 rounded-tr-md">Status & Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100" id="queue-body">
+                        <tr id="empty-queue-row">
+                            <td colspan="4" class="p-6 text-center text-slate-400">Chưa có dữ liệu. Vui lòng chọn Output
+                                Folder hoặc Videos.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirm-modal"
+        class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 class="text-xl font-bold text-slate-800 mb-2">Xác nhận chạy Auto-Labeling</h3>
+            <p class="text-slate-600 text-sm mb-6">Bạn chuẩn bị gán nhãn cho <strong id="file-count"
+                    class="text-blue-600">0</strong> file. Hệ thống sẽ tạo folder tương ứng trong Output Folder. Tiếp
+                tục?</p>
+            <div class="flex justify-end gap-3">
+                <button onclick="hideConfirmModal()"
+                    class="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded text-sm font-medium transition">Hủy</button>
+                <button onclick="startProcessing()"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium transition shadow-sm">Xác
+                    nhận</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="stop-confirm-modal"
+        class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity">
+        <div class="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border-t-4 border-red-500">
+            <h3 class="text-xl font-bold text-red-600 mb-2">Cảnh báo: Dừng tiến trình!</h3>
+            <p class="text-slate-600 text-sm mb-6">Có <strong id="stop-count" class="text-red-600">0</strong> file đang
+                được xử lý dở dang. Bạn có chắc chắn muốn dừng toàn bộ?</p>
+            <div class="flex justify-end gap-3">
+                <button onclick="hideStopModal()"
+                    class="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded text-sm font-medium transition">Hủy</button>
+                <button onclick="confirmStopProcessing()"
+                    class="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded text-sm font-medium transition shadow-sm">Vẫn
+                    Dừng</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="change-path-modal"
+        class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
+            <h3 class="text-lg font-bold text-slate-800 mb-1">Thay đổi Output Folder</h3>
+            <p class="text-xs text-slate-500 mb-4">Nhập đường dẫn thư mục trên server nơi kết quả sẽ được lưu.</p>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Đường dẫn server-side</label>
+            <input id="new-path-input" type="text" placeholder="VD: data/output  hoặc  /mnt/storage/labels"
+                onkeydown="if(event.key==='Enter') confirmChangePath(); if(event.key==='Escape') hideChangePathModal();"
+                class="w-full border border-slate-300 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400 mb-1">
+            <p id="path-error" class="hidden text-xs text-red-500 mb-3"></p>
+            <p class="text-xs text-slate-400 mb-5">
+                💡 Đây là path trên máy chạy server, không phải máy của bạn.<br>
+                Path mặc định: <code class="bg-slate-100 px-1 rounded">data/output_labels</code>
+            </p>
+            <div class="flex justify-end gap-3">
+                <button onclick="hideChangePathModal()"
+                    class="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded text-sm font-medium transition">Hủy</button>
+                <button id="confirm-path-btn" onclick="confirmChangePath()"
+                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-medium transition shadow-sm">Xác
+                    nhận</button>
+            </div>
+        </div>
+    </div>
+    <script src = "js/phase1.js" ></script>
+    <script src = "js/phase2.js" ></script>
+    <script src = "js/main.js" ></script>
+
+</body>
+
+</html>

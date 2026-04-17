@@ -113,6 +113,11 @@ class RecognizerService:
             result["saved"] = True
             return {"ok": True, "clip_stem": clip_stem}
 
+    def refresh_face_database(self):
+        """Reload the face embeddings from disk."""
+        logger.info("Face database refresh requested (not implemented in this engine yet)")
+        pass
+
     def _update_state(self, **kwargs):
         with self._lock:
             self._state.update(kwargs)

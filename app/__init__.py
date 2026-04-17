@@ -13,6 +13,20 @@ OUTPUT_POSE_DIR = DATA_DIR / "output_pose"
 MODELS_DIR = BASE_DIR / "models"
 STATIC_DIR = BASE_DIR / "static"
 
+# ==== NEW: model & config paths / defaults ====
+# Paths to model weights used by Phase 1/2/3 and pose config file.
+# Adjust filenames if your workspace stores them under different names.
+MODEL_PHASE1 = MODELS_DIR / "yolov8n.pt"
+MODEL_PHASE2 = MODELS_DIR / "yolo11n.pt"
+MODEL_PHASE3 = MODELS_DIR / "yolo11n-pose.pt"
+
+# Pose config: prefer a dedicated pose config in data/config, fall back to unified config elsewhere.
+POSE_CONFIG_FILE = CONFIG_DIR / "pose_config.yaml"
+
+# Default storage limit (GB) used by recording APIs if client omits value
+DEFAULT_STORAGE_LIMIT_GB = 10.0
+# ==============================================
+
 # 2. Init Environment & Directories
 load_dotenv(BASE_DIR / ".env")
 
@@ -47,4 +61,21 @@ def create_app():
 
 from app.bootstrap.app_factory import socketio
 
-__all__ = ["create_app", "socketio", "get_config", "BASE_DIR", "STATIC_DIR"]
+__all__ = [
+    "create_app",
+    "socketio",
+    "get_config",
+    "BASE_DIR",
+    "STATIC_DIR",
+    "CONFIGS_DIR",
+    "DATA_DIR",
+    "RAW_VIDEOS_DIR",
+    "OUTPUT_DIR",
+    "OUTPUT_POSE_DIR",
+    "MODELS_DIR",
+    "MODEL_PHASE1",
+    "MODEL_PHASE2",
+    "MODEL_PHASE3",
+    "POSE_CONFIG_FILE",
+    "DEFAULT_STORAGE_LIMIT_GB",
+]

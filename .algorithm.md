@@ -1,0 +1,1037 @@
+# CPose — Thuật toán Không gian–Thời gian Thực cho Demo 3 Người (Xử lý Tuần tự, Ưu tiên Thời gian)
+
+## 1. Mục tiêu tài liệu
+
+Tài liệu này đặc tả **thuật toán không gian–thời gian thực theo kiểu tuần tự (sequential spatiotemporal processing)** cho demo ứng dụng CPose/HavenPose với dữ liệu test được nạp thủ công trong:
+
+- `D:\Capstone_Project\data\multicam\`
+- ví dụ: `D:\Capstone_Project\data\multicam\
+
+Mục tiêu của phiên bản demo hiện tại:
+
+1. **Không dùng train/val runtime**. Các video `camxx-...mp4` chỉ dùng để **test/demo**.
+2. **Xử lý tuần tự theo thời gian trước**, sau đó mới tới thứ tự camera.
+3. **Ưu tiên giữ ít Global ID nhất có thể** khi người di chuyển qua các camera.
+4. **Pose và ADL được xử lý nối tiếp**, không chạy song song.
+5. Có thể hiển thị **mapping 4 camera bằng 4 bóng đèn từ trái sang phải**, bóng đèn camera nào đang xử lý thì sáng lên.
+6. Kết quả được lưu về:
+   - `D:\Capstone_Project\data\output_pose\`
+
+Phiên bản này phù hợp để demo trước với **3 người di chuyển**, sau đó mới nâng cấp lên multi-person phức tạp hơn.
+
+---
+
+## 2. Tách biệt TRAIN/VAL và TEST
+
+### 2.1 Train/Val
+
+`research_ADL.md` được xem là tài liệu khảo sát cho phần **train/val** dùng dataset ngoài và pretrained model sẵn có. Hướng ưu tiên là skeleton/pose-based ADL vì phù hợp với pipeline keypoints của CPose. Các nhóm phương pháp tham khảo chính gồm:
+
+- Skeleton GCN: **ST-GCN, MS-G3D, CTR-GCN, BlockGCN**
+- Skeleton Transformer: **SkateFormer**
+- Pose backbone: **RTMPose, RTMO**
+- RGB/video baseline: **TSM**
+- Dataset train/val: **NTU RGB+D 60/120, ETRI Activity3D, Toyota Smarthome, Charades**
+
+### 2.2 Test/Demo Runtime
+
+Các video trong:
+
+- `D:\Capstone_Project\data\multicam\camxx-giay-phut-gio-ngay-thang-nam.mp4`
+
+chỉ dùng để:
+
+- test app
+- test thuật toán pose/ADL
+- test ReID xuyên camera
+- test logic không gian–thời gian
+- test UI mapping 4 bóng đèn camera
+
+> **Nguyên tắc:** train/val nằm ngoài pipeline runtime. Runtime chỉ đọc clip test và sinh kết quả.
+
+---
+
+## 3. Quy ước tên file và ưu tiên xử lý
+
+### 3.1 Định dạng file video test thủ công
+
+Định dạng bắt buộc:
+
+```text
+camxx-ss-mm-hh-dd-MM-yyyy.mp4
+```
+
+Ví dụ:
+
+```text
+cam01-25-26-16-29-01-2026.mp4
+cam02-40-26-16-29-01-2026.mp4
+cam03-15-58-15-28-01-2026.mp4
+cam04-27-46-16-29-01-2026.mp4
+```
+
+Trong đó:
+
+- `camxx`: mã camera, ví dụ `cam01`, `cam02`, `cam03`, `cam04`
+- `ss`: giây
+- `mm`: phút
+- `hh`: giờ
+- `dd`: ngày
+- `MM`: tháng
+- `yyyy`: năm
+
+### 3.2 Nguyên tắc sort clip
+
+Hệ thống **không được sort theo tên file thuần túy**. Hệ thống phải:
+
+1. parse timestamp từ filename
+2. sắp xếp theo:
+   - `year`
+   - `month`
+   - `day`
+   - `hour`
+   - `minute`
+   - `second`
+3. nếu timestamp bằng nhau thì mới sort theo `camxx`
+
+### 3.3 Quy tắc ưu tiên xử lý
+
+**Ưu tiên thời gian trước, camera sau**.
+
+Nghĩa là:
+
+```text
+sort_key = (year, month, day, hour, minute, second, cam_index)
+```
+
+Nếu có các file:
+
+```text
+cam01-25-26-16-29-01-2026.mp4
+cam02-40-26-16-29-01-2026.mp4
+cam03-15-58-15-28-01-2026.mp4
+```
+
+thì clip `cam03-15-58-15-28-01-2026.mp4` phải được xử lý trước vì timestamp cũ hơn.
+
+---
+
+## 4. Mô hình không gian camera
+
+## 4.1 Topology camera đề xuất
+
+Cho demo hiện tại, xem topology như sau:
+
+```text
+cam01  ->  cam02  ->  cam03  ->  [thang máy]  ->  cam04
+                           \                     /
+                            \-> [quay lại] <----/
+
+cam04 -> [phòng tầng trên] -> cam04
+cam03 -> [vùng khuất / quay đầu / xuống tầng dưới] -> cam03 hoặc cam02
+```
+
+### 4.2 Ý nghĩa không gian
+
+- `cam01`: điểm vào đầu tuyến
+- `cam02`: trung gian tầng dưới
+- `cam03`: gần thang máy / vùng chuyển tầng
+- `cam04`: tầng trên
+- `room@cam04`: phòng kín ở tầng trên
+- `elevator`: vùng khuất, không có quan sát trực tiếp giữa `cam03` và `cam04`
+
+### 4.3 Ý nghĩa thuật toán
+
+Khi một người biến mất ở `cam03` gần vùng thang máy, thuật toán **không tạo ID mới ngay**. Thay vào đó, nó chuyển Global ID sang trạng thái **PENDING_ELEVATOR_UP** hoặc **PENDING_ELEVATOR_RETURN** để chờ clip kế tiếp phù hợp theo thời gian.
+
+---
+
+## 5. Tư tưởng thuật toán tổng thể
+
+## 5.1 Tên thuật toán đề xuất
+
+**TFCS-PAR** = **Time-First Cross-Camera Sequential Pose–ADL–ReID**
+
+Tư tưởng chính:
+
+1. đọc toàn bộ clip test trong `data/multicam`
+2. parse thời gian từ tên file
+3. sort toàn bộ clip theo thời gian
+4. xử lý **mỗi clip một lần, một camera một thời điểm**
+5. trong từng clip:
+   - detect/tracking cục bộ
+   - trích pose
+   - suy luận ADL
+   - cập nhật ReID xuyên camera
+   - cập nhật timeline người
+6. sau khi clip xong mới chuyển sang clip tiếp theo
+
+> Đây là **xử lý tuần tự theo timeline**, không phải parallel multi-camera runtime.
+
+---
+
+## 6. Kiến trúc logic tuần tự
+
+```text
+Manual MP4 test clips
+    ↓
+Parse filename timestamp
+    ↓
+Global sort by (time, cam)
+    ↓
+Sequential Scheduler
+    ↓
+Open clip_i
+    ↓
+Turn ON lamp(cam_i)
+    ↓
+Person Detect + Local Track
+    ↓
+Pose Inference
+    ↓
+ADL Inference (sliding window)
+    ↓
+Cross-camera ReID update
+    ↓
+Write output_pose/<clip_stem>/...
+    ↓
+Turn OFF lamp(cam_i)
+    ↓
+Move to next clip
+```
+
+---
+
+## 7. Trạng thái hệ thống cần duy trì
+
+Thuật toán tuần tự cần 5 bảng trạng thái chính.
+
+### 7.1 `ClipQueue`
+
+Danh sách clip sau khi sort.
+
+Mỗi phần tử:
+
+```python
+{
+  "clip_path": "D:/Capstone_Project/data/multicam/cam02-40-26-16-29-01-2026.mp4",
+  "cam_id": "cam02",
+  "clip_dt": datetime(...),
+  "cam_index": 2
+}
+```
+
+### 7.2 `GlobalPersonTable`
+
+Bảng Global ID dùng xuyên camera.
+
+```python
+{
+  "GID-001": {
+    "status": "ACTIVE | PENDING_TRANSFER | IN_ROOM | DORMANT | CLOSED",
+    "last_cam": "cam03",
+    "last_time": "2026-01-29 16:26:40",
+    "last_adl": "walking",
+    "last_face_emb": ...,
+    "last_body_emb": ...,
+    "last_pose_signature": ...,
+    "last_height_ratio": ...,
+    "history": [...]
+  }
+}
+```
+
+### 7.3 `PendingTransitionBuffer`
+
+Buffer giữ các ID vừa biến mất tại vùng hợp lý, chờ xuất hiện ở camera kế tiếp.
+
+Ví dụ:
+
+```python
+{
+  "GID-001": {
+    "from_cam": "cam03",
+    "expected_next": ["cam04", "cam03"],
+    "reason": "elevator_zone",
+    "ttl_sec": 180,
+    "created_at": "2026-01-29 16:26:40"
+  }
+}
+```
+
+### 7.4 `RoomHoldBuffer`
+
+Dùng cho các vùng mù như phòng kín ở `cam04`.
+
+```python
+{
+  "GID-002": {
+    "cam": "cam04",
+    "zone": "room_upstairs",
+    "enter_time": "2026-01-29 16:31:10",
+    "ttl_sec": 300,
+    "allow_clothes_change": True
+  }
+}
+```
+
+### 7.5 `LampState`
+
+```python
+{
+  "cam01": "IDLE | ACTIVE | DONE | ALERT",
+  "cam02": "IDLE | ACTIVE | DONE | ALERT",
+  "cam03": "IDLE | ACTIVE | DONE | ALERT",
+  "cam04": "IDLE | ACTIVE | DONE | ALERT"
+}
+```
+
+---
+
+## 8. Mapping 4 bóng đèn camera từ trái sang phải
+
+## 8.1 Quy ước hiển thị
+
+```text
+💡 Cam01 ─── 💡 Cam02 ─── 💡 Cam03 ─── 💡 Cam04
+```
+
+### 8.2 Ý nghĩa màu
+
+- `⚪ IDLE`: chưa xử lý clip của camera đó
+- `🟡 ACTIVE`: clip camera đó đang được xử lý
+- `🟢 DONE`: clip camera đó vừa xử lý xong
+- `🔴 ALERT`: camera đang có anomaly / unknown / conflict
+
+### 8.3 Ví dụ hiển thị
+
+**Trước khi chạy:**
+
+```text
+⚪ Cam01 ─── ⚪ Cam02 ─── ⚪ Cam03 ─── ⚪ Cam04
+```
+
+**Đang xử lý clip cam02:**
+
+```text
+⚪ Cam01 ─── 🟡 Cam02 ─── ⚪ Cam03 ─── ⚪ Cam04
+```
+
+**Xử lý xong cam02, chuyển sang cam03:**
+
+```text
+⚪ Cam01 ─── 🟢 Cam02 ─── 🟡 Cam03 ─── ⚪ Cam04
+```
+
+**Nếu cam04 xuất hiện unknown hoặc xung đột ReID:**
+
+```text
+🟢 Cam01 ─── 🟢 Cam02 ─── 🟢 Cam03 ─── 🔴 Cam04
+```
+
+---
+
+## 9. Thuật toán tuần tự chi tiết theo clip
+
+## 9.1 Bước 1 — Lấy clip tiếp theo theo thứ tự thời gian
+
+```python
+clips = sorted(multicam_clips, key=parse_time_then_cam)
+for clip in clips:
+    process_one_clip(clip)
+```
+
+## 9.2 Bước 2 — Bật bóng đèn camera đang xử lý
+
+```python
+lamp[cam] = "ACTIVE"
+```
+
+## 9.3 Bước 3 — Tracking cục bộ trong clip
+
+Mỗi clip phải có **stable local track ID** trong phạm vi clip.
+
+Khuyến nghị:
+
+- không dùng `person_id = index trong frame`
+- dùng tracker ổn định theo clip, ví dụ:
+  - YOLO track mode, hoặc
+  - DeepSORT / ByteTrack
+
+Kết quả trong một clip:
+
+```text
+local_track_01
+local_track_02
+local_track_03
+```
+
+Các local track này chỉ có giá trị trong clip hiện tại.
+
+## 9.4 Bước 4 — Pose tuần tự
+
+Với mỗi `local_track_id`:
+
+1. crop người theo bbox
+2. chạy pose model
+3. lấy 17 keypoints COCO
+4. append vào sliding window của local track
+
+Khuyến nghị demo v1:
+
+- Pose model: `YOLO11n-pose`
+- Chạy **sequential per track**, không batch song song
+
+## 9.5 Bước 5 — ADL tuần tự
+
+Sau khi có đủ window:
+
+1. tính đặc trưng tư thế
+2. classify ADL
+3. gắn nhãn vào timeline của `local_track_id`
+
+ADL class:
+
+- `standing`
+- `sitting`
+- `walking`
+- `lying_down`
+- `falling`
+- `reaching`
+- `bending`
+- `unknown`
+
+Khuyến nghị demo v1:
+
+- giữ `rule_based_adl()` làm baseline để app chạy ổn định
+- sau đó mới nâng cấp lên model skeleton-based
+
+## 9.6 Bước 6 — Cross-camera ReID sau khi đã có local track + pose
+
+Thứ tự đúng:
+
+```text
+local tracking -> pose -> ADL -> ReID update -> save outputs
+```
+
+Lý do:
+
+- cần local track ổn định trước
+- cần pose / body shape / gait cue trước
+- sau đó mới quyết định có giữ hay tạo Global ID mới
+
+---
+
+## 10. Chính sách Global ID: càng ít ID càng tốt
+
+## 10.1 Nguyên tắc tạo ID mới
+
+**Không tạo ID mới ngay** khi một người xuất hiện ở camera mới.
+
+Chỉ tạo ID mới khi:
+
+1. không có candidate hợp lệ theo không gian–thời gian
+2. không có face/body/gait match đủ tin cậy
+3. không có pending transition nào phù hợp
+4. xuất hiện xung đột nhiều người trong cùng cửa sổ thời gian
+
+## 10.2 Nguyên tắc giữ ID cũ
+
+Ưu tiên giữ lại Global ID cũ nếu thỏa ít nhất một trong các nhóm bằng chứng sau:
+
+### Nhóm A — Mạnh
+
+- face match mạnh
+- temporal continuity mạnh
+- chỉ có 1 candidate hợp lý trong topology
+
+### Nhóm B — Trung bình
+
+- body appearance gần giống
+- chiều cao tương đối tương đồng
+- gait / pose signature tương đồng
+- ADL continuity hợp lý
+
+### Nhóm C — Bổ trợ
+
+- người vừa biến mất ở cửa ra của camera trước
+- người vừa xuất hiện ở cửa vào của camera sau
+- thời gian di chuyển nằm trong khoảng hợp lý
+
+## 10.3 Công thức điểm ghép ID đề xuất
+
+### Trường hợp bình thường
+
+```text
+S_total = 0.35*S_face + 0.25*S_body + 0.15*S_pose_gait + 0.10*S_height + 0.15*S_time_topology
+```
+
+### Trường hợp nghi thay quần áo trong phòng / tầng trên
+
+Giảm trọng số body appearance:
+
+```text
+S_total_room_change = 0.40*S_face + 0.10*S_body + 0.20*S_pose_gait + 0.10*S_height + 0.20*S_time_topology
+```
+
+### Quy tắc quyết định
+
+- `S_total >= 0.75` → giữ nguyên Global ID
+- `0.60 <= S_total < 0.75` → giữ ID cũ nhưng gắn cờ `SOFT_MATCH`
+- `S_total < 0.60` → chỉ tạo ID mới nếu không có pending candidate duy nhất
+
+### Chính sách giảm số lượng ID
+
+Nếu chỉ có **1 candidate pending hợp lệ** theo topology và thời gian, thì **không tạo ID mới ngay cả khi body feature thay đổi vừa phải**.
+
+---
+
+## 11. Logic không gian–thời gian giữa các camera
+
+## 11.1 Cửa sổ thời gian chuyển camera đề xuất
+
+Các giá trị dưới đây là giá trị demo ban đầu, có thể chỉnh lại sau khi đo thực tế.
+
+| Chuyển tiếp | Cửa sổ thời gian hợp lệ |
+|---|---:|
+| cam01 -> cam02 | 0–60 giây |
+| cam02 -> cam03 | 0–60 giây |
+| cam03 -> cam04 qua thang máy | 20–180 giây |
+| cam04 -> cam03 đi xuống | 20–180 giây |
+| cam04 -> room -> cam04 | 5–300 giây |
+| cam03 -> quay đầu -> cam02 | 10–120 giây |
+
+## 11.2 Vùng mù cần nhớ ID
+
+| Vùng mù | Ý nghĩa | Cách xử lý |
+|---|---|---|
+| Elevator | mất quan sát giữa cam03 và cam04 | giữ `PENDING_TRANSFER` |
+| Room@cam04 | mất quan sát khi vào phòng | giữ `IN_ROOM` |
+| Door blind zone | vừa khuất cửa | dùng TTL ngắn |
+
+## 11.3 Trạng thái ID đề xuất
+
+```text
+ACTIVE
+  -> PENDING_TRANSFER
+  -> IN_ROOM
+  -> RETURN_EXPECTED
+  -> DORMANT
+  -> CLOSED
+```
+
+### Ý nghĩa
+
+- `ACTIVE`: đang thấy người trong clip hiện tại
+- `PENDING_TRANSFER`: vừa rời camera ở vùng chuyển tiếp hợp lệ
+- `IN_ROOM`: vừa vào phòng / vùng mù
+- `RETURN_EXPECTED`: dự kiến xuất hiện lại ở camera đã biết
+- `DORMANT`: tạm giữ ID để chờ tái xuất hiện
+- `CLOSED`: kết thúc phiên theo dõi
+
+---
+
+## 12. Logic cụ thể cho cam03, thang máy, cam04, phòng
+
+## 12.1 Từ cam03 vào thang máy rồi lên cam04
+
+### Kỳ vọng
+
+- Nếu người biến mất ở `cam03` gần vùng thang máy
+- Và xuất hiện ở `cam04` trong khoảng `20–180s`
+- Và không có candidate nào khác mạnh hơn
+
+=> **giữ nguyên cùng Global ID**
+
+Ví dụ:
+
+```text
+GID-001 seen at cam03 16:26:50
+GID-001 disappears near elevator
+cam04 sees a person at 16:27:40
+=> still GID-001
+```
+
+## 12.2 Từ cam03 vào thang máy nhưng quay lại cam03
+
+Nếu người vào vùng thang máy nhưng không lên hẳn, sau đó quay trở lại `cam03` trong TTL hợp lệ:
+
+=> **giữ nguyên cùng Global ID**
+
+Trạng thái:
+
+```text
+ACTIVE(cam03) -> PENDING_TRANSFER(elevator) -> ACTIVE(cam03)
+```
+
+## 12.3 Từ cam04 xuống lại cam03
+
+Nếu người đang ở `cam04`, sau đó biến mất tại vùng ra thang máy và xuất hiện ở `cam03` trong time window đi xuống:
+
+=> **giữ nguyên cùng Global ID**
+
+## 12.4 Từ cam04 vào phòng rồi ra lại, không đổi quần áo
+
+Nếu người biến mất vào `room@cam04`, sau đó ra lại trong `5–300s`, body/face/gait khớp ổn:
+
+=> **giữ nguyên ID**
+
+## 12.5 Từ cam04 vào phòng rồi ra lại, đổi áo màu khác
+
+Đây là case quan trọng nhất.
+
+### Chính sách đề xuất để giảm ID mới
+
+1. Khi người đi vào phòng, gắn ID vào `RoomHoldBuffer`
+2. Khi có người đi ra phòng trong cửa sổ thời gian hợp lệ:
+   - ưu tiên face match nếu thấy mặt
+   - nếu face yếu, dùng:
+     - chiều cao tương đối
+     - tỉ lệ thân người
+     - gait / pose signature
+     - logic thời gian–topology
+3. **Giảm trọng số màu áo** vì body appearance có thể đổi mạnh
+4. Nếu chỉ có **1 người đang ở trong room buffer**, ưu tiên giữ **cùng ID cũ**
+
+### Kết quả mong muốn
+
+- Không tách thành ID mới ngay chỉ vì áo đổi màu
+- Chỉ tạo ID mới khi có nhiều candidate xung đột hoặc confidence quá thấp
+
+---
+
+## 13. Chính sách ReID khi thay quần áo
+
+## 13.1 Vấn đề
+
+Nếu ReID chỉ dựa vào màu áo / HSV body feature thì sau khi thay áo, hệ thống sẽ tạo ID mới quá nhiều.
+
+## 13.2 Chính sách v1 cho demo
+
+Trong demo 3 người, để **giảm số lượng ID**, áp dụng thứ tự bằng chứng như sau:
+
+1. **Face** nếu thấy mặt rõ
+2. **Time-topology continuity**
+3. **Height + body ratio**
+4. **Pose/gait signature**
+5. **Appearance/body color**
+
+> Với case đổi áo trong phòng, `appearance` chỉ là tín hiệu phụ.
+
+## 13.3 Chính sách gộp ID mềm
+
+Nếu người ra khỏi phòng có:
+
+- cùng cửa sổ thời gian hợp lý
+- cùng topology
+- cùng chiều cao / body ratio
+- cùng gait gần đúng
+- face không đủ rõ
+
+thì gắn:
+
+```text
+GID-001 (soft reid after room)
+```
+
+chứ **không tạo GID-004 mới ngay**.
+
+---
+
+## 14. Xử lý Pose và ADL phải tuần tự
+
+## 14.1 Nguyên tắc
+
+Không chạy:
+
+- multi-thread pose
+- multi-thread ADL
+- parallel inference giữa các clip
+- parallel camera processing
+
+### Lý do
+
+- dễ kiểm soát timeline
+- dễ debug ID switching
+- dễ làm demo app rõ ràng
+- giảm lỗi race condition ở bảng trạng thái Global ID
+
+## 14.2 Thứ tự trong 1 clip
+
+```text
+Frame đọc tuần tự
+  -> local track update
+  -> pose inference
+  -> append window
+  -> ADL inference
+  -> ReID update
+  -> save overlay/result
+```
+
+## 14.3 Thứ tự toàn hệ thống
+
+```text
+Clip_1 xong hoàn toàn
+  -> Clip_2
+  -> Clip_3
+  -> Clip_4
+```
+
+---
+
+## 15. Đề xuất output folder
+
+Khuyến nghị cấu trúc lưu kết quả như sau:
+
+```text
+D:\Capstone_Project\data\output_pose\
+  cam01-25-26-16-29-01-2026\
+    cam01-25-26-16-29-01-2026_processed.mp4
+    cam01-25-26-16-29-01-2026_keypoints.txt
+    cam01-25-26-16-29-01-2026_adl.txt
+    cam01-25-26-16-29-01-2026_tracks.json
+    cam01-25-26-16-29-01-2026_timeline.json
+
+  cam02-40-26-16-29-01-2026\
+    cam02-40-26-16-29-01-2026_processed.mp4
+    cam02-40-26-16-29-01-2026_keypoints.txt
+    cam02-40-26-16-29-01-2026_adl.txt
+    cam02-40-26-16-29-01-2026_tracks.json
+    cam02-40-26-16-29-01-2026_timeline.json
+```
+
+### Ý nghĩa file
+
+- `_processed.mp4`: video đã vẽ bbox, skeleton, Global ID, ADL
+- `_keypoints.txt`: pose output
+- `_adl.txt`: nhãn ADL theo frame / track / global id
+- `_tracks.json`: mapping local track -> global id
+- `_timeline.json`: sự kiện vào/ra camera, room, elevator, reid decision
+
+---
+
+## 16. Nhiều test case đề xuất cho demo 3 người
+
+Dùng 3 người để demo ban đầu:
+
+- `P1 -> GID-001`
+- `P2 -> GID-002`
+- `P3 -> GID-003`
+
+### Test Case 1 — Đi bình thường từ cam01 sang cam02
+
+**Mô tả:** P1 xuất hiện ở cam01 rồi qua cam02 liên tục theo thời gian.
+
+**Kỳ vọng:**
+
+- `GID-001` giữ nguyên ở cam01 và cam02
+- ADL chủ đạo: `walking`
+- không tạo ID mới
+
+---
+
+### Test Case 2 — Từ cam02 sang cam03
+
+**Mô tả:** P1 đi tiếp từ cam02 đến cam03.
+
+**Kỳ vọng:**
+
+- `GID-001` giữ nguyên
+- timeline liên tục
+- lamp sáng lần lượt từ cam02 sang cam03
+
+---
+
+### Test Case 3 — Từ cam03 vào thang máy rồi lên cam04
+
+**Mô tả:** P1 biến mất ở vùng thang máy cam03, sau đó xuất hiện ở cam04.
+
+**Kỳ vọng:**
+
+- `GID-001` được giữ nguyên
+- trạng thái trung gian: `PENDING_TRANSFER`
+- không tạo `GID-004`
+
+---
+
+### Test Case 4 — Từ cam03 vào thang máy nhưng quay lại cam03
+
+**Mô tả:** P1 biến mất ở vùng thang máy rồi xuất hiện lại ở cam03.
+
+**Kỳ vọng:**
+
+- vẫn `GID-001`
+- đánh dấu event `elevator_return_same_floor`
+
+---
+
+### Test Case 5 — Từ cam04 đi vào phòng rồi đi ra, không đổi áo
+
+**Mô tả:** P1 vào phòng ở tầng trên rồi đi ra sau 1 phút.
+
+**Kỳ vọng:**
+
+- `GID-001` giữ nguyên
+- trạng thái: `IN_ROOM -> ACTIVE`
+
+---
+
+### Test Case 6 — Từ cam04 vào phòng rồi ra với áo màu khác
+
+**Mô tả:** P1 vào phòng, thay áo màu khác, đi ra lại.
+
+**Kỳ vọng:**
+
+- ưu tiên **giữ GID-001**
+- nếu face đủ rõ: giữ chắc chắn
+- nếu face không rõ nhưng chỉ có 1 pending room candidate: vẫn giữ `GID-001 (soft_match)`
+- chỉ tạo ID mới nếu có xung đột mạnh với P2/P3
+
+---
+
+### Test Case 7 — Từ cam04 xuống lại cam03
+
+**Mô tả:** P1 đang ở tầng trên rồi đi xuống cam03.
+
+**Kỳ vọng:**
+
+- vẫn `GID-001`
+- event: `down_from_cam04_to_cam03`
+
+---
+
+### Test Case 8 — Hai người chéo nhau ở cam02
+
+**Mô tả:** P1 và P2 cùng xuất hiện ở cam02, đi ngược chiều.
+
+**Kỳ vọng:**
+
+- không swap ID
+- P1 vẫn là `GID-001`
+- P2 vẫn là `GID-002`
+- ADL theo từng track riêng
+
+---
+
+### Test Case 9 — Ba người cùng xuất hiện ở cam03 gần thang máy
+
+**Mô tả:** P1, P2, P3 gần nhau ở cam03 trước vùng thang máy.
+
+**Kỳ vọng:**
+
+- tracker giữ local track ổn định
+- ReID dùng topology + pose + height để tránh đổi ID
+- nếu một người lên cam04, phải ưu tiên đúng candidate gần nhất về thời gian
+
+---
+
+### Test Case 10 — P2 mất mặt, chỉ còn body
+
+**Mô tả:** P2 quay lưng hoặc bị che mặt khi đi từ cam02 sang cam03.
+
+**Kỳ vọng:**
+
+- vẫn cố giữ `GID-002` bằng body + height + gait + time-topology
+- không tạo ID mới nếu chỉ có một candidate hợp lý
+
+---
+
+### Test Case 11 — P3 đi vào phòng ở cam04 rồi mang thêm đồ vật đi ra
+
+**Mô tả:** P3 vào phòng, ra lại với túi hoặc vật thể cầm tay.
+
+**Kỳ vọng:**
+
+- ưu tiên giữ `GID-003`
+- body appearance thay đổi nhẹ không được làm nổ ID mới
+- posture/height/gait vẫn hỗ trợ match
+
+---
+
+### Test Case 12 — P1 xuất hiện lại sau khoảng trống thời gian rất dài
+
+**Mô tả:** P1 rời hệ thống lâu, sau đó xuất hiện lại sau thời gian vượt TTL.
+
+**Kỳ vọng:**
+
+- nếu face match mạnh: có thể tái dùng `GID-001`
+- nếu không có bằng chứng đủ mạnh: cho phép tạo ID mới
+- đây là một trong số ít trường hợp hợp lệ để tăng số lượng ID
+
+---
+
+### Test Case 13 — P1 và P2 cùng đi vào thang máy gần nhau
+
+**Mô tả:** P1 và P2 cùng biến mất ở cam03 gần cùng lúc, sau đó xuất hiện ở cam04.
+
+**Kỳ vọng:**
+
+- dùng time order + height + face/body + entry/exit ordering để giữ đúng ID
+- tránh trường hợp P1 nhận nhầm ID của P2
+
+---
+
+### Test Case 14 — P1 thay áo ở cam04, rồi quay xuống cam03
+
+**Mô tả:** P1 vào phòng tầng trên, đổi áo, sau đó xuống lại cam03.
+
+**Kỳ vọng:**
+
+- vẫn ưu tiên giữ `GID-001`
+- vì có chuỗi logic:
+  - cam03 -> cam04 -> room -> cam04 -> cam03
+- topology chain rất mạnh, nên không được vội tạo ID mới
+
+---
+
+### Test Case 15 — Person unknown thật sự
+
+**Mô tả:** một người mới hoàn toàn chưa từng thấy xuất hiện ở cam04.
+
+**Kỳ vọng:**
+
+- nếu không có candidate phù hợp trong pending buffer, room buffer, face/body history
+- thì mới tạo Global ID mới
+
+---
+
+## 17. Chính sách giảm ID mới cho demo 3 người
+
+Để đạt mục tiêu “**càng ít ID càng tốt**”, dùng 5 nguyên tắc sau:
+
+### Nguyên tắc 1
+
+Nếu có **duy nhất 1 candidate hợp lý** theo thời gian–topology, ưu tiên tái sử dụng ID cũ.
+
+### Nguyên tắc 2
+
+Người vào `room@cam04` hoặc `elevator` không được tạo ID mới ngay khi biến mất.
+
+### Nguyên tắc 3
+
+Thay đổi màu áo chỉ là tín hiệu yếu trong các case:
+
+- room change
+- carry object
+- lighting shift
+
+### Nguyên tắc 4
+
+Face > time-topology > gait/pose > height > body color
+
+### Nguyên tắc 5
+
+Chỉ sinh ID mới khi:
+
+- candidate mơ hồ
+- không có pending candidate hợp lý
+- gap thời gian quá dài
+- confidence tổng dưới ngưỡng
+
+---
+
+## 18. Gợi ý stack triển khai cho demo app
+
+## 18.1 Demo v1 (nên làm ngay)
+
+- Tracking cục bộ: YOLO track hoặc DeepSORT
+- Pose: `YOLO11n-pose`
+- ADL: `rule_based_adl()` theo sliding window
+- ReID: face + body embedding đơn giản + time-topology gating
+- Output: overlay video + keypoints + ADL + timeline
+- Xử lý: **tuần tự hoàn toàn**
+
+## 18.2 Demo v2 (sau khi app ổn)
+
+- thay ADL rule-based bằng **CTR-GCN** hoặc **BlockGCN**
+- dùng pretrain từ dataset ngoài
+- fine-tune theo lớp ADL thật của bạn
+- giữ nguyên multicam video làm test set
+
+## 18.3 Khuyến nghị model từ `research_ADL.md`
+
+### Phù hợp nhất cho giai đoạn nghiên cứu sau demo
+
+- **CTR-GCN**: dễ tích hợp, ổn định
+- **BlockGCN**: gọn, mạnh, đáng nâng cấp sau
+- **RTMPose / RTMO**: nếu sau này tách pose khỏi YOLO11n-pose
+- **TSM**: nếu muốn bổ sung nhánh RGB temporal
+
+---
+
+## 19. Pseudocode đề xuất
+
+```python
+from pathlib import Path
+
+clips = load_all_mp4("D:/Capstone_Project/data/multicam")
+clips = sort_by_time_then_cam(clips)
+
+global_table = {}
+pending_buffer = {}
+room_buffer = {}
+lamp_state = {"cam01":"IDLE", "cam02":"IDLE", "cam03":"IDLE", "cam04":"IDLE"}
+
+for clip in clips:
+    cam = clip.cam_id
+    set_all_idle(lamp_state)
+    lamp_state[cam] = "ACTIVE"
+    ui_render_lamps(lamp_state)
+
+    local_tracks = run_local_tracking(clip)
+
+    for track in local_tracks:
+        for frame in track.frames_in_order:
+            pose = run_pose(frame)
+            update_pose_window(track.id, pose)
+            adl = run_adl_if_ready(track.id)
+            gid = assign_global_id(
+                cam=cam,
+                clip_time=clip.datetime,
+                local_track=track,
+                pose=pose,
+                adl=adl,
+                global_table=global_table,
+                pending_buffer=pending_buffer,
+                room_buffer=room_buffer,
+            )
+            write_frame_result(frame, gid, adl, pose)
+
+    save_processed_video(clip, "D:/Capstone_Project/data/output_pose")
+    save_keypoints_adl_and_timeline(clip)
+
+    lamp_state[cam] = "DONE"
+    ui_render_lamps(lamp_state)
+```
+
+---
+
+## 20. Kết luận thực thi
+
+Đối với giai đoạn demo hiện tại, lời giải phù hợp nhất không phải là chạy multi-camera parallel phức tạp, mà là:
+
+1. **đọc clip test thủ công từ `data/multicam`**
+2. **sort theo thời gian trước, camera sau**
+3. **xử lý tuần tự từng clip**
+4. **trong mỗi clip: tracking -> pose -> ADL -> ReID -> save output**
+5. **duy trì Global ID xuyên camera bằng time-topology + face/body/pose cues**
+6. **giữ ít ID nhất có thể, đặc biệt ở các case thang máy, phòng kín, đổi áo**
+
+Chiến lược này phù hợp nhất để:
+
+- demo app sớm
+- test 3 người trước
+- dễ debug
+- dễ trình bày với hội đồng
+- dễ nâng cấp sau sang mô hình mạnh hơn
+
+---
+
+## 21. Tên file đề xuất để đưa vào repo / báo cáo
+
+Có thể dùng một trong các tên sau:
+
+- `spatiotemporal_sequential_demo_algorithm.md`
+- `Algorithm_SpatioTemporal_Sequential_CPpose.md`
+- `demo_multicam_time_first_reid_adl.md`
+

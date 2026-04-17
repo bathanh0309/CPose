@@ -23,12 +23,24 @@
         </div>
 
         <div class="brand-actions">
-          <label class="btn" for="multicamInput">Multicam</label>
-          <label class="btn" for="rawInput">Raw Video</label>
-          <button class="btn primary" id="startBtn">Start</button>
-          <button class="btn" id="clearBtn">Clear Logs</button>
-          <button class="btn" id="refreshBtn">Refresh</button>
-          <button class="btn danger" id="stopBtn">Stop</button>
+          <div style="display:flex; flex-direction:column; gap:8px; width:100%;">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px;">
+              <label class="btn btn-sm" for="multicamInput">📁 Multicam</label>
+              <label class="btn btn-sm" for="rawInput">📂 Raw Video</label>
+            </div>
+            
+            <div class="divider" style="height:1px; background:rgba(0,0,0,0.05); margin:4px 0;"></div>
+            
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px;">
+              <button class="btn primary" id="startBtn">▶ Start Pose</button>
+              <button class="btn danger" id="stopBtn">⏹ Stop</button>
+            </div>
+
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px;">
+              <button class="btn" id="refreshBtn">🔄 Refresh</button>
+              <button class="btn" id="clearBtn">🧹 Clear Logs</button>
+            </div>
+          </div>
         </div>
 
         <input id="multicamInput" class="hidden" type="file" webkitdirectory directory multiple />
@@ -181,8 +193,19 @@
     <!-- RIGHT COLUMN: Queue + Pending Results (PINK) -->
     <aside class="right-col">
       <section class="queue-section">
-        <div class="section-title">Video</div>
-        <div id="clipQueue" class="queue-list"></div>
+        <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Queue (Phase 2)</span>
+          <div style="display:flex; gap:4px;">
+            <input type="checkbox" id="selectAllClips" title="Select All" style="cursor:pointer;" />
+            <button id="batchProcessBtn" class="btn-icon-sm" title="Process Selected">▶</button>
+            <button id="batchStopBtn" class="btn-icon-sm danger" title="Stop All">⏹</button>
+          </div>
+        </div>
+        <div id="clipQueue" class="queue-list custom-scrollbar"></div>
+        <div class="queue-footer" style="padding:8px; border-top:1px solid rgba(0,0,0,0.05); font-size:10px; color:#64748b; display:flex; justify-content:space-between;">
+           <span id="outputDirLabel">Out: data/output_labels</span>
+           <button id="changeOutputDirBtn" style="border:none; background:transparent; color:#3b82f6; cursor:pointer; font-weight:600;">Change</button>
+        </div>
       </section>
       <section class="pending-section" id="pendingSection">
         <div id="pendingList" class="result-list" style="flex: 1; min-height: 0; overflow-y: auto;"></div>

@@ -1,79 +1,106 @@
-# CPose — Capstone Project (Advanced Human Activity Recognition)
+```
+cài build-tools do có insightface
+https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
-CPose là một hệ thống giám sát thông minh tập trung vào nhận diện hành vi con người (Human Activity Recognition - HAR) thông qua mạng lưới Camera đa hướng (Multi-camera). Hệ thống sử dụng các mô hình Deep Learning tiên tiến để theo dõi, nhận diện tư thế và phân loại hành động của con người trong thời gian thực.
+cài python 3.11
+py -3.11 -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip install cython
 
-## Công nghệ & Công cụ (Tech Stack)
-
-Hệ thống được xây dựng trên nền tảng kiến trúc linh hoạt, cho phép tích hợp cả ứng dụng thực tế (Product) và các nghiên cứu chuyên sâu (Research).
-
-| Lớp | Công nghệ & Thư viện | Vai trò cốt lõi |
-|:---|:---|:---|
-| **Frontend UI** | HTML5, Vanilla JS, CSS3, Socket.IO Client | Dashboard điều khiển đa luồng, giám sát trạng thái & log thời gian thực. |
-| **Backend API** | Python, Flask, Flask-SocketIO, Eventlet | Web Server hiệu suất cao, xử lý luồng (Concurrency) và Broker dữ liệu. |
-| **AI / Model** | PyTorch, Ultralytics YOLOv8 / YOLO-pose | Nhận diện đối tượng (Object Detection) và ước lượng tư thế (Pose Estimation). |
-| **Xử lý Ảnh/Video**| OpenCV (`cv2`), Pillow | Xử lý khung hình, giải mã/mã hóa luồng RTSP và vẽ Overlay kết quả. |
-| **Dữ liệu & Vector**| Numpy, FAISS, Pandas | Xử lý mảng đa chiều, tính toán hình học (IoU) và tìm kiếm Vector Re-ID. |
-| **Logging & UX**| Loguru, Rich, TQDM | Quản lý nhật ký hệ thống chuyên nghiệp và thanh tiến trình pipeline. |
-
----
-
-## Phương pháp & Kỹ thuật cốt lõi
-
-Dưới đây là các kỹ thuật và phương pháp chuyên sâu được áp dụng trong CPose để giải quyết các bài toán về độ trễ, nhiễu dữ liệu và bám vết xuyên camera.
-
-| Kỹ thuật / Phương pháp | Mô tả chi tiết | Mục đích & Hiệu quả mang lại |
-|:---|:---|:---|
-| **TFCS-PAR Architecture** | *Time-First Cross-Camera Sequential Pose-ADL-ReID*. | Giải quyết bài toán mất ID khi người di chuyển qua các vùng mù giữa 4 Camera. |
-| **BBox IoU Tracking** | Bám vết Bounding Box dựa trên chỉ số Intersection over Union và khoảng cách trọng tâm. | Tốc độ cực nhanh (Zero-lag), thay thế các giải pháp nặng như DeepSORT khi phần cứng hạn chế. |
-| **Temporal Smoothing** | Sử dụng bộ đệm *Hysteresis* (5-8 frames) để trung hòa sai số dự đoán theo thời gian. | Loại bỏ hiện tượng "flickering" (nhấp nháy) của khung xương và nhãn hành động khi tín hiệu yếu. |
-| **Re-ID Global Mapping** | Ánh xạ ID cục bộ (Local ID) sang ID toàn cục (Global ID) thông qua `CrossCameraIDMerger`. | Duy trì danh tính duy nhất của một người kể cả khi họ rời camera này và xuất hiện ở camera khác. |
-| **FAISS Vector Search** | Sử dụng thư viện FAISS để tìm kiếm độ tương đồng vector đặc trưng giữa các người dùng. | Thực hiện Re-Identification (Re-ID) quy mô lớn với tốc độ tìm kiếm sub-millisecond. |
-| **MJPEG Stream Polling** | Kỹ thuật trích xuất gói JPEG trực tiếp từ RAM Memory thay vì H.264 encoding. | Trình chiếu kết quả xử lý AI lên trình duyệt với độ trễ gần như bằng không (Zero-latency). |
-| **Skeleton-based ADL** | Nhận diện hành động (ADL) dựa trên tọa độ 17 điểm keyword của cơ thể. | Giảm chi phí tính toán so với Video-based ADL, tăng độ chính xác nhờ tập trung vào chuyển động khớp. |
-| **Job Queue & Worker** | Tách rời việc ghi hình (Producer) và xử lý AI (Consumer) qua hàng đợi clip. | Đảm bảo không mất khung hình khi GPU đạt đỉnh tải (Peak load) và tối ưu hóa I/O video. |
-
----
-
-## Kiến trúc Pipeline Offline
-
-Ngoài giao diện Real-time, hệ thống cung cấp pipeline xử lý offline mạnh mẽ:
-
-1.  **Phase 1 (Recorder):** `scripts\run-phase1-recorder.bat`
-    - Đọc `resources.txt`, ghi clip từ RTSP vào `data/raw_videos/`.
-2.  **Phase 2 (Analyzer):** `scripts\run-phase2-analyzer.bat`
-    - Trích xuất BBox và lưu labels vào `data/output_labels/`.
-3.  **Phase 3 (ADL Recognition):** `scripts\run-phase3-adl.bat`
-    - Nhận diện Pose & ADL, lưu kết quả ổn định vào `output_pose/`.
-
----
-
-## Hướng dẫn cài đặt & Khởi chạy
-
-### 1. Chuẩn bị môi trường (Windows)
-
-Mở Terminal tại thư mục gốc và chuẩn bị môi trường Python:
-```cmd
-python -m venv venv
-venv\Scripts\activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
-### 2. Khởi động Dashboard
-
-Để chạy phiên bản thương mại (Product), sử dụng:
-```cmd
-scripts\run-product.bat
 ```
-Hoặc phiên bản dành cho nhà phát triển (Dev):
-```cmd
-scripts\run-dev.bat
+Capstone_Project/
+├── cpose/                          # THƯ VIỆN AI LÕI (Model-level wrappers, không dính tới Web)
+│   ├── core/                       # Các module xử lý AI cấp thấp
+│   │   ├── detection/              # Detector wrappers cho YOLO/RTDETR
+│   │   │   ├── base.py             # Interface BaseDetector định nghĩa hàm detect()
+│   │   │   ├── yolo_ultra.py       # Wrapper cho Ultralytics YOLO nhận diện người
+│   │   │   └── factory.py          # Hàm build_detector() khởi tạo theo cấu hình
+│   │   ├── pose_estimation/        # Module ước lượng khung xương
+│   │   │   ├── base.py             # Interface BasePoseEstimator định nghĩa hàm estimate()
+│   │   │   ├── yolo_pose.py        # Wrapper cho YOLO-Pose trích xuất 17 điểm khớp
+│   │   │   ├── rtmpose.py          # Wrapper cho RTMPose (tùy chọn hiệu năng cao)
+│   │   │   └── factory.py          # Hàm build_pose_estimator() khởi tạo bộ ước lượng
+│   │   ├── face/                   # Module nhận diện khuôn mặt (ArcFace, SFace)
+│   │   │   ├── base.py             # Interface BaseFaceRecognizer (encode/compare)
+│   │   │   ├── insightface_arcface.py # Trích xuất 512-d embedding dùng ArcFace
+│   │   │   └── factory.py          # Hàm build_face_recognizer() khởi tạo bộ nhận diện
+│   │   ├── reid/                   # Module nhận dạng lại người (Body feature)
+│   │   │   ├── base.py             # Interface BaseReIDModel định nghĩa hàm encode_body()
+│   │   │   └── simple_body_reid.py # ReID dựa trên màu sắc và hình dáng cơ thể
+│   │   └── vectordb/               # Tầng trừu tượng hóa cơ sở dữ liệu Vector
+│   │       ├── base.py             # Interface BaseVectorDB (add/search/remove)
+│   │       ├── faiss_db.py         # Backend FAISS hỗ trợ tìm kiếm láng giềng gần nhất
+│   │       └── factory.py          # Hàm build_vectordb() khởi tạo backend (CPU/GPU)
+│   ├── io/                         # Công cụ hỗ trợ Input/Output video chuyên dụng
+│   │   ├── video_reader.py         # Đọc video hiệu năng cao dưới dạng generator
+│   │   ├── camera_stream.py        # Quản lý luồng RTSP/Webcam với tự động kết nối lại
+│   │   └── sink_writer.py          # Ghi frame kèm overlay (xương, nhãn) ra file video
+│   ├── pipeline/                   # Các luồng tích hợp sẵn (Phase 1, 2, 3)
+│   │   ├── multicam_recorder.py    # Phase 1: Nhận diện và cắt clip tự động
+│   │   ├── multicam_analyzer.py    # Phase 2: Chạy Pose/Detection offline sinh file label
+│   │   └── multicam_recognizer.py  # Phase 3: Tích hợp Pose+ADL+ReID cho multicam demo
+│   └── utils/                      # Các tiện ích toán học và xử lý logic thuần túy
+│       ├── pose_ops.py             # Tính góc khớp, tư thế và vector đặc trưng ADL
+│       ├── bbox_ops.py             # Xử lý hộp bao: IOU, NMS, lọc kích thước
+│       └── timing.py               # Đo FPS và phân tích độ trễ của các module
+├── app/                            # ỨNG DỤNG DASHBOARD (Product Layer)
+│   ├── api/                        # Tầng giao tiếp HTTP & WebSocket
+│   │   ├── routes.py               # REST Endpoints: /config, /pose, /registration...
+│   │   └── ws_handlers.py          # Sự kiện Socket.IO: camera_status, pose_status...
+│   ├── core/                       # Logic nghiệp vụ của sản phẩm
+│   │   ├── global_id.py            # GlobalPersonTable: Ánh xạ ID xuyên camera
+│   │   ├── reid_logic.py           # Logic ReID thực tế dùng vectordb và cpose.core.reid
+│   │   └── tracking.py             # Bộ theo dấu cục bộ (Local Tracker) trong từng clip
+│   ├── services/                   # Lớp dịch vụ bao bọc các pipeline của cpose
+│   │   ├── recorder_service.py     # Điều phối Phase 1 và thông báo trạng thái qua Socket
+│   │   ├── analyzer_service.py     # Quản lý hàng đợi công việc gán nhãn Phase 2
+│   │   ├── recognizer_service.py   # Điều phối Phase 3 và tổng hợp kết quả Pose+ADL
+│   │   └── registration_service.py # Quản lý quy trình đăng ký danh tính khuôn mặt
+│   ├── storage/                    # Tầng lưu trữ dữ liệu bền vững
+│   │   ├── vector_db.py            # Quản lý index FAISS và hồ sơ người dùng
+│   │   └── persistence.py          # Lưu trữ metadata, mapping ID và đường dẫn embedding
+│   ├── utils/                      # Tiện ích phục vụ riêng cho ứng dụng web
+│   │   ├── pose_utils.py           # Áp dụng các quy tắc ADL trả về nhãn hành động
+│   │   ├── file_handler.py         # Quản lý file hệ thống và danh sách resources.txt
+│   │   ├── stream_probe.py         # Kiểm tra thông tin luồng RTSP (FPS, Resolution)
+│   │   └── runtime_config.py       # Tải và xác thực cấu hình config.yaml bằng Pydantic
+│   └── bootstrap/                  # Khởi tạo ứng dụng Flask/SocketIO
+│       ├── app_factory.py          # Hàm create_app() cấu hình server và đăng ký routes
+│       └── config_loader.py        # Kiểm tra và tải cấu hình từ file YAML
+├── research/                       # MÔI TRƯỜNG NGHIÊN CỨU (FastAPI Research Server)
+│   ├── api/                        # Endpoint điều khiển thực nghiệm (Experiment Control)
+│   │   ├── routes_experiments.py   # Quản lý trạng thái và kết quả các lần chạy thử
+│   │   └── ws_experiments.py       # Stream tiến độ thực nghiệm thời gian thực
+│   ├── services/                   # Logic xử lý nghiên cứu
+│   │   ├── experiment_runner.py    # Thực thi các pipeline thử nghiệm trên tập dữ liệu
+│   │   ├── model_registry.py       # Quản lý danh sách các mô hình đang thử nghiệm
+│   │   └── benchmark_service.py    # Tính toán các chỉ số mAP, Accuracy, FPS...
+│   └── schemas/                    # Định nghĩa cấu trúc dữ liệu Pydantic cho Research
+├── shared/                         # THÀNH PHẦN CHIA SẺ (Dùng chung cho App & Research)
+│   ├── io/                         # Quản lý đường dẫn và tệp tin tập trung
+│   │   ├── paths.py                # Single source of truth cho mọi thư mục data/model
+│   │   └── job_store.py            # Quản lý vòng đời trạng thái của các tác vụ AI
+│   ├── contracts/                  # Định nghĩa các bản giao kèo dữ liệu (TypedDict)
+│   └── adapters/                   # Lớp chuyển đổi giao tiếp giữa Flask và FastAPI
+├── data/                           # KHO DỮ LIỆU (Video, Labels, Results)
+│   ├── config/resources.txt        # Danh sách nguồn camera đầu vào
+│   ├── multicam/                   # Dữ liệu video cho demo đa camera
+│   ├── raw_videos/                 # Clip thô thu thập từ Phase 1
+│   ├── output_labels/              # File nhãn JSON sinh ra từ Phase 2
+│   ├── output_pose/                # Kết quả video và JSON từ Phase 3
+│   └── research_runs/              # Nhật ký và kết quả các lần chạy nghiên cứu
+├── models/                         # TRỌNG SỐ MÔ HÌNH (Product & Research)
+├── static/                         # GIAO DIỆN NGƯỜI DÙNG (HTML/JS/CSS)
+├── main.py                         # Điểm khởi đầu của ứng dụng Flask Dashboard
+├── requirements.txt                # Danh sách thư viện cần cài đặt
+├── AGENTS.md                       # Bản quy định bắt buộc cho AI trợ giúp dự án
+├── PIPELINE.md                     # Tài liệu quy trình 3 giai đoạn xử lý
+├── TFCS-PAR.md                     # Đặc tả thuật toán tracking xuyên camera
+└── README.md                       # Tài liệu hướng dẫn sử dụng tổng quát
+
 ```
-Sau khi khởi động, truy cập giao diện điều khiển tại địa chỉ: `http://localhost:5000`
-
----
-
-## 📈 Hướng phát triển (Research)
-
-Hệ thống đã sẵn sàng các cổng kết nối (Interface) để tích hợp các mô hình nghiên cứu SOTA:
-- **CTR-GCN / BlockGCN:** Tích hợp qua bộ thư viện `PYSKL` để nâng cao độ chính xác nhận diện hành động phức tạp.
-- **Deep Re-ID:** Sử dụng `Pose2ID` để nhận dạng người dùng dựa trên khung xương khi khuôn mặt bị che khuất.

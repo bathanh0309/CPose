@@ -20,6 +20,7 @@ _PHASE2_CFG = get_runtime_section("phase2")
 PERSON_CLASS_ID = int(_PHASE2_CFG.get("person_class_id", 0))
 CONF_THRESHOLD_P2 = float(_PHASE2_CFG.get("conf_threshold", 0.50))
 PROGRESS_EVERY = int(_PHASE2_CFG.get("progress_every", 10))
+FRAME_SKIP_P2 = int(_PHASE2_CFG.get("frame_skip", 15))
 
 
 class Analyzer:
@@ -146,65 +147,87 @@ class Analyzer:
             raise OSError(f"Cannot open clip: {clip}")
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        
+        # New directory structure: output_labels/<clip_stem>/frames/
         clip_output_dir = output_dir / clip.stem
-        clip_output_dir.mkdir(parents=True, exist_ok=True)
-        label_file = clip_output_dir / f"{clip.stem}_labels.txt"
+        frame_dir = clip_output_dir / "frames"
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        
+        label_file = clip_output_dir / "detections.txt"
 
         frames_saved = 0
         labels_written = 0
-        frame_id = 0
+        frame_idx = 0
+        
+        # Buffer for detection lines to write at the end
+        txt_lines = []
 
-        with label_file.open("w", encoding="utf-8") as handle:
-            handle.write("# frame_id x_min y_min x_max y_max\n")
+        while True:
+            if self._stop_evt.is_set():
+                break
 
-            while True:
-                if self._stop_evt.is_set():
-                    break
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            frame_idx += 1
+            
+            # Apply FRAME_SKIP
+            if frame_idx % FRAME_SKIP_P2 != 0:
+                continue
 
-                detections: list[tuple[int, int, int, int]] = []
-                results = model.predict(
-                    frame,
-                    classes=[PERSON_CLASS_ID],
-                    conf=CONF_THRESHOLD_P2,
-                    verbose=False,
+            detections: list[tuple[int, int, int, int]] = []
+            results = model.predict(
+                frame,
+                classes=[PERSON_CLASS_ID],
+                conf=CONF_THRESHOLD_P2,
+                verbose=False,
+            )
+            for result in results:
+                for box in result.boxes:
+                    if int(box.cls[0]) != PERSON_CLASS_ID:
+                        continue
+                    x1, y1, x2, y2 = (int(value) for value in box.xyxy[0])
+                    detections.append((x1, y1, x2, y2))
+
+            if detections:
+                # Save as JPG for smaller size (from data-labeling convention)
+                frame_name = f"frame_{frame_idx:05d}.jpg"
+                cv2.imwrite(str(frame_dir / frame_name), frame)
+                frames_saved += 1
+                
+                # New detection format: Frame <id> <count>
+                txt_lines.append(f"Frame {frame_idx} {len(detections)}")
+                for x1, y1, x2, y2 in detections:
+                    txt_lines.append(f"{x1} {y1} {x2} {y2}")
+                    labels_written += 1
+                txt_lines.append("")  # Blank line separator
+
+            # Progress every 5% for clip (more granular)
+            if frame_idx % PROGRESS_EVERY == 0:
+                pct = round((frame_idx / max(total_frames, 1)) * 100)
+                socketio.emit(
+                    "analysis_progress",
+                    {
+                        "clip": clip.stem,
+                        "frame_id": frame_idx,
+                        "total_frames": total_frames,
+                        "pct": pct,
+                        "frames_saved": frames_saved,
+                        "labels_written": labels_written,
+                    },
                 )
-                for result in results:
-                    for box in result.boxes:
-                        if int(box.cls[0]) != PERSON_CLASS_ID:
-                            continue
-                        x1, y1, x2, y2 = (int(value) for value in box.xyxy[0])
-                        detections.append((x1, y1, x2, y2))
-
-                if detections:
-                    frame_name = f"{clip.stem}_frame_{frame_id:04d}.png"
-                    cv2.imwrite(str(clip_output_dir / frame_name), frame)
-                    frames_saved += 1
-                    for x1, y1, x2, y2 in detections:
-                        handle.write(f"{frame_id} {x1} {y1} {x2} {y2}\n")
-                        labels_written += 1
-
-                if frame_id % PROGRESS_EVERY == 0:
-                    pct = round(((frame_id + 1) / max(total_frames, 1)) * 100)
-                    socketio.emit(
-                        "analysis_progress",
-                        {
-                            "clip": clip.stem,
-                            "frame_id": frame_id,
-                            "total_frames": total_frames,
-                            "pct": pct,
-                            "frames_saved": frames_saved,
-                            "labels_written": labels_written,
-                        },
-                    )
-
-                frame_id += 1
 
         cap.release()
-        logger.info("%s -> %d PNG frames, %d labels", clip.stem, frames_saved, labels_written)
+        
+        # Write detections.txt at the end (from data-labeling convention)
+        with label_file.open("w", encoding="utf-8") as handle:
+            handle.write(f"{clip.name}\n")
+            handle.write(f"{frames_saved}\n\n")
+            for line in txt_lines:
+                handle.write(f"{line}\n")
+
+        logger.info("%s -> %d frames saved, %d labels", clip.stem, frames_saved, labels_written)
         return frames_saved, labels_written
 
     def _update_state(self, **kwargs) -> None:

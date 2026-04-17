@@ -1,14 +1,14 @@
 > **ĐỌC FILE NÀY TRƯỚC KHI SINH BẤT KỲ CODE NÀO.**
-> Đây là tài liệu ràng buộc bắt buộc cho Claude Code / Codex / Copilot khi làm việc với **CPose**.
+> Đây là tài liệu ràng buộc bắt buộc cho Claude Code / Codex / Copilot khi làm việc với **Capsotne-Project**.
 > Khi có mâu thuẫn giữa các tài liệu cũ, **ưu tiên file này**.
 > Không tự ý đổi kiến trúc lớn, không thêm dependency ngoài danh sách cho phép.
 
 ---
 
-# CLAUDE.md — CPose Project Binding Reference
+# CPOSE_RULES.md — CPose Unified Binding Reference
 
 ## 1. Bối Cảnh và Mục Tiêu
-CPose là đồ án tốt nghiệp kỹ sư Điện tử Viễn thông & Kỹ thuật Máy tính, Đại học Bách Khoa — Đại học Đà Nẵng.
+Capstone-Project là đồ án tốt nghiệp kỹ sư Điện tử Viễn thông & Kỹ thuật Máy tính, Đại học Bách Khoa — Đại học Đà Nẵng.
 
 Mục tiêu hiện tại: Demo app chạy được, ổn định, dễ giải thích, phục vụ:
 
@@ -22,7 +22,7 @@ Demo xử lý không gian–thời gian tuần tự trên clip test thủ công 
 
 Demo trước với 3 người, sau mới mở rộng
 
-QUY ĐỊNH CHO LLM (Claude Code / Copilot / Codex):
+QUY ĐỊNH CHO LLM (Claude Code / Codex / Copilot):
 
 Mọi thay đổi code phải phục vụ trực tiếp cho các mục tiêu trên.
 
@@ -32,13 +32,10 @@ Không được tự ý thêm tính năng lớn (realtime nhiều user, microser
 
 - `PIPELINE.md`: mô tả đầy đủ 3 phase (Phase1/2/3), ReID layer, tracking, FAISS, cùng danh sách bug & lỗ hổng kỹ thuật cần sửa.
 
-**QUY ĐỊNH CHO LLM:**
-- Khi sửa các file `recorder.py`, `analyzer.py`, `recognizer.py`, `reid.py`, `global_id.py`, `persistence.py`, phải đảm bảo không làm sai các thiết kế đã mô tả trong `PIPELINE.md`.
-- Danh sách bug trong `PIPELINE.md` hỗ trợ giải thích, nhưng thứ tự ưu tiên sửa bug vẫn theo mục 17 của `CLAUDE.md`.
 
 ### Tài liệu thuật toán multicam TFCS-PAR
 
-- `TFCS-PAR.md`: đặc tả chi tiết thuật toán **Time‑First Cross‑Camera Sequential Pose–ADL–ReID** cho demo 3 người từ `data/multicam/`.
+- `.algorithm.md`: đặc tả chi tiết thuật toán **Time‑First Cross‑Camera Sequential Pose–ADL–ReID** cho demo 3 người từ `data/multicam/`.
 
 Bao gồm:
 - Định dạng tên file input, ClipQueue, GlobalPersonTable, PendingTransitionBuffer, RoomHoldBuffer, LampState.
@@ -98,7 +95,7 @@ Gắn với nút Save trên card kết quả.
 
 Push event REGISTER_FACE_REQUEST, REGISTER_FACE_DONE, log mới, cập nhật LampState realtime.
 
-Rule thêm vào CLAUDE.md:
+Rule thêm vào CPOSE_RULES.md:
 
 Mọi API phục vụ UI phải nằm trong app/api/routes.py, không viết API rời rạc nơi khác.
 
@@ -128,7 +125,7 @@ app/core/global_id.py: giữ Global ID xuyên camera, tuân TFCS-PAR & PIPELINE.
 
 app/core/reid.py: nếu còn dùng, phải được gọi qua một lớp thống nhất (vd từ global_id.py) chứ không gọi trực tiếp từ UI.
 
-app/core/adl.py: không dùng trong runtime (đã khóa ở CLAUDE.md).
+app/core/adl.py: không dùng trong runtime (đã khóa ở CPOSE_RULES.md).
 
 Rule:
 
@@ -179,7 +176,7 @@ File CLAUDE.md này
 
 Tài liệu cũ khác
 
-Suy luận của Claude Code
+Suy luận của LLM
 
 QUY ĐỊNH CHO LLM:
 
@@ -190,28 +187,95 @@ Khi không chắc, hỏi lại user thay vì tự thiết kế kiến trúc mớ
 ## 4. Cấu Trúc Thư Mục — Nguyên Tắc Cứng
 text
 Capstone_Project/
-├── app/
-│   ├── api/routes.py           ← API layer chính
-│   ├── core/                   ← reid.py, tracking.py, global_id.py, adl.py
-│   ├── services/               ← phase1_recorder.py, phase2_analyzer.py, phase3_recognizer.py
-│   ├── storage/                ← vector_db.py, persistence.py
-│   └── utils/                  ← pose_utils.py, file_handler.py
-├── configs/
-│   └── config.yaml
-├── data/
-│   ├── config/
-│   ├── multicam/               ← video test thủ công (READ ONLY — chỉ đọc)
-│   ├── output_labels/          ← kết quả Phase 2
-│   ├── output_pose/            ← kết quả Phase 3 và multicam demo
-│   ├── output_process/         ← temporary processed results (chờ Save)
-│   └── raw_videos/             ← clip từ Phase 1 RTSP
-├── static/
-│   ├── index.html
-│   ├── js/app.js
-│   └── css/style.css
-├── .github/agents/
-│   └── CPose-dev.agent.md
-└── CLAUDE.md                   ← file này
+├── cpose/                          # THƯ VIỆN AI LÕI (Model-level wrappers, không dính tới Web)
+│   ├── core/                       # Các module xử lý AI cấp thấp
+│   │   ├── detection/              # Detector wrappers cho YOLO/RTDETR
+│   │   │   ├── base.py             # Interface BaseDetector định nghĩa hàm detect()
+│   │   │   ├── yolo_ultra.py       # Wrapper cho Ultralytics YOLO nhận diện người
+│   │   │   └── factory.py          # Hàm build_detector() khởi tạo theo cấu hình
+│   │   ├── pose_estimation/        # Module ước lượng khung xương
+│   │   │   ├── base.py             # Interface BasePoseEstimator định nghĩa hàm estimate()
+│   │   │   ├── yolo_pose.py        # Wrapper cho YOLO-Pose trích xuất 17 điểm khớp
+│   │   │   ├── rtmpose.py          # Wrapper cho RTMPose (tùy chọn hiệu năng cao)
+│   │   │   └── factory.py          # Hàm build_pose_estimator() khởi tạo bộ ước lượng
+│   │   ├── face/                   # Module nhận diện khuôn mặt (ArcFace, SFace)
+│   │   │   ├── base.py             # Interface BaseFaceRecognizer (encode/compare)
+│   │   │   ├── insightface_arcface.py # Trích xuất 512-d embedding dùng ArcFace
+│   │   │   └── factory.py          # Hàm build_face_recognizer() khởi tạo bộ nhận diện
+│   │   ├── reid/                   # Module nhận dạng lại người (Body feature)
+│   │   │   ├── base.py             # Interface BaseReIDModel định nghĩa hàm encode_body()
+│   │   │   └── simple_body_reid.py # ReID dựa trên màu sắc và hình dáng cơ thể
+│   │   └── vectordb/               # Tầng trừu tượng hóa cơ sở dữ liệu Vector
+│   │       ├── base.py             # Interface BaseVectorDB (add/search/remove)
+│   │       ├── faiss_db.py         # Backend FAISS hỗ trợ tìm kiếm láng giềng gần nhất
+│   │       └── factory.py          # Hàm build_vectordb() khởi tạo backend (CPU/GPU)
+│   ├── io/                         # Công cụ hỗ trợ Input/Output video chuyên dụng
+│   │   ├── video_reader.py         # Đọc video hiệu năng cao dưới dạng generator
+│   │   ├── camera_stream.py        # Quản lý luồng RTSP/Webcam với tự động kết nối lại
+│   │   └── sink_writer.py          # Ghi frame kèm overlay (xương, nhãn) ra file video
+│   ├── pipeline/                   # Các luồng tích hợp sẵn (Phase 1, 2, 3)
+│   │   ├── multicam_recorder.py    # Phase 1: Nhận diện và cắt clip tự động
+│   │   ├── multicam_analyzer.py    # Phase 2: Chạy Pose/Detection offline sinh file label
+│   │   └── multicam_recognizer.py  # Phase 3: Tích hợp Pose+ADL+ReID cho multicam demo
+│   └── utils/                      # Các tiện ích toán học và xử lý logic thuần túy
+│       ├── pose_ops.py             # Tính góc khớp, tư thế và vector đặc trưng ADL
+│       ├── bbox_ops.py             # Xử lý hộp bao: IOU, NMS, lọc kích thước
+│       └── timing.py               # Đo FPS và phân tích độ trễ của các module
+├── app/                            # ỨNG DỤNG DASHBOARD (Product Layer)
+│   ├── api/                        # Tầng giao tiếp HTTP & WebSocket
+│   │   ├── routes.py               # REST Endpoints: /config, /pose, /registration...
+│   │   └── ws_handlers.py          # Sự kiện Socket.IO: camera_status, pose_status...
+│   ├── core/                       # Logic nghiệp vụ của sản phẩm
+│   │   ├── global_id.py            # GlobalPersonTable: Ánh xạ ID xuyên camera
+│   │   ├── reid_logic.py           # Logic ReID thực tế dùng vectordb và cpose.core.reid
+│   │   └── tracking.py             # Bộ theo dấu cục bộ (Local Tracker) trong từng clip
+│   ├── services/                   # Lớp dịch vụ bao bọc các pipeline của cpose
+│   │   ├── recorder_service.py     # Điều phối Phase 1 và thông báo trạng thái qua Socket
+│   │   ├── analyzer_service.py     # Quản lý hàng đợi công việc gán nhãn Phase 2
+│   │   ├── recognizer_service.py   # Điều phối Phase 3 và tổng hợp kết quả Pose+ADL
+│   │   └── registration_service.py # Quản lý quy trình đăng ký danh tính khuôn mặt
+│   ├── storage/                    # Tầng lưu trữ dữ liệu bền vững
+│   │   ├── vector_db.py            # Quản lý index FAISS và hồ sơ người dùng
+│   │   └── persistence.py          # Lưu trữ metadata, mapping ID và đường dẫn embedding
+│   ├── utils/                      # Tiện ích phục vụ riêng cho ứng dụng web
+│   │   ├── pose_utils.py           # Áp dụng các quy tắc ADL trả về nhãn hành động
+│   │   ├── file_handler.py         # Quản lý file hệ thống và danh sách resources.txt
+│   │   ├── stream_probe.py         # Kiểm tra thông tin luồng RTSP (FPS, Resolution)
+│   │   └── runtime_config.py       # Tải và xác thực cấu hình config.yaml bằng Pydantic
+│   └── bootstrap/                  # Khởi tạo ứng dụng Flask/SocketIO
+│       ├── app_factory.py          # Hàm create_app() cấu hình server và đăng ký routes
+│       └── config_loader.py        # Kiểm tra và tải cấu hình từ file YAML
+├── research/                       # MÔI TRƯỜNG NGHIÊN CỨU (FastAPI Research Server)
+│   ├── api/                        # Endpoint điều khiển thực nghiệm (Experiment Control)
+│   │   ├── routes_experiments.py   # Quản lý trạng thái và kết quả các lần chạy thử
+│   │   └── ws_experiments.py       # Stream tiến độ thực nghiệm thời gian thực
+│   ├── services/                   # Logic xử lý nghiên cứu
+│   │   ├── experiment_runner.py    # Thực thi các pipeline thử nghiệm trên tập dữ liệu
+│   │   ├── model_registry.py       # Quản lý danh sách các mô hình đang thử nghiệm
+│   │   └── benchmark_service.py    # Tính toán các chỉ số mAP, Accuracy, FPS...
+│   └── schemas/                    # Định nghĩa cấu trúc dữ liệu Pydantic cho Research
+├── shared/                         # THÀNH PHẦN CHIA SẺ (Dùng chung cho App & Research)
+│   ├── io/                         # Quản lý đường dẫn và tệp tin tập trung
+│   │   ├── paths.py                # Single source of truth cho mọi thư mục data/model
+│   │   └── job_store.py            # Quản lý vòng đời trạng thái của các tác vụ AI
+│   ├── contracts/                  # Định nghĩa các bản giao kèo dữ liệu (TypedDict)
+│   └── adapters/                   # Lớp chuyển đổi giao tiếp giữa Flask và FastAPI
+├── data/                           # KHO DỮ LIỆU (Video, Labels, Results)
+│   ├── config/resources.txt        # Danh sách nguồn camera đầu vào
+│   ├── multicam/                   # Dữ liệu video cho demo đa camera
+│   ├── raw_videos/                 # Clip thô thu thập từ Phase 1
+│   ├── output_labels/              # File nhãn JSON sinh ra từ Phase 2
+│   ├── output_pose/                # Kết quả video và JSON từ Phase 3
+│   └── research_runs/              # Nhật ký và kết quả các lần chạy nghiên cứu
+├── models/                         # TRỌNG SỐ MÔ HÌNH (Product & Research)
+├── static/                         # GIAO DIỆN NGƯỜI DÙNG (HTML/JS/CSS)
+├── main.py                         # Điểm khởi đầu của ứng dụng Flask Dashboard
+├── requirements.txt                # Danh sách thư viện cần cài đặt
+├── AGENTS.md                       # Bản quy định bắt buộc cho AI trợ giúp dự án
+├── PIPELINE.md                     # Tài liệu quy trình 3 giai đoạn xử lý
+├── TFCS-PAR.md                     # Đặc tả thuật toán tracking xuyên camera
+└── README.md                       # Tài liệu hướng dẫn sử dụng tổng quát
+
 Không được:
 
 Đổi tên thư mục gốc Capstone_Project/

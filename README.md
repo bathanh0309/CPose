@@ -1,13 +1,21 @@
 ```
-cài build-tools do có insightface
+- cài build-tools do có insightface
 https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
-cài python 3.11
+- cài python 3.11
 py -3.11 -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip setuptools wheel
 pip install cython
 
+- cài các gói FE
+pnpm install
+pnpm add socket.io-client
+pnpm add -D tailwindcss postcss autoprefixer
+pnpm exec tailwindcss -i ./static/tailwind.input.css -o ./static/tailwind.css --minify
+
+
+- cài các gói CV
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```

@@ -138,8 +138,8 @@ tracker:
 detectors:
   yolo_path: models/product/yolov8n.pt
   face_data_path: data/face_db
-  face_min_size: 50
-  face_similarity_threshold: 0.4
+  face_min_size: 36
+  face_similarity_threshold: 0.33
   face_det_width: 640
   face_det_height: 640
   body_conf_threshold: 0.5

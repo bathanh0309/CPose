@@ -157,6 +157,10 @@ class RecognizerService:
                 except Exception:
                     logger.debug("workspace_state emit failed at clip start", exc_info=True)
 
+                # Prime the snapshot endpoints immediately so the UI has a frame
+                # before phase3 emits its first progress callback.
+                self._prime_initial_snapshots(job.clip_path, cam_id, clip_stem)
+
                 # Registration hook for specific cams if needed
                 if cam_id == "cam01" and self.registration_callback:
                     self.registration_callback(clip_stem, cam_id)
@@ -222,6 +226,31 @@ class RecognizerService:
             except Exception as e:
                 logger.exception(f"Worker iteration failure: {e}")
                 self._queue.task_done()
+
+    def _prime_initial_snapshots(self, clip_path: Path, cam_id: str, clip_stem: str) -> None:
+        cap = cv2.VideoCapture(str(clip_path))
+        try:
+            if not cap.isOpened():
+                logger.debug("Unable to prime snapshots for %s (%s): clip cannot be opened", clip_stem, cam_id)
+                return
+
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                logger.debug("Unable to prime snapshots for %s (%s): first frame unavailable", clip_stem, cam_id)
+                return
+
+            jpeg = self._encode_jpeg(frame)
+            if not jpeg:
+                return
+
+            self._update_state(
+                current_frame=0,
+                total_frames=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0,
+                snapshot_original=jpeg,
+                snapshot_processed=jpeg,
+            )
+        finally:
+            cap.release()
 
     def _encode_jpeg(self, frame) -> Optional[bytes]:
         if frame is None: return None

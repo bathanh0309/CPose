@@ -5,7 +5,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from flask import Blueprint, Response, jsonify, request, current_app, Flask
+from flask import Blueprint, Response, jsonify, request, current_app, Flask, send_file
 from werkzeug.utils import secure_filename
 
 import app as _app_module
@@ -63,14 +63,7 @@ def _json_safe(value):
 
 
 def _resolve_multicam_default_dir() -> Path:
-    candidates = [
-        _app_module.BASE_DIR / "data" / "multicam",
-        _app_module.RAW_VIDEOS_DIR,
-    ]
-    for folder in candidates:
-        if folder.exists() and any(folder.glob("*.mp4")):
-            return folder
-    return candidates[0]
+    return _app_module.BASE_DIR / "data" / "multicam"
 
 
 @dataclass
@@ -164,6 +157,14 @@ def _workspace_snapshot() -> dict:
     with _WORKSPACE_LOCK:
         return _WORKSPACE.to_dict()
 
+
+@api_bp.route("/vendor/socket.io.min.js", methods=["GET"])
+def vendor_socketio_client():
+    bundle = Path(__file__).resolve().parents[2] / "node_modules" / "socket.io-client" / "dist" / "socket.io.min.js"
+    if not bundle.exists():
+        return _error("socket.io-client bundle not found. Run npm install first.", 500)
+    return send_file(bundle, mimetype="application/javascript", conditional=True, max_age=86400)
+
 # ===================================================================
 #                          CONFIG & CAMERA
 # ===================================================================
@@ -178,6 +179,10 @@ def upload_config():
 
     if not filename.lower().endswith(".txt"):
         return _error("Only .txt files are supported", 400)
+
+    with _WORKSPACE_LOCK:
+        if _WORKSPACE.running or get_recorder().is_running():
+            return _error("Stop the active flow before loading TXT/RTSP", 409)
 
     upload.save(str(_app_module.RESOURCES_FILE))
     cameras = _storage.parse_resources(_app_module.RESOURCES_FILE)
@@ -234,8 +239,9 @@ def start_recording():
     if not cameras:
         return _error("No valid cameras found or specified", 400)
 
-    if get_recorder().is_running():
-        return _error("Recording is already running", 409)
+    with _WORKSPACE_LOCK:
+        if _WORKSPACE.running or get_recorder().is_running():
+            return _error("Stop the active flow before starting recording", 409)
 
     try:
         storage_limit_gb = float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB))
@@ -286,8 +292,8 @@ def start_pose():
             return _error("No valid cameras for RTSP mode", 400)
 
         with _WORKSPACE_LOCK:
-            if _WORKSPACE.running:
-                return _error("Workspace is already running", 409)
+            if _WORKSPACE.running or get_recorder().is_running():
+                return _error("Stop the active flow before starting RTSP", 409)
 
         _ensure_recognizer_worker()
         if not get_recorder().is_running():
@@ -317,8 +323,8 @@ def start_pose():
 
     if mode == "multicam_folder":
         with _WORKSPACE_LOCK:
-            if _WORKSPACE.running:
-                return _error("Workspace is already running", 409)
+            if _WORKSPACE.running or get_recorder().is_running():
+                return _error("Stop the active flow before starting multicam", 409)
 
         folder = body.get("folder")
         if folder:
@@ -334,12 +340,7 @@ def start_pose():
                 clips = list(_WORKSPACE.staged_clips)
                 queue = list(_WORKSPACE.staged_camera_map)
             if not clips:
-                try:
-                    clips, queue = _stage_multicam_dir(_resolve_multicam_default_dir())
-                except FileNotFoundError as exc:
-                    return _error(str(exc), 400)
-                except ValueError as exc:
-                    return _error(str(exc), 400)
+                return _error("Load multicam clips first", 400)
 
         _ensure_recognizer_worker()
         with _WORKSPACE_LOCK:
@@ -456,8 +457,8 @@ def save_pose_result():
 @api_bp.route("/workspace/load_multicam_default", methods=["POST"])
 def load_multicam_default():
     with _WORKSPACE_LOCK:
-        if _WORKSPACE.running:
-            return _error("Workspace is running. Stop first.", 409)
+        if _WORKSPACE.running or get_recorder().is_running():
+            return _error("Stop the active flow before loading multicam", 409)
 
     try:
         clips, items = _stage_multicam_dir(_resolve_multicam_default_dir())
@@ -483,18 +484,13 @@ def load_multicam_default():
 @api_bp.route("/workspace/start_multicam", methods=["POST"])
 def workspace_start_multicam():
     with _WORKSPACE_LOCK:
-        if _WORKSPACE.running:
-            return _error("Workspace is already running", 409)
+        if _WORKSPACE.running or get_recorder().is_running():
+            return _error("Stop the active flow before starting multicam", 409)
         clips = list(_WORKSPACE.staged_clips)
-        queued = len(_WORKSPACE.staged_camera_map)
+        staged_queue = list(_WORKSPACE.staged_camera_map)
 
     if not clips:
-        try:
-            clips, _ = _stage_multicam_dir(_resolve_multicam_default_dir())
-        except FileNotFoundError as exc:
-            return _error(str(exc), 404)
-        except ValueError as exc:
-            return _error(str(exc), 400)
+        return _error("Load multicam clips first", 400)
 
     _ensure_recognizer_worker()
     with _WORKSPACE_LOCK:
@@ -517,9 +513,9 @@ def workspace_start_multicam():
         output_dir="output_pose",
         queued=len(clips),
         staged_clips=[clip.name for clip in clips],
-        staged_camera_map=queue,
+        staged_camera_map=staged_queue,
     )
-    return _ok(status="started", mode="multicam_folder", total_clips=len(clips), queued=queued or len(clips))
+    return _ok(status="started", mode="multicam_folder", total_clips=len(clips), queued=len(staged_queue) or len(clips))
 
 @api_bp.route("/workspace/stop", methods=["POST"])
 def workspace_stop():

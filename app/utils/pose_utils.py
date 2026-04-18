@@ -89,7 +89,7 @@ def calc_velocity(positions: Iterable[np.ndarray]) -> float:
     return float(np.mean(distances)) if distances else 0.0
 
 
-def draw_skeleton(frame, keypoints_xy, keypoints_conf, min_conf: float = 0.3):
+def draw_skeleton(frame, keypoints_xy, keypoints_conf, min_conf: float = 0.3, label: str | None = None):
     """Draw a COCO-17 skeleton overlay and return a new image."""
     output = frame.copy()
     xy = np.asarray(keypoints_xy, dtype=float)
@@ -108,6 +108,15 @@ def draw_skeleton(frame, keypoints_xy, keypoints_conf, min_conf: float = 0.3):
         center = tuple(int(value) for value in point)
         cv2.circle(output, center, 4, (255, 255, 255), -1)
         cv2.circle(output, center, 5, (56, 139, 253), 1)
+
+    if label:
+        visible = xy[conf >= min_conf]
+        if visible.size:
+            x = int(np.clip(np.min(visible[:, 0]), 10, output.shape[1] - 120))
+            y = int(np.clip(np.min(visible[:, 1]) - 10, 20, output.shape[0] - 10))
+        else:
+            x, y = 10, 24
+        cv2.putText(output, str(label), (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
 
     return output
 

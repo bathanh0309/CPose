@@ -53,6 +53,7 @@ def emit_workspace_state(
         "time": _now_time_string(),
         "mode": mode,
         "running": running,
+        "active_flow": mode if running and mode in {"rtsp", "multicam_folder"} else None,
         "current_clip": current_clip,
         "current_cam": current_cam,
         "output_dir": output_dir,

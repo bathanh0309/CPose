@@ -43,7 +43,7 @@ class RegistrationSession:
         self.cap = None
         
         # Target samples per angle
-        self.target_count = 5
+        self.target_count = 3
         self.angles = ["center", "left", "right", "up", "down"]
         self.counts = {angle: 0 for angle in self.angles}
         self.embeddings = {angle: [] for angle in self.angles}
@@ -90,8 +90,8 @@ class RegistrationSession:
         yaw, pitch, roll = face.pose
         
         # Thresholds
-        YAW_THRES = 20
-        PITCH_THRES = 15
+        YAW_THRES = 25
+        PITCH_THRES = 18
         
         if abs(yaw) < YAW_THRES and abs(pitch) < PITCH_THRES:
             return "center"
@@ -106,7 +106,7 @@ class RegistrationSession:
         
         return "mid"
 
-    def _is_blurry(self, image, threshold=80):
+    def _is_blurry(self, image, threshold=60):
         if image is None or image.size == 0: return True
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         variance = cv2.Laplacian(gray, cv2.CV_64F).var()

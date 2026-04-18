@@ -11,7 +11,7 @@ data/output_labels/*
 data/output_pose/*
 data/processed_videos/*
 data/video-4-cam/
-data/mp4-gif/output.mp4
+data/mp4-gif/
 data/multicam/*
 !data/raw_videos/.gitkeep
 !data/output_labels/.gitkeep
@@ -20,6 +20,40 @@ data/multicam/*
 !data/config/.gitkeep
 !data/multicam/.gitkeep
 
+# Large generated media and model artifacts
+*.mp4
+*.m4v
+*.mov
+*.avi
+*.mkv
+*.webm
+*.gif
+
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.ckpt
+*.weights
+*.h5
+*.pb
+*.bin
+
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.joblib
+
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+data/output_process/
+data/multicam_uploads/
+docs/**/*.pdf
 
 .vscode/
 .idea/

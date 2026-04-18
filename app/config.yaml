@@ -6,7 +6,7 @@ server:
   host: "0.0.0.0"
   port: 5000
   debug: false
-  socket_async_mode: "eventlet"
+  socket_async_mode: "threading"
   cors_origins: "*"
 
 logging:

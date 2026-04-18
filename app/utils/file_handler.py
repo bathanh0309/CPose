@@ -50,7 +50,10 @@ def _parse_multicam_timestamp(item: Path | str) -> tuple[datetime, int, str] | N
 def extract_multicam_camera_id(item: Path | str) -> str | None:
     """Return normalized camera id like cam01 when present."""
     name = Path(item).stem
-    prefix = name.split("-", 1)[0].lower()
+    # Support both cam1-... and cam1_... naming styles.
+    prefix = name.lower()
+    for sep in ("-", "_"):
+        prefix = prefix.split(sep, 1)[0]
     if not prefix.startswith("cam"):
         return None
 

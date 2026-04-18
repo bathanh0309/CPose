@@ -12,7 +12,7 @@ from app.core.recognizer_service import RecognizerService
 from app.services.registration_service import RegistrationManager
 from app.utils.file_handler import StorageManager
 from app.utils.stream_probe import StreamProber
-from app.utils.file_handler import sort_multicam_clips
+from app.utils.file_handler import sort_multicam_clips, extract_multicam_camera_id
 
 logger = logging.getLogger("[API]")
 
@@ -58,6 +58,17 @@ def _json_safe(value):
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     return value
+
+
+def _resolve_multicam_default_dir() -> Path:
+    candidates = [
+        _app_module.BASE_DIR / "data" / "multicam",
+        _app_module.RAW_VIDEOS_DIR,
+    ]
+    for folder in candidates:
+        if folder.exists() and any(folder.glob("*.mp4")):
+            return folder
+    return candidates[0]
 
 # ===================================================================
 #                          CONFIG & CAMERA
@@ -198,7 +209,7 @@ def start_pose():
         if folder:
             video_dir = _resolve_dir(folder, _app_module.RAW_VIDEOS_DIR)
         else:
-            video_dir = _app_module.BASE_DIR / "data" / "multicam"
+            video_dir = _resolve_multicam_default_dir()
 
         if not video_dir.is_dir():
             return _error(f"Directory not found: {video_dir}", 400)
@@ -208,7 +219,7 @@ def start_pose():
             return _error("No .mp4 files found in the selected folder", 400)
 
         for clip in clips:
-            cam_id = _app_module.extract_multicam_camera_id(clip) if hasattr(_app_module, "extract_multicam_camera_id") else "unknown"
+            cam_id = extract_multicam_camera_id(clip) or "unknown"
             recognizer.enqueue_clip(cam_id, clip)
 
         from app.api.ws_handlers import emit_event_log
@@ -289,17 +300,17 @@ def save_pose_result():
 
 @api_bp.route("/workspace/load_multicam_default", methods=["POST"])
 def load_multicam_default():
-    video_dir = _app_module.BASE_DIR / "data" / "multicam"
+    video_dir = _resolve_multicam_default_dir()
     if not video_dir.exists():
         return _error(f"Directory not found: {video_dir}", 404)
 
     clips = sort_multicam_clips(video_dir.glob("*.mp4"))
     if not clips:
-        return _error("No .mp4 files found in data/multicam", 400)
+        return _error("No .mp4 files found in default multicam folders", 400)
 
     items = []
     for clip in clips:
-        cam_id = _app_module.extract_multicam_camera_id(clip) if hasattr(_app_module, "extract_multicam_camera_id") else "unknown"
+        cam_id = extract_multicam_camera_id(clip) or "unknown"
         items.append({
             "name": clip.name,
             "cam": cam_id,
@@ -316,7 +327,7 @@ def workspace_start_multicam():
     body = _body_json()
     folder = body.get("folder")
     if not folder:
-        folder = str((_app_module.BASE_DIR / "data" / "multicam").resolve())
+        folder = str(_resolve_multicam_default_dir().resolve())
 
     # We can call start_pose internal logic directly or via request context
     with current_app.test_request_context(

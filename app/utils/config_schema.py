@@ -150,7 +150,7 @@ class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 5000
     debug: bool = False
-    socket_async_mode: str = "eventlet"
+    socket_async_mode: str = "threading"
     cors_origins: str = "*"
     secret_key: str = "cpose-dev-secret"
 

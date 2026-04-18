@@ -9,7 +9,8 @@ from app.utils.config_schema import AppConfig
 from .logging_setup import setup_logging
 
 logger = logging.getLogger("[AppFactory]")
-socketio = SocketIO()
+# Keep Socket.IO/Engine.IO logs quiet in product mode to avoid noisy connection-abort traces on Windows.
+socketio = SocketIO(logger=False, engineio_logger=False)
 
 def create_app(static_dir: Path, config: AppConfig) -> Flask:
     """

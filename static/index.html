@@ -5,9 +5,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CPose Studio — Điều khiển tập trung</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/tailwind.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <!-- Prefer local Socket.IO client served by Flask-SocketIO (works offline, matches server version). -->
+  <script src="/socket.io/socket.io.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     * {
@@ -19,6 +20,11 @@
       overflow: hidden;
       height: 100vh;
     }
+
+    /* Minimal utility fallbacks (for offline runs when Tailwind CDN is unavailable). */
+    .hidden { display: none !important; }
+    .flex { display: flex; }
+    .grid { display: grid; }
 
     .app-grid {
       display: grid;
@@ -230,8 +236,8 @@
         <div class="flex flex-wrap gap-2">
           <label for="resourcesInput" class="btn-sm bg-white border cursor-pointer">TXT</label>
           <input type="file" id="resourcesInput" class="hidden" accept=".txt">
-          <label for="multicamInput" class="btn-sm bg-white border cursor-pointer">FOLDER</label>
-          <input type="file" id="multicamInput" class="hidden" webkitdirectory directory multiple>
+          <!-- Demo-stable mode: load server-side multicam clips from data/multicam (see /api/workspace/*). -->
+          <button id="loadMulticamBtn" class="btn-sm bg-white border">LOAD</button>
           <button id="toggleRtspPreviewBtn" class="btn-sm bg-white border">Show</button>
           <select id="slotSel1" class="text-[9px] p-1 rounded border bg-white"></select>
           <div class="flex items-center"><span class="rec-led off" id="recLed"></span><span id="recLedText"
@@ -426,24 +432,50 @@
     const DUMMY = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
     let state = {
       system: { running: false, mode: 'idle', resourcesLoaded: false, folderLoaded: false },
-      preview: { multicamVisible: false, originalVisible: true, processedVisible: true, registrationVisible: false },
+      // Start hidden; we toggle them ON after boot (avoids toggling OFF on first render).
+      preview: { multicamVisible: false, originalVisible: false, processedVisible: false, registrationVisible: false },
       cameras: { rtspList: [], activeRtspCam: null, registrationCamOpen: false, registrationStream: null },
       clips: [],
       eventLogs: [],
       metricLogs: [],
       maxLogs: 300,
       selectedClip: null,
-      polling: { multicam: null, original: null, processed: null },
+      polling: { multicam: null, original: null, processed: null, status: null },
       registration: { sessionId: null, isCapturing: false, nextUserId: 1, currentUser: null }
     };
-    let socket = io();
+
+    // ---------------------------- DOM HELPERS ----------------------------
+    // Support both $("id") and $("#id") usage (current file mixes both styles).
+    const $ = (sel) => {
+      if (!sel) return null;
+      if (typeof sel !== 'string') return sel;
+      return sel.startsWith('#') ? document.querySelector(sel) : document.getElementById(sel);
+    };
+
+    // ---------------------------- SOCKET (Defensive) ----------------------------
+    // If the Socket.IO client fails to load, keep the rest of the UI functional (REST-only mode).
+    const socket = (typeof window.io === 'function')
+      ? window.io({ transports: ['websocket', 'polling'] })
+      : { on() { }, emit() { } };
 
     // ---------------------------- HELPERS ----------------------------
-    const $ = id => document.getElementById(id);
     function nowStr() { return new Date().toLocaleTimeString('vi-VN', { hour12: false }); }
     function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t ?? ''; return d.innerHTML; }
     function showToast(msg, type = 'info') { const t = document.createElement('div'); t.className = `fixed bottom-4 right-4 bg-white shadow-lg rounded-lg p-2 text-xs border-l-4 ${type === 'success' ? 'border-green-500' : 'border-red-500'} z-50`; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 3000); }
     function resetFileInput(id) { $(id).value = ''; }
+    async function pullSnapshot(url, imgEl) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.status === 204 || !res.ok) return;
+        const blob = await res.blob();
+        if (!blob || blob.size === 0) return;
+        const nextUrl = URL.createObjectURL(blob);
+        const prevUrl = imgEl.dataset.objUrl;
+        if (prevUrl) URL.revokeObjectURL(prevUrl);
+        imgEl.dataset.objUrl = nextUrl;
+        imgEl.src = nextUrl;
+      } catch (_) { }
+    }
 
     function updateRecLamp(st) {
       const led = $('#recLed'); const text = $('#recLedText');
@@ -454,7 +486,36 @@
     }
     function updateMainStatus(txt) { $('#mStatus').innerHTML = txt; }
 
-    function pushEventLog(ev, cam = '--') { state.eventLogs.unshift({ time: nowStr(), event: ev, cam }); if (state.eventLogs.length > state.maxLogs) state.eventLogs.pop(); renderLeftEventTable(); }
+    function startStatusPolling() {
+      if (state.polling.status) return;
+      state.polling.status = setInterval(async () => {
+        try {
+          const res = await fetch('/api/pose/status');
+          if (!res.ok) return;
+          const st = await res.json();
+          state.system.running = !!st.running;
+          updateMainStatus(state.system.running ? 'RUNNING' : 'STANDBY');
+          updateRecLamp(state.system.running ? 'recording' : 'ready');
+          if (state.system.running && (st.current_frame || st.fps || st.conf || st.adl)) {
+            pushMetricLog({
+              cam: st.current_cam || '--',
+              fps: st.fps ?? '--',
+              frame: st.total_frames ? `${st.current_frame || 0}/${st.total_frames}` : (st.current_frame ?? '--'),
+              conf: st.conf !== undefined && st.conf !== null ? ((Number(st.conf) <= 1 ? Number(st.conf) * 100 : Number(st.conf)).toFixed(0) + '%') : '--',
+              adl: st.adl || '--',
+            });
+          }
+          if (!state.system.running) stopStatusPolling();
+        } catch (_) { }
+      }, 1000);
+    }
+
+    function stopStatusPolling() {
+      if (state.polling.status) clearInterval(state.polling.status);
+      state.polling.status = null;
+    }
+
+    function pushEventLog(ev, cam = '--', timeStr = null) { state.eventLogs.unshift({ time: timeStr || nowStr(), event: ev, cam }); if (state.eventLogs.length > state.maxLogs) state.eventLogs.pop(); renderLeftEventTable(); }
     function renderLeftEventTable() {
       const q = $('#leftEventSearch').value.trim().toLowerCase();
       const rows = state.eventLogs.filter(r => !q || `${r.time} ${r.event} ${r.cam}`.toLowerCase().includes(q));
@@ -494,13 +555,43 @@
         state.system.resourcesLoaded = true;
         state.system.folderLoaded = false;
         state.system.mode = 'rtsp';
-        const sel = $('#slotSel1'); sel.innerHTML = state.cameras.rtspList.map(c => `<option value="${c.cam_id}">${c.label || c.cam_id}</option>`).join('');
+        const sel = $('#slotSel1'); if (sel) sel.innerHTML = state.cameras.rtspList.map(c => `<option value="${c.cam_id}">${c.label || c.cam_id}</option>`).join('');
         updateRecLamp('ready');
         pushEventLog(`Loaded ${state.cameras.rtspList.length} cameras`, 'SYS');
         showToast('Resources loaded', 'success');
       } catch (err) { showToast(err.message, 'error'); } finally { resetFileInput('resourcesInput'); }
     }
-    function toggleMulticamPreview() {
+    async function loadMulticamDefault() { if (state.system.running) { showToast('Pipeline is running', 'error'); return; }
+      try {
+        const res = await fetch('/api/workspace/load_multicam_default', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to load multicam folder');
+
+        const items = (data.clips || []).map((c, idx) => ({
+          id: `${c.name || 'clip'}-${idx}`,
+          name: c.name || `clip_${idx}`,
+          cam: c.cam || 'UNK',
+          url: c.url || '',
+          status: 'ready',
+          progress: 0,
+          sourceType: 'multicam_server',
+        }));
+
+        state.clips = items;
+        state.system.folderLoaded = true;
+        state.system.resourcesLoaded = false;
+        state.system.mode = 'multicam_folder';
+        updateRecLamp('ready');
+        renderClipQueue();
+        if (items.length) selectClipPreview(items[0].id);
+        pushEventLog(`Loaded ${items.length} multicam clips (server)`, 'MC');
+        showToast('Multicam loaded', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function toggleMulticamPreview() { // toggle main multicam preview
       if (!state.system.resourcesLoaded && !state.system.folderLoaded) { showToast('Chưa có nguồn multicam', 'error'); return; }
       const img = $('#slotSnap1'), empty = $('#slotEmpty1'), btn = $('#toggleRtspPreviewBtn'), toggleBtn = $('#multicamToggleBtn');
       if (state.preview.multicamVisible) {
@@ -515,29 +606,23 @@
         btn.innerText = 'Hide';
         toggleBtn.innerHTML = '<i class="fas fa-eye"></i>'; toggleBtn.className = 'cam-toggle on';
         const camId = $('#slotSel1').value;
+        if (camId && state.system.resourcesLoaded && !state.system.running) {
+          showToast('RTSP snapshot appears after START', 'info');
+          return;
+        }
         if (camId && state.system.resourcesLoaded) {
-          state.polling.multicam = setInterval(() => { img.src = `/api/cameras/${camId}/snapshot?t=${Date.now()}`; }, 400);
+          state.polling.multicam = setInterval(() => { pullSnapshot(`/api/cameras/${camId}/snapshot?t=${Date.now()}`, img); }, 500);
         } else if (state.system.folderLoaded && state.clips.length) {
-          const clip = state.clips[0]; if (clip?.url) img.src = clip.url;
+          if (state.system.running) {
+            state.polling.multicam = setInterval(() => { pullSnapshot(`/api/pose/snapshot/original?t=${Date.now()}`, img); }, 500);
+          } else {
+            img.src = DUMMY;
+          }
         }
       }
     }
-    async function handleMulticamFolderUpload(e) {
-      const files = Array.from(e.target.files || []);
-      const videoFiles = files.filter(f => /\.(mp4|avi|mov)$/i.test(f.name));
-      if (!videoFiles.length) { showToast('Folder không có video', 'error'); return; }
-      if (state.system.running) { showToast('Pipeline đang chạy', 'error'); return; }
-      const parsed = videoFiles.map(f => ({ id: Math.random().toString(36), file: f, name: f.name, url: URL.createObjectURL(f), cam: 'UNK', status: 'ready', progress: 0, sourceType: 'multicam_file' }));
-      if (state.clips.length) state.clips.forEach(c => { if (c.url?.startsWith('blob:')) URL.revokeObjectURL(c.url); });
-      state.clips = parsed;
-      state.system.folderLoaded = true;
-      state.system.resourcesLoaded = false;
-      state.system.mode = 'multicam_folder';
-      updateRecLamp('ready');
-      renderClipQueue();
-      pushEventLog(`Loaded ${parsed.length} multicam clips`, 'SYS');
-      showToast('Folder loaded', 'success');
-      resetFileInput('multicamInput');
+    async function handleMulticamFolderUpload(e) { // legacy alias
+      return loadMulticamDefault();
     }
     function renderClipQueue() {
       const q = $('#clipQueue');
@@ -564,7 +649,7 @@
       } else {
         state.preview.originalVisible = true;
         empty.classList.add('hidden'); img.classList.remove('hidden');
-        if (!state.polling.original) state.polling.original = setInterval(() => { $('#originalVideo').src = `/api/pose/snapshot/original?t=${Date.now()}`; }, 300);
+        if (!state.polling.original) state.polling.original = setInterval(() => { pullSnapshot(`/api/pose/snapshot/original?t=${Date.now()}`, $('#originalVideo')); }, 500);
         btn.innerHTML = '<i class="fas fa-eye"></i>'; btn.className = 'cam-toggle on';
       }
     }
@@ -578,7 +663,7 @@
       } else {
         state.preview.processedVisible = true;
         empty.classList.add('hidden'); img.classList.remove('hidden');
-        if (!state.polling.processed) state.polling.processed = setInterval(() => { $('#processedVideo').src = `/api/pose/snapshot/processed?t=${Date.now()}`; }, 300);
+        if (!state.polling.processed) state.polling.processed = setInterval(() => { pullSnapshot(`/api/pose/snapshot/processed?t=${Date.now()}`, $('#processedVideo')); }, 500);
         btn.innerHTML = '<i class="fas fa-eye"></i>'; btn.className = 'cam-toggle on';
       }
     }
@@ -609,9 +694,12 @@
       const mode = state.system.resourcesLoaded ? 'rtsp' : 'multicam_folder';
       const payload = { mode, cameras: state.cameras.rtspList.map(c => c.cam_id) };
       try {
-        const res = await fetch('/api/pose/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const res = state.system.resourcesLoaded
+          ? await fetch('/api/pose/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+          : await fetch('/api/workspace/start_multicam', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         state.system.running = true; updateRecLamp('recording'); updateMainStatus('RUNNING');
+        startStatusPolling();
         pushEventLog(`Pipeline started (${mode})`, 'SYS');
         if (state.preview.originalVisible && !state.polling.original) toggleOriginal();
         if (state.preview.processedVisible && !state.polling.processed) toggleProcessed();
@@ -619,8 +707,9 @@
     }
     async function stopAll() {
       if (!state.system.running) return;
-      await fetch('/api/pose/stop', { method: 'POST' }).catch(() => { });
+      await fetch('/api/workspace/stop', { method: 'POST' }).catch(() => { });
       state.system.running = false; updateRecLamp('ready'); updateMainStatus('STANDBY');
+      stopStatusPolling();
       pushEventLog('Pipeline stopped', 'SYS');
       clearInterval(state.polling.original); clearInterval(state.polling.processed); state.polling.original = state.polling.processed = null;
     }
@@ -638,7 +727,24 @@
       if (!name) { showToast('Nhập tên', 'error'); return; }
       if (isNaN(age) || age <= 0) { showToast('Tuổi không hợp lệ', 'error'); return; }
       const source = document.querySelector('input[name="reg_source"]:checked')?.value;
-      if (source === 'local' && !state.cameras.registrationCamOpen) { showToast('Mở webcam trước', 'error'); return; }
+      if (source === 'local' && state.cameras.registrationCamOpen && state.cameras.registrationStream) {
+        // Release browser webcam so backend OpenCV can lock the camera device.
+        state.cameras.registrationStream.getTracks().forEach(t => t.stop());
+        state.cameras.registrationStream = null;
+        state.cameras.registrationCamOpen = false;
+        $('#liveWebcam').srcObject = null;
+        $('#liveWebcam').classList.add('hidden');
+        $('#webcamEmpty').classList.remove('hidden');
+        $('#openWebcamBtn').innerText = 'Open';
+        $('#openWebcamBtn').classList.remove('bg-red-500');
+        $('#openWebcamBtn').classList.add('bg-emerald-500');
+        $('#regCamToggleBtn').innerHTML = '<i class="fas fa-eye-slash"></i>';
+        $('#regCamToggleBtn').className = 'cam-toggle off';
+      }
+      if (source === 'local' && !state.cameras.registrationCamOpen) {
+        // Backend local source does not require browser preview to stay open.
+        state.cameras.registrationCamOpen = true;
+      }
       const payload = { source, name, age, person_id: state.registration.nextUserId };
       try {
         const res = await fetch('/api/registration/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -650,7 +756,8 @@
         $('#regInfoModal').classList.add('hidden');
         $('#regCaptureModal').classList.remove('hidden'); $('#regCaptureModal').classList.add('flex');
         $('#regDisplayTitle').innerText = `ID: ${state.registration.nextUserId} | ${name} | ${age}`;
-        const interval = setInterval(() => { if (state.registration.sessionId) $('#regSnapshot').src = `/api/registration/snapshot/${state.registration.sessionId}?t=${Date.now()}`; }, 200);
+        $('#regTotalPct').innerText = '0%';
+        const interval = setInterval(() => { if (state.registration.sessionId) pullSnapshot(`/api/registration/snapshot/${state.registration.sessionId}?t=${Date.now()}`, $('#regSnapshot')); }, 300);
         window._regInterval = interval;
         state.registration.nextUserId++;
       } catch (err) { showToast(err.message, 'error'); }
@@ -663,17 +770,65 @@
       pushEventLog('Registration stopped', 'REG');
     };
     // ---------------------------- SOCKET HANDLERS ----------------------------
+    const _fmtConf = (v) => {
+      if (v === null || v === undefined || v === '--') return '--';
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      return (n <= 1 ? (n * 100) : n).toFixed(0) + '%';
+    };
+
     socket.on('connect', () => pushEventLog('Socket connected', 'SYS'));
+    socket.on('connect_error', (e) => pushEventLog(`Socket error: ${e?.message || e}`, 'SYS'));
+    socket.on('registration_progress', (d) => {
+      pushEventLog(d?.message || 'registration_progress', 'REG', d?.time);
+      if (d?.progress !== undefined && d?.progress !== null) $('#regTotalPct').innerText = `${d.progress}%`;
+    });
+
+    socket.on('event_log', (d) => pushEventLog(d?.event || 'event_log', d?.cam || '--', d?.time));
+    socket.on('metric_log', (d) => {
+      pushMetricLog({
+        cam: d?.cam || '--',
+        fps: d?.fps ?? '--',
+        frame: d?.frame ?? '--',
+        conf: _fmtConf(d?.conf),
+        adl: d?.adl || '--',
+      });
+    });
     socket.on('rec_status', (d) => { updateRecLamp(d?.is_recording ? 'recording' : 'ready'); });
-    socket.on('clip_saved', (d) => { state.clips.unshift({ id: Date.now().toString(), name: d.filename, cam: d.cam_id || 'UNK', url: d.url || '', status: 'ready', progress: 0, sourceType: 'rtsp_short' }); renderClipQueue(); pushEventLog(`New clip: ${d.filename}`, d.cam_id); });
-    socket.on('pose_progress', (d) => { pushMetricLog({ cam: d.cam_id || '--', fps: d.fps || 0, frame: d.frame || 0, conf: d.conf ? (d.conf * 100).toFixed(0) + '%' : '--', adl: d.adl || '--' }); });
-    socket.on('analysis_progress', (d) => { pushMetricLog({ cam: '--', fps: '--', frame: `${d.frame_id}/${d.total_frames}`, conf: '--', adl: '--' }); });
+    socket.on('clip_saved', (d) => {
+      const name = d?.filename || 'clip';
+      state.clips.unshift({
+        id: Date.now().toString(),
+        name,
+        cam: d?.cam_id || 'UNK',
+        url: d?.preview_url || '',
+        status: 'ready',
+        progress: 0,
+        sourceType: 'rtsp_short'
+      });
+      renderClipQueue();
+      pushEventLog(`New clip: ${name}`, d?.cam_id || 'SYS');
+    });
+    socket.on('pose_progress', (d) => {
+      pushMetricLog({
+        cam: d?.cam_id || '--',
+        fps: d?.fps ?? '--',
+        frame: (d?.frame_id !== undefined && d?.total_frames !== undefined) ? `${d.frame_id}/${d.total_frames}` : (d?.frame ?? '--'),
+        conf: _fmtConf(d?.conf),
+        adl: d?.adl || '--',
+      });
+    });
     socket.on('registration_done', (d) => { if (d.status === 'success') showToast('Đăng ký thành công!', 'success'); pushEventLog(`Registration ${d.status}`, 'REG'); $('#regCaptureModal').classList.add('hidden'); state.registration.isCapturing = false; });
+    socket.on('registration_done', () => {
+      if (window._regInterval) clearInterval(window._regInterval);
+      state.registration.sessionId = null;
+      $('#regTotalPct').innerText = '100%';
+    });
     // ---------------------------- EVENT BINDINGS (Defensive) ----------------------------
     const bind = (id, evt, fn) => { const el = $(id); if (el) el.addEventListener(evt, fn); };
     
     bind('resourcesInput', 'change', handleResourcesUpload);
-    bind('multicamInput', 'change', handleMulticamFolderUpload);
+    bind('loadMulticamBtn', 'click', loadMulticamDefault);
     bind('toggleRtspPreviewBtn', 'click', toggleMulticamPreview);
     bind('multicamToggleBtn', 'click', toggleMulticamPreview);
     bind('originalToggleBtn', 'click', toggleOriginal);
@@ -687,15 +842,51 @@
     bind('leftEventSearch', 'input', renderLeftEventTable);
     bind('metricSearchInput', 'input', renderMetricTable);
 
+    async function syncFromBackend() {
+      try {
+        const [camsRes, statusRes] = await Promise.all([
+          fetch('/api/config/cameras'),
+          fetch('/api/pose/status'),
+        ]);
+
+        if (camsRes.ok) {
+          const cams = await camsRes.json();
+          state.cameras.rtspList = cams.cameras || [];
+          const sel = $('#slotSel1');
+          if (sel) sel.innerHTML = state.cameras.rtspList.map(c => `<option value="${c.cam_id}">${c.label || c.cam_id}</option>`).join('');
+          // Keep camera list for selector; source mode is chosen explicitly by user action.
+        }
+
+        if (statusRes.ok) {
+          const st = await statusRes.json();
+          state.system.running = !!st.running;
+          updateMainStatus(state.system.running ? 'RUNNING' : 'STANDBY');
+          updateRecLamp(state.system.running ? 'recording' : 'ready');
+          if (state.system.running) startStatusPolling();
+          else stopStatusPolling();
+        }
+
+        pushEventLog('Synced from backend', 'SYS');
+      } catch (e) {
+        pushEventLog(`Backend sync failed: ${e?.message || e}`, 'SYS');
+      }
+    }
+
     const refreshBtn = $('#refreshBtn');
-    if (refreshBtn) refreshBtn.onclick = () => pushEventLog('Manual sync', 'SYS');
+    if (refreshBtn) refreshBtn.onclick = () => syncFromBackend();
     // Initial render
     pushEventLog('Hệ thống đã sẵn sàng', 'SYS');
     updateRecLamp('off');
     renderClipQueue();
+    ['slotSnap1', 'originalVideo', 'processedVideo', 'regSnapshot'].forEach((id) => {
+      const img = $(id);
+      if (img) img.onerror = () => { img.src = DUMMY; };
+    });
     // Đảm bảo các preview polling khởi tạo đúng trạng thái
-    if (state.preview.originalVisible) toggleOriginal();
-    if (state.preview.processedVisible) toggleProcessed();
+    syncFromBackend();
+    loadMulticamDefault();
+    toggleOriginal();
+    toggleProcessed();
   </script>
 </body>
 

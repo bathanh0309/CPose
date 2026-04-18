@@ -31,22 +31,45 @@ def create_app(static_dir: Path, config: AppConfig) -> Flask:
     # Increase limit to avoid failure for video/folder uploads
     flask_app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB
     
-    CORS(flask_app, resources={r"/*": {"origins": config.server.cors_origins}})
+    # ✅ FIX: CORS với specific origins (Wildcard * doesn't support credentials)
+    # Allows both localhost and local IP for development
+    CORS(flask_app, resources={
+        r"/*": {
+            "origins": ["http://localhost:5000", "http://127.0.0.1:5000", "http://localhost:3000"],
+            "supports_credentials": True
+        }
+    })
 
-    # 2. Service Orchestration (Producer-Consumer)
+    # ✅ FIX: Khởi tạo services đúng
+    from app.core.recognizer_service import RecognizerService
     from app.services.recorder import RecorderManager
-    from app.services.recognizer.orchestrator import RecognizerService
-    
-    # Init Consumer
-    recognizer = RecognizerService(config, socketio)
-    recognizer.start()
+    from app.services.registration_service import RegistrationManager
     
     # Init Producer
     recorder = RecorderManager()
+    registration = RegistrationManager()
     
-    # We store them in app.config for the API to access
+    # Init Consumer
+    def _socket_emit(event: str, data):
+        socketio.emit(event, data)
+        
+    def _request_registration(clip_stem, cam_id):
+        from app.api import ws_handlers
+        return ws_handlers.request_face_registration(clip_stem, cam_id)
+
+    recognizer = RecognizerService(
+        socket_callback=_socket_emit, 
+        registration_callback=_request_registration
+    )
+    recognizer.start_worker() # Standardize this to a worker loop
+    
+    # Store in app.config for API routes
     flask_app.config["recorder"] = recorder
     flask_app.config["recognizer"] = recognizer
+    flask_app.config["registration"] = registration
+    
+    # ✅ FIX: Callback cho socket emit dùng trong registration/core
+    flask_app.config["on_socket_emit_cb"] = _socket_emit
 
     # Callback to link Producer -> Consumer
     def on_clip_ready(clip_path: Path, cam_id: str):
@@ -57,17 +80,14 @@ def create_app(static_dir: Path, config: AppConfig) -> Flask:
 
     # 3. Protocol & Routing Registration
     _register_blueprints(flask_app)
-    
-    from app.api.routes import setup_api_callbacks
-    setup_api_callbacks(flask_app)
-    
     _register_ui_routes(flask_app, static_dir)
     
     # 4. Initialize SocketIO with chosen async mode
     socketio.init_app(
         flask_app, 
-        cors_allowed_origins=config.server.cors_origins, 
-        async_mode=config.server.socket_async_mode
+        cors_allowed_origins=["http://localhost:5000", "http://127.0.0.1:5000", "http://localhost:3000"], 
+        async_mode=config.server.socket_async_mode,
+        manage_session=False # Often better for pure API usage
     )
     
     # Register handlers after init

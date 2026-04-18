@@ -555,7 +555,16 @@ class RecorderManager:
         cam_id = str(cam_id).zfill(2)
         with self._lock:
             worker = self._workers.get(cam_id)
-        return worker.get_snapshot() if worker else None
+        
+        if not worker:
+            logger.warning(f"No worker found for cam_id: {cam_id}")
+            return None
+        
+        snapshot = worker.get_snapshot()
+        if not snapshot:
+            logger.debug(f"Worker {cam_id} returned no snapshot")
+        
+        return snapshot
 
     # ── Status ──────────────────────────────────────────────────────────────
     def status(self) -> dict:

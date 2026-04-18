@@ -3,17 +3,16 @@
 from __future__ import annotations
 import logging
 from pathlib import Path
-from flask import Blueprint, Response, jsonify, request, current_app
+from flask import Blueprint, Response, jsonify, request, current_app, Flask
 from werkzeug.utils import secure_filename
 
 import app as _app_module
 from app.services.recorder import RecorderManager
-from app.services.analyzer import Analyzer
 from app.core.recognizer_service import RecognizerService
+from app.services.registration_service import RegistrationManager
 from app.utils.file_handler import StorageManager
 from app.utils.stream_probe import StreamProber
 from app.utils.file_handler import sort_multicam_clips
-from app.services.registration_service import RegistrationManager
 
 logger = logging.getLogger("[API]")
 
@@ -27,10 +26,11 @@ def get_recorder() -> RecorderManager:
 def get_pose() -> RecognizerService:
     return current_app.config["recognizer"]
 
-_analyzer = Analyzer()
+def get_registration() -> RegistrationManager:
+    return current_app.config["registration"]
+
 _storage = StorageManager()
 _prober = StreamProber()
-_registration = RegistrationManager()
 
 # --- Internal Helpers ---
 def _body_json() -> dict:
@@ -228,7 +228,7 @@ def stop_pose():
 
 @api_bp.route("/pose/status", methods=["GET"])
 def pose_status():
-    status = _json_safe(get_pose().get_status())
+    status = _json_safe(get_pose().status())
     lamp_state = status.get("lamp_state") or {
         "cam01": "IDLE", "cam02": "IDLE", "cam03": "IDLE", "cam04": "IDLE",
     }
@@ -341,7 +341,7 @@ def workspace_stop():
 
 @api_bp.route("/registration/next_id", methods=["GET"])
 def get_next_registration_id():
-    next_id = _registration.get_next_id()
+    next_id = get_registration().get_next_id()
     return jsonify({"next_id": next_id})
 
 @api_bp.route("/registration/start", methods=["POST"])
@@ -351,7 +351,7 @@ def start_registration():
     rtsp_url = body.get("rtsp_url")
     user_name = body.get("name")
     user_age = body.get("age", "??")
-    person_id = body.get("person_id") or _registration.get_next_id()
+    person_id = body.get("person_id") or get_registration().get_next_id()
 
     if not user_name:
         return _error("Name is required", 400)
@@ -363,16 +363,17 @@ def start_registration():
 
     def on_progress(data):
         from app.api.ws_handlers import emit_metric_log
-        # Standard socket notify
-        current_app.config["on_socket_emit_cb"]("registration_progress", data)
+        from app import socketio
+        socketio.emit("registration_progress", data)
         emit_metric_log(cam="REG", event=data.get("message", "registration_progress"))
 
     def on_done(data):
-        current_app.config["on_socket_emit_cb"]("registration_done", data)
+        from app import socketio
+        socketio.emit("registration_done", data)
         if data.get("status") == "success":
             get_pose().refresh_face_database()
 
-    session_id = _registration.start_session(
+    session_id = get_registration().start_session(
         source=camera_source,
         user_name=user_name,
         user_age=user_age,
@@ -389,12 +390,12 @@ def stop_registration():
     session_id = body.get("session_id")
     if not session_id:
         return _error("session_id is required", 400)
-    _registration.stop_session(session_id)
+    get_registration().stop_session(session_id)
     return _ok(message="Stopped")
 
 @api_bp.route("/registration/snapshot/<session_id>", methods=["GET"])
 def registration_snapshot(session_id: str):
-    jpeg = _registration.get_snapshot(session_id)
+    jpeg = get_registration().get_snapshot(session_id)
     if jpeg is None:
         return Response(status=204)
 
@@ -413,13 +414,3 @@ def serve_video(filepath):
     data_dir = _app_module.BASE_DIR / "data"
     from flask import send_from_directory
     return send_from_directory(str(data_dir), filepath)
-
-# --- Helper for direct socket notify ---
-def _on_socket_emit(event, data):
-    from app import socketio
-    socketio.emit(event, data)
-
-# Link callback in create_app for registration
-# Callback setup moved to factory or handled via direct imports
-def setup_api_callbacks(app: Flask):
-    app.config["on_socket_emit_cb"] = _on_socket_emit

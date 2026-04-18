@@ -1,11 +1,10 @@
 from __future__ import annotations
-
 import logging
 import threading
 import time
-import math
-from dataclasses import dataclass
+import queue
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Callable
 from collections import defaultdict, deque
 
@@ -31,13 +30,11 @@ KP_CONF_MIN = float(_PHASE3_CFG.get("keypoint_conf_min", 0.30))
 WINDOW_SIZE = int(_PHASE3_CFG.get("window_size", 30))
 PROGRESS_EVERY = int(_PHASE3_CFG.get("progress_every", 10))
 
-from app.core.recognizer_utils import (
-    TrackState,
-    TrackedDetection,
-    SequentialTracker,
-    PoseTemporalSmoothing,
-    ADLTemporalSmoothing,
-)
+@dataclass
+class Job:
+    cam_id: str
+    clip_path: Path
+    created_at: float
 
 class RecognizerService:
     """Core logic layer for Pose & ADL recognition. Decoupled from API/SocketIO."""
@@ -49,145 +46,160 @@ class RecognizerService:
         self.socket_callback = socket_callback
         self.registration_callback = registration_callback
         
+        # Producer-Consumer queue
+        self._queue = queue.Queue(maxsize=100)
+        
         self._state: Dict[str, Any] = {
             "running": False,
-            "current_clip": "",
-            "active_camera": "",
-            "clips_total": 0,
-            "clips_done": 0,
-            "progress_pct": 0,
+            "mode": "idle",
+            "current_clip": None,
+            "active_camera": None,
+            "current_frame": 0,
+            "total_frames": 0,
+            "fps": 0,
+            "conf": 0,
+            "adl": "unknown",
             "lamp_state": {cam: "IDLE" for cam in MULTICAM_CAMERA_ORDER},
-            "clip_queue": [],
+            "pending_results": [],
             "error": None,
         }
         self._pending_results: Dict[str, Dict[str, Any]] = {}
 
-    def start(self, clips: List[Path], output_dir: Path, model_path: Path, config_path: Path, save_overlay: bool = True):
-        if self.is_running(): return
-        
-        ordered_clips = sort_multicam_clips(clips)
+    def start_worker(self):
+        """Starts the background consumer worker thread."""
+        if self._thread and self._thread.is_alive():
+            return
         self._stop_evt.clear()
-        
-        with self._lock:
-            self._state.update({
-                "running": True,
-                "clips_total": len(ordered_clips),
-                "clips_done": 0,
-                "progress_pct": 0,
-                "lamp_state": {cam: "IDLE" for cam in MULTICAM_CAMERA_ORDER},
-                "clip_queue": self._build_queue_info(ordered_clips),
-                "error": None
-            })
-
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(ordered_clips, output_dir, model_path, save_overlay),
-            daemon=True,
-            name="core-recognizer"
-        )
+        self._thread = threading.Thread(target=self._worker_loop, name="CoreRecognizerWorker", daemon=True)
         self._thread.start()
+        self._update_state(running=True)
+        logger.info("Core Recognizer Worker started.")
 
     def stop(self):
         self._stop_evt.set()
+        if self._thread:
+            self._thread.join(timeout=5.0)
+        self._update_state(running=False)
 
-    def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+    def enqueue_clip(self, cam_id: str, clip_path: Path):
+        """Public API to enqueue a saved clip for analysis."""
+        job = Job(cam_id=cam_id, clip_path=clip_path, created_at=time.time())
+        try:
+            self._queue.put_nowait(job)
+            logger.info(f"Enqueued: {clip_path.name} from {cam_id}")
+        except queue.Full:
+            logger.warning(f"Queue full! Dropped {clip_path.name}")
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
-            return {k: v for k, v in self._state.items() if not k.startswith("snapshot_")}
+            # Flatten pending results for the UI
+            res = {k: v for k, v in self._state.items() if not k.startswith("snapshot_")}
+            res["pending_results"] = list(self._pending_results.values())
+            return res
 
     def get_snapshot(self, view: str) -> Optional[bytes]:
         with self._lock:
             return self._state.get(f"snapshot_{view}")
 
-    def pending_results(self) -> Dict[str, Dict[str, Any]]:
+    def pending_results(self) -> List[dict]:
         with self._lock:
-            return dict(self._pending_results)
+            return list(self._pending_results.values())
 
     def save_pending_result(self, clip_stem: str) -> Dict[str, Any]:
         with self._lock:
-            if clip_stem not in self._pending_results:
-                return {"error": "No pending result"}
-            result = self._pending_results[clip_stem]
-            result["saved"] = True
-            return {"ok": True, "clip_stem": clip_stem}
+            if clip_stem in self._pending_results:
+                item = self._pending_results.pop(clip_stem)
+                item["saved"] = True
+                return {"ok": True, "clip_stem": clip_stem}
+            return {"error": "Result not found"}
 
     def refresh_face_database(self):
-        """Reload the face embeddings from disk."""
-        logger.info("Face database refresh requested (not implemented in this engine yet)")
-        pass
+        logger.info("Face database refresh requested.")
+        # Re-load models if needed
 
     def _update_state(self, **kwargs):
         with self._lock:
             self._state.update(kwargs)
 
-    def _build_queue_info(self, clips: List[Path]):
-        return [{"clip_stem": c.stem, "cam_id": extract_multicam_camera_id(c) or "unknown"} for c in clips]
-
     def _emit(self, event: str, data: Any):
         if self.socket_callback:
             self.socket_callback(event, data)
 
-    def _run(self, clips: List[Path], output_dir: Path, model_path: Path, save_overlay: bool):
-        try:
-            from ultralytics import YOLO
-            model = YOLO(str(model_path))
-            adl_model = None # Loaded if needed
-        except Exception as e:
-            self._update_state(running=False, error=str(e))
-            self._emit("error", {"message": f"Initialization failed: {e}"})
-            return
+    def _worker_loop(self):
+        from ultralytics import YOLO
+        # Pre-load model
+        model_path = Path("models/product/yolov8n-pose.pt") # Default
+        model = YOLO(str(model_path))
+        adl_model = None # ADLModelWrapper(..) can be loaded here
 
-        clips_done = 0
-        processed_clips = []
-        
-        for clip in clips:
-            if self._stop_evt.is_set(): break
-            
-            cam_id = extract_multicam_camera_id(clip) or ""
-            lamp_state = dict(self.status()["lamp_state"])
-            lamp_state[cam_id] = "ACTIVE"
-            self._update_state(current_clip=clip.name, active_camera=cam_id, lamp_state=lamp_state)
-            self._emit("pose_lamp_state", self.status())
-
-            # Face registration hook
-            if cam_id == "cam01" and self.registration_callback:
-                self.registration_callback(clip.stem, cam_id)
-
+        while not self._stop_evt.is_set():
             try:
-                # Actual clip processing logic
+                job: Job = self._queue.get(timeout=1.0)
+                clip_stem = job.clip_path.stem
+                cam_id = job.cam_id
+                
+                self._update_state(mode="processing", current_clip=clip_stem, active_camera=cam_id)
+                lamp_state = dict(self.status()["lamp_state"])
+                lamp_state[cam_id] = "ACTIVE"
+                self._update_state(lamp_state=lamp_state)
+                
+                self._emit("pose_lamp_state", {cam_id: "ACTIVE"})
+
+                # Registration hook for specific cams if needed
+                if cam_id == "cam01" and self.registration_callback:
+                    self.registration_callback(clip_stem, cam_id)
+
+                def _progress_cb(p_data):
+                    # p_data: {frame_id, total_frames, adl, conf, original, processed}
+                    self._update_state(
+                        current_frame=p_data["frame_id"],
+                        total_frames=p_data["total_frames"],
+                        adl=p_data["adl"],
+                        conf=p_data["conf"],
+                        snapshot_original=self._encode_jpeg(p_data["original"]),
+                        snapshot_processed=self._encode_jpeg(p_data["processed"])
+                    )
+                    
+                    # Also use emitters if available in some scope
+                    from app.api.ws_handlers import emit_pose_progress, emit_metric_log
+                    emit_pose_progress(
+                        cam_id=cam_id,
+                        clip_stem=clip_stem,
+                        frame_id=p_data["frame_id"],
+                        total_frames=p_data["total_frames"],
+                        fps=15.0,
+                        conf=p_data["conf"],
+                        adl=p_data["adl"],
+                        pct=int(p_data["frame_id"] * 100 / max(p_data["total_frames"],1))
+                    )
+                    emit_metric_log(cam=cam_id, fps=15.0, frame=p_data["frame_id"], conf=p_data["conf"], adl=p_data["adl"])
+
                 from app.core.engines.phase3 import run_phase3
-                run_phase3(model, adl_model, clip, output_dir, _PHASE3_CFG, save_overlay)
-                processed_clips.append(clip)
-                
-                # Global ID Merger hook
-                merger = CrossCameraIDMerger(output_dir, processed_clips)
-                merger.merge()
-                
+                out_dir = Path("data/output_pose")
+                result = run_phase3(model, adl_model, job.clip_path, out_dir, _PHASE3_CFG, progress_callback=_progress_cb)
+
                 # Stage result
                 with self._lock:
-                    self._pending_results[clip.stem] = {
-                        "clip_stem": clip.stem,
-                        "temp_dir": str(output_dir / clip.stem),
+                    self._pending_results[clip_stem] = {
+                        "clip_stem": clip_stem,
+                        "cam_id": cam_id,
+                        "results": result,
+                        "timestamp": time.time(),
                         "saved": False
                     }
-            except Exception as e:
-                logger.exception(f"Error processing {clip.stem}: {e}")
-                lamp_state[cam_id] = "ALERT"
-                self._update_state(lamp_state=lamp_state)
-            
-            clips_done += 1
-            lamp_state = dict(self.status()["lamp_state"])
-            if lamp_state.get(cam_id) != "ALERT":
-                lamp_state[cam_id] = "DONE"
                 
-            self._update_state(
-                clips_done=clips_done,
-                progress_pct=int((clips_done / len(clips)) * 100),
-                lamp_state=lamp_state
-            )
-            self._emit("pose_lamp_state", self.status())
+                lamp_state[cam_id] = "IDLE"
+                self._update_state(mode="idle", current_clip=None, active_camera=None, lamp_state=lamp_state)
+                self._emit("pose_complete", {"clip": clip_stem, "cam": cam_id})
+                self._queue.task_done()
 
-        self._update_state(running=False)
-        self._emit("pose_complete", self.status())
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.exception(f"Worker iteration failure: {e}")
+                self._queue.task_done()
+
+    def _encode_jpeg(self, frame) -> Optional[bytes]:
+        if frame is None: return None
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes()

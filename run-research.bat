@@ -1,6 +1,7 @@
 @echo off
 title CPose - Research Server
-echo Starting Research FastAPI Server...
+echo Starting CPose Research Benchmark Mode...
+rem Usage: run-research.bat --model <path> --source <path> [--gt <ground_truth.json>]
 set PYTHONPATH=%CD%
-.venv\Scripts\activate && uvicorn research.main:app --host 0.0.0.0 --port 8000 --reload
+.venv\Scripts\python.exe research\benchmark_cli.py %*
 pause

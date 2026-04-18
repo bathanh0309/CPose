@@ -122,17 +122,17 @@ def request_face_registration(clip_stem: str, cam_id: str, timeout: float | None
 
 
 @socketio.on("connect")
-def _handle_connect():
+def handle_connect():
     logger.info("UI connected via SocketIO")
 
 
 @socketio.on("disconnect")
-def _handle_disconnect():
+def handle_disconnect():
     logger.info("UI disconnected from SocketIO")
 
 
 @socketio.on("register_face_done")
-def _handle_register_face_done(data):
+def handle_register_face_done(data):
     clip_stem = str((data or {}).get("clip_stem", ""))
     if not clip_stem:
         logger.warning("register_face_done missing clip_stem")

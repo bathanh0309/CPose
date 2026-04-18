@@ -15,10 +15,10 @@ STATIC_DIR = BASE_DIR / "static"
 
 # ==== NEW: model & config paths / defaults ====
 # Paths to model weights used by Phase 1/2/3 and pose config file.
-# Adjust filenames if your workspace stores them under different names.
-MODEL_PHASE1 = MODELS_DIR / "yolov8n.pt"
-MODEL_PHASE2 = MODELS_DIR / "yolo11n.pt"
-MODEL_PHASE3 = MODELS_DIR / "yolo11n-pose.pt"
+# Defaults point at the checked-in `models/product` weights.
+MODEL_PHASE1 = MODELS_DIR / "product" / "yolov8n.pt"
+MODEL_PHASE2 = MODELS_DIR / "product" / "yolo11n.pt"
+MODEL_PHASE3 = MODELS_DIR / "product" / "yolov8n-pose.pt"
 
 # Pose config: prefer a dedicated pose config in data/config, fall back to unified config elsewhere.
 POSE_CONFIG_FILE = CONFIG_DIR / "pose_config.yaml"

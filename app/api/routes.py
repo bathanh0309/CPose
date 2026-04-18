@@ -3,6 +3,7 @@
 from __future__ import annotations
 import logging
 import threading
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from flask import Blueprint, Response, jsonify, request, current_app, Flask, send_file
@@ -66,6 +67,12 @@ def _resolve_multicam_default_dir() -> Path:
     return _app_module.BASE_DIR / "data" / "multicam"
 
 
+def _resolve_runtime_model_path(config_key: str, fallback: Path) -> Path:
+    app_config = current_app.config.get("app_config")
+    raw_value = getattr(getattr(app_config, "models", None), config_key, None)
+    return _resolve_dir(raw_value, fallback) if raw_value else fallback
+
+
 @dataclass
 class WorkspaceState:
     mode: str = "idle"
@@ -112,8 +119,8 @@ _WORKSPACE_LOCK = threading.RLock()
 
 def _build_multicam_queue(clips: list[Path]) -> list[dict]:
     queue: list[dict] = []
-    for clip in clips:
-        cam_id = extract_multicam_camera_id(clip) or "unknown"
+    for index, clip in enumerate(clips, start=1):
+        cam_id = extract_multicam_camera_id(clip) or str(index)
         try:
             rel_path = clip.relative_to(_app_module.DATA_DIR).as_posix()
         except ValueError:
@@ -124,25 +131,29 @@ def _build_multicam_queue(clips: list[Path]) -> list[dict]:
                 "cam": cam_id,
                 "path": str(clip),
                 "url": f"/api/video/{rel_path}",
-                "status": "ready",
+                "status": "loaded",
                 "progress": 0,
             }
         )
     return queue
 
 
-def _stage_multicam_dir(video_dir: Path) -> tuple[list[Path], list[dict]]:
-    if not video_dir.exists():
-        raise FileNotFoundError(f"Directory not found: {video_dir}")
-
-    clips = sort_multicam_clips(video_dir.glob("*.mp4"))
+def _stage_multicam_files(clips: list[Path], *, mode: str = "multicam_folder") -> tuple[list[Path], list[dict]]:
+    clips = sort_multicam_clips(clips)
     if not clips:
         raise ValueError("No .mp4 files found in the selected folder")
 
     queue = _build_multicam_queue(clips)
     with _WORKSPACE_LOCK:
-        _WORKSPACE.load(clips, queue, mode="multicam_folder")
+        _WORKSPACE.load(clips, queue, mode=mode)
     return clips, queue
+
+
+def _stage_multicam_dir(video_dir: Path) -> tuple[list[Path], list[dict]]:
+    if not video_dir.exists():
+        raise FileNotFoundError(f"Directory not found: {video_dir}")
+
+    return _stage_multicam_files(list(video_dir.glob("*.mp4")))
 
 
 def _ensure_recognizer_worker() -> RecognizerService:
@@ -188,7 +199,7 @@ def upload_config():
     cameras = _storage.parse_resources(_app_module.RESOURCES_FILE)
 
     from app.api.ws_handlers import emit_event_log, emit_workspace_state
-    emit_event_log(f"Loaded resources.txt ({len(cameras)} cameras)", "CFG")
+    emit_event_log("RTSP resources loaded", "0")
     emit_workspace_state(mode="rtsp", running=False, current_clip=None, current_cam=None, output_dir="raw_videos", queued=0, staged_camera_map=[])
 
     return _ok(message="resources.txt saved", cameras=cameras)
@@ -252,13 +263,13 @@ def start_recording():
         cameras=cameras,
         storage_limit_gb=storage_limit_gb,
         output_dir=_app_module.RAW_VIDEOS_DIR,
-        model_path=_app_module.MODEL_PHASE1,
+        model_path=_resolve_runtime_model_path("detector_model_path", _app_module.MODEL_PHASE1),
         config=body.get("phase1_config", {}),
         on_clip_ready=current_app.config.get("on_clip_ready_cb"),
     )
 
     from app.api.ws_handlers import emit_event_log, emit_rec_status
-    emit_event_log("Recorder started", "SYS")
+    emit_event_log("RTSP started", "0")
     emit_rec_status(is_recording=True)
 
     return _ok(message="Recording started", cameras=len(cameras))
@@ -267,7 +278,7 @@ def start_recording():
 def stop_recording():
     get_recorder().stop()
     from app.api.ws_handlers import emit_event_log, emit_rec_status
-    emit_event_log("Recorder stopped", "SYS")
+    emit_event_log("RTSP stopped", "0")
     emit_rec_status(is_recording=False)
     return _ok(message="Recording stopped")
 
@@ -301,7 +312,7 @@ def start_pose():
                 cameras=selected_cams,
                 storage_limit_gb=float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB)),
                 output_dir=_app_module.RAW_VIDEOS_DIR,
-                model_path=_app_module.MODEL_PHASE1,
+                model_path=_resolve_runtime_model_path("detector_model_path", _app_module.MODEL_PHASE1),
                 on_clip_ready=current_app.config.get("on_clip_ready_cb"),
             )
 
@@ -317,7 +328,7 @@ def start_pose():
             _WORKSPACE.staged_camera_map = []
 
         from app.api.ws_handlers import emit_event_log, emit_workspace_state
-        emit_event_log("Pose pipeline started in RTSP mode", "SYS")
+        emit_event_log("RTSP started", "0")
         emit_workspace_state(mode="rtsp", running=True, current_clip=None, current_cam=None, output_dir="raw_videos", queued=0, staged_camera_map=[])
         return _ok(status="started", mode="rtsp", cameras=len(selected_cams))
 
@@ -354,7 +365,7 @@ def start_pose():
             recognizer.enqueue_clip(cam_id, clip)
 
         from app.api.ws_handlers import emit_event_log, emit_workspace_state
-        emit_event_log(f"Start multicam queue: {len(clips)} clips", "MC")
+        emit_event_log("MC started", "0")
         emit_workspace_state(
             mode="multicam_folder",
             running=True,
@@ -371,12 +382,13 @@ def start_pose():
 
 @api_bp.route("/pose/stop", methods=["POST"])
 def stop_pose():
+    stopped_mode = _WORKSPACE.mode
     get_pose().stop()
     get_recorder().stop()
     with _WORKSPACE_LOCK:
         _WORKSPACE.stop()
     from app.api.ws_handlers import emit_event_log, emit_rec_status, emit_workspace_state
-    emit_event_log("Pose processing stopped", "SYS")
+    emit_event_log("RTSP stopped" if stopped_mode == "rtsp" else "MC stopped", "0")
     emit_rec_status(is_recording=False)
     emit_workspace_state(
         mode=_WORKSPACE.mode,
@@ -468,7 +480,7 @@ def load_multicam_default():
         return _error(str(exc), 400)
 
     from app.api.ws_handlers import emit_event_log, emit_workspace_state
-    emit_event_log(f"Loaded default multicam folder ({len(items)} clips)", "MC")
+    emit_event_log("Folder loaded", "0")
     emit_workspace_state(
         mode="multicam_folder",
         running=False,
@@ -480,6 +492,55 @@ def load_multicam_default():
         staged_camera_map=items,
     )
     return _ok(mode="multicam_folder", clips=items, total=len(items), workspace=_workspace_snapshot())
+
+
+@api_bp.route("/workspace/load_multicam_upload", methods=["POST"])
+def load_multicam_upload():
+    with _WORKSPACE_LOCK:
+        if _WORKSPACE.running or get_recorder().is_running():
+            return _error("Stop the active flow before loading multicam", 409)
+
+    uploads = request.files.getlist("files")
+    if not uploads:
+        return _error("No files provided", 400)
+
+    raw_folder = request.form.get("folder_name") or "multicam_upload"
+    folder_name = secure_filename(raw_folder) or "multicam_upload"
+    upload_root = _app_module.DATA_DIR / "multicam_uploads" / folder_name / datetime.now().strftime("%Y%m%d_%H%M%S")
+    upload_root.mkdir(parents=True, exist_ok=True)
+
+    saved_paths: list[Path] = []
+    for index, upload in enumerate(uploads, start=1):
+        filename = upload.filename or ""
+        if not filename.lower().endswith(".mp4"):
+            continue
+        safe_name = secure_filename(Path(filename).name) or f"clip_{index:03d}.mp4"
+        dest = upload_root / f"{index:03d}_{safe_name}"
+        upload.save(str(dest))
+        saved_paths.append(dest)
+
+    if not saved_paths:
+        return _error("No .mp4 files found in the selected folder", 400)
+
+    try:
+        _, items = _stage_multicam_files(saved_paths)
+    except ValueError as exc:
+        return _error(str(exc), 400)
+
+    from app.api.ws_handlers import emit_event_log, emit_workspace_state
+    emit_event_log("Folder loaded", "0")
+    emit_workspace_state(
+        mode="multicam_folder",
+        running=False,
+        current_clip=None,
+        current_cam=None,
+        output_dir="output_pose",
+        queued=len(items),
+        staged_clips=[item["name"] for item in items],
+        staged_camera_map=items,
+    )
+    return _ok(mode="multicam_folder", folder_name=folder_name, clips=items, total=len(items), workspace=_workspace_snapshot())
+
 
 @api_bp.route("/workspace/start_multicam", methods=["POST"])
 def workspace_start_multicam():
@@ -499,12 +560,11 @@ def workspace_start_multicam():
         _WORKSPACE.output_dir = "output_pose"
 
     recognizer = get_pose()
-    for clip in clips:
-        cam_id = extract_multicam_camera_id(clip) or "unknown"
-        recognizer.enqueue_clip(cam_id, clip)
+    for item in staged_queue:
+        recognizer.enqueue_clip(str(item.get("cam") or "0"), Path(item["path"]))
 
     from app.api.ws_handlers import emit_event_log, emit_workspace_state
-    emit_event_log(f"Start multicam queue: {len(clips)} clips", "MC")
+    emit_event_log("MC started", "0")
     emit_workspace_state(
         mode="multicam_folder",
         running=True,
@@ -519,12 +579,13 @@ def workspace_start_multicam():
 
 @api_bp.route("/workspace/stop", methods=["POST"])
 def workspace_stop():
+    stopped_mode = _WORKSPACE.mode
     get_pose().stop()
     get_recorder().stop()
     with _WORKSPACE_LOCK:
         _WORKSPACE.stop()
     from app.api.ws_handlers import emit_event_log, emit_rec_status, emit_workspace_state
-    emit_event_log("Workspace stopped", "SYS")
+    emit_event_log("RTSP stopped" if stopped_mode == "rtsp" else "MC stopped", "0")
     emit_rec_status(is_recording=False)
     emit_workspace_state(
         mode=_WORKSPACE.mode,
@@ -569,25 +630,33 @@ def start_registration():
     camera_source = "local" if source == "local" else rtsp_url
 
     def on_progress(data):
-        from app.api.ws_handlers import emit_metric_log
         from app import socketio
         socketio.emit("registration_progress", data)
-        emit_metric_log(cam="REG", event=data.get("message", "registration_progress"))
 
     def on_done(data):
+        from app.api.ws_handlers import emit_event_log
         from app import socketio
         socketio.emit("registration_done", data)
         if data.get("status") == "success":
+            emit_event_log("Registration done", "REG")
             get_pose().refresh_face_database()
+        else:
+            emit_event_log("Registration error", "REG")
 
-    session_id = get_registration().start_session(
-        source=camera_source,
-        user_name=user_name,
-        user_age=user_age,
-        person_id=person_id,
-        on_progress=on_progress,
-        on_done=on_done,
-    )
+    try:
+        session_id = get_registration().start_session(
+            source=camera_source,
+            user_name=user_name,
+            user_age=user_age,
+            person_id=person_id,
+            on_progress=on_progress,
+            on_done=on_done,
+        )
+    except Exception as exc:
+        return _error(f"Failed to start registration: {exc}", 500)
+
+    from app.api.ws_handlers import emit_event_log
+    emit_event_log("Registration started", "REG")
 
     return _ok(session_id=session_id, status="started", user_id=person_id, person_id=person_id)
 
@@ -598,6 +667,8 @@ def stop_registration():
     if not session_id:
         return _error("session_id is required", 400)
     get_registration().stop_session(session_id)
+    from app.api.ws_handlers import emit_event_log
+    emit_event_log("Registration stopped", "REG")
     return _ok(message="Stopped")
 
 @api_bp.route("/registration/snapshot/<session_id>", methods=["GET"])

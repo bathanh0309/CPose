@@ -17,32 +17,25 @@ _STORAGE_CFG = get_runtime_section("storage")
 PRUNE_TARGET_RATIO = float(_STORAGE_CFG.get("prune_target_ratio", 0.8))
 MULTICAM_CAMERA_ORDER = ("cam01", "cam02", "cam03", "cam04")
 
-_MULTICAM_SORT_FORMATS = (
-    "%Y-%m-%d_%H-%M-%S",
-    "%Y-%m-%d-%H-%M-%S",
-    "%d-%m-%Y_%H-%M-%S",
-    "%d-%m-%Y-%H-%M-%S",
-    "%S-%M-%H-%d-%m-%Y",
+_MULTICAM_TIMESTAMP_PATTERNS = (
+    (re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})(?P<sep>[_-])(?P<time>\d{2}-\d{2}-\d{2})"), "%Y-%m-%d_%H-%M-%S"),
+    (re.compile(r"(?P<date>\d{2}-\d{2}-\d{4})(?P<sep>[_-])(?P<time>\d{2}-\d{2}-\d{2})"), "%d-%m-%Y_%H-%M-%S"),
+    (re.compile(r"(?P<date>\d{8})(?P<sep>[_-])(?P<time>\d{6})"), "%Y%m%d_%H%M%S"),
 )
 
 
 def _parse_multicam_timestamp(item: Path | str) -> tuple[datetime, int, str] | None:
     """Parse a multicam clip stem into a sortable timestamp."""
     name = Path(item).stem
-    match = re.match(r"^(cam\d+)[_-](.+)$", name, flags=re.IGNORECASE)
-    if not match:
-        return None
-
-    cam_token = match.group(1).lower()
-    cam_digits = "".join(ch for ch in cam_token if ch.isdigit())
-    if not cam_digits:
-        return None
-
-    tail = match.group(2)
-    for fmt in _MULTICAM_SORT_FORMATS:
+    for pattern, fmt in _MULTICAM_TIMESTAMP_PATTERNS:
+        match = pattern.search(name)
+        if not match:
+            continue
+        sep = match.group("sep")
+        text = f"{match.group('date')}{sep}{match.group('time')}"
         try:
-            clip_dt = datetime.strptime(tail, fmt)
-            return clip_dt, int(cam_digits), name.lower()
+            clip_dt = datetime.strptime(text, fmt if sep == "_" else fmt.replace("_", "-"))
+            return clip_dt, 0, name.lower()
         except ValueError:
             continue
     return None
@@ -51,21 +44,18 @@ def _parse_multicam_timestamp(item: Path | str) -> tuple[datetime, int, str] | N
 def extract_multicam_camera_id(item: Path | str) -> str | None:
     """Return normalized camera id like cam01 when present."""
     name = Path(item).stem
-    # Support both cam1-... and cam1_... naming styles.
-    prefix = name.lower()
-    for sep in ("-", "_"):
-        prefix = prefix.split(sep, 1)[0]
-    if not prefix.startswith("cam"):
+    match = re.search(r"cam0*(\d+)", name, flags=re.IGNORECASE)
+    if not match:
         return None
 
-    cam_digits = "".join(ch for ch in prefix if ch.isdigit())
+    cam_digits = match.group(1)
     if not cam_digits:
         return None
     return f"cam{int(cam_digits):02d}"
 
 
 def multicam_sort_key(item: Path | str) -> tuple[datetime, int, str]:
-    """Sort key that prefers timestamp, then camera index, then name."""
+    """Sort key that prefers timestamp, then file name for deterministic order."""
     parsed = _parse_multicam_timestamp(item)
     if parsed is not None:
         return parsed
@@ -75,11 +65,11 @@ def multicam_sort_key(item: Path | str) -> tuple[datetime, int, str]:
         fallback_dt = datetime.fromtimestamp(path.stat().st_mtime)
     except OSError:
         fallback_dt = datetime.min
-    return fallback_dt, 9999, path.stem.lower()
+    return fallback_dt, 0, path.stem.lower()
 
 
 def sort_multicam_clips(clips: Iterable[Path]) -> list[Path]:
-    """Sort clips strictly by timestamp, then camera index, then file name."""
+    """Sort clips strictly by timestamp in the clip name, then file name."""
     clip_list = list(clips)
     return sorted(clip_list, key=multicam_sort_key)
 

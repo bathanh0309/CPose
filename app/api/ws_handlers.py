@@ -1,6 +1,8 @@
 from __future__ import annotations
 import logging
 import threading
+import re
+from pathlib import Path
 from typing import Any
 from app import socketio
 
@@ -12,7 +14,7 @@ def emit_event_log(event: str, cam: str = "--"):
     payload = {
         "time": _now_time_string(),
         "event": event,
-        "cam": cam,
+        "cam": _short_cam(cam),
     }
     socketio.emit("event_log", payload)
 
@@ -28,7 +30,7 @@ def emit_metric_log(
 ):
     payload = {
         "time": _now_time_string(),
-        "cam": cam,
+        "cam": _short_cam(cam),
         "fps": fps if fps is not None else "--",
         "frame": frame if frame is not None else "--",
         "conf": conf if conf is not None else "--",
@@ -53,7 +55,11 @@ def emit_workspace_state(
         "time": _now_time_string(),
         "mode": mode,
         "running": running,
-        "active_flow": mode if running and mode in {"rtsp", "multicam_folder"} else None,
+        "active_flow": (
+            "rtsp"
+            if running and mode == "rtsp"
+            else ("multicam" if running and mode in {"multicam_folder", "multicam"} else None)
+        ),
         "current_clip": current_clip,
         "current_cam": current_cam,
         "output_dir": output_dir,
@@ -89,15 +95,39 @@ def emit_rec_status(*, is_recording: bool, cam_id: str | None = None):
     )
 
 
-def emit_clip_saved(*, filename: str, cam_id: str, path: str, preview_url: str | None = None):
+def emit_clip_saved(
+    *,
+    clip_id: str | None = None,
+    clip_name: str | None = None,
+    cam_id: str | None = None,
+    raw_url: str | None = None,
+    processed_url: str | None = None,
+    filename: str | None = None,
+    path: str | None = None,
+    preview_url: str | None = None,
+):
+    resolved_clip_name = clip_name or filename
+    if not resolved_clip_name and path:
+        resolved_clip_name = Path(path).name
+    if not resolved_clip_name:
+        resolved_clip_name = clip_id or "clip"
+    resolved_clip_id = clip_id or Path(resolved_clip_name).stem
+    resolved_raw_url = raw_url or preview_url
     socketio.emit(
         "clip_saved",
         {
-            "filename": filename,
-            "cam_id": cam_id,
+            "clip_id": resolved_clip_id,
+            "clip_name": resolved_clip_name,
+            "cam": _short_cam(cam_id),
+            "raw_url": resolved_raw_url,
+            "processed_url": processed_url,
+            "status": "done" if processed_url else "loaded",
+            # Legacy aliases kept so older handlers keep working.
+            "filename": resolved_clip_name,
+            "cam_id": _short_cam(cam_id),
             "path": path,
             "rel_path": path,
-            "preview_url": preview_url,
+            "preview_url": resolved_raw_url,
         },
     )
 
@@ -179,3 +209,25 @@ def handle_register_face_done(data):
 def _now_time_string() -> str:
     import datetime as _dt
     return _dt.datetime.now().strftime("%H:%M:%S")
+
+
+def _short_cam(cam: str | None) -> str:
+    if cam is None:
+        return "-"
+    raw = str(cam).strip().lower()
+    if not raw:
+        return "-"
+    if raw in {"sys", "mc", "system"}:
+        return "0"
+    if raw in {"reg", "registration"}:
+        return "REG"
+
+    cam_match = re.search(r"cam0*(\d+)", raw)
+    if cam_match:
+        return str(int(cam_match.group(1)))
+
+    direct_match = re.fullmatch(r"0*(\d+)", raw)
+    if direct_match:
+        return str(int(direct_match.group(1)))
+
+    return raw

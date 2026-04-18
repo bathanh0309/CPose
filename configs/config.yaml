@@ -14,12 +14,16 @@ logging:
   to_file: false
   file_path: "logs/cpose.log"
 
+models:
+  detector_model_path: models/product/yolov8n.pt
+  pose_model_path: models/product/yolov8n-pose.pt
+
 phase1:
   model: models/product/yolov8n.pt
   conf_threshold: 0.35
   pre_buffer_sec: 3
   post_buffer_sec: 3
-  inference_every: 5
+  inference_every: 3
   min_clip_duration: 2.0
   storage_limit_gb: 10
   person_conf_threshold: 0.65
@@ -33,7 +37,7 @@ phase1:
   reconnect_delay_seconds: 5
   jpeg_quality: 75
   person_class_id: 0
-  snapshot_fps: 6.0
+  snapshot_fps: 10.0
   snapshot_active_ttl_s: 10.0
   rtsp_transport: tcp
   ffmpeg_capture_options: ""
@@ -42,11 +46,11 @@ phase2:
   model: models/product/yolo11n.pt
   person_class_id: 0
   conf_threshold: 0.50
-  progress_every: 10
+  progress_every: 3
   frame_skip: 15
 
 phase3:
-  model: models/product/yolo11n-pose.pt
+  model: models/product/yolov8n-pose.pt
   person_class_id: 0
   conf_threshold: 0.45
   keypoint_conf_min: 0.30

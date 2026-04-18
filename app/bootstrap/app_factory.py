@@ -1,5 +1,6 @@
 import os
 import logging
+import os
 from pathlib import Path
 from flask import Flask, send_from_directory
 from flask_cors import CORS
@@ -53,14 +54,13 @@ def create_app(static_dir: Path, config: AppConfig) -> Flask:
     # Init Consumer
     def _socket_emit(event: str, data):
         socketio.emit(event, data)
-        
-    def _request_registration(clip_stem, cam_id):
-        from app.api import ws_handlers
-        return ws_handlers.request_face_registration(clip_stem, cam_id)
 
     recognizer = RecognizerService(
-        socket_callback=_socket_emit, 
-        registration_callback=_request_registration
+        socket_callback=_socket_emit,
+        # Manual registration is handled by the dedicated registration route.
+        # Do not let multicam block on an interactive registration callback.
+        registration_callback=None,
+        pose_model_path=Path(config.models.pose_model_path),
     )
     recognizer.start_worker() # Standardize this to a worker loop
     
@@ -68,6 +68,7 @@ def create_app(static_dir: Path, config: AppConfig) -> Flask:
     flask_app.config["recorder"] = recorder
     flask_app.config["recognizer"] = recognizer
     flask_app.config["registration"] = registration
+    flask_app.config["app_config"] = config
     
     # ✅ FIX: Callback cho socket emit dùng trong registration/core
     flask_app.config["on_socket_emit_cb"] = _socket_emit

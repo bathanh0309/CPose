@@ -52,6 +52,10 @@ class Phase3Config(BaseModel):
     adl_classes: List[str]
     thresholds: ADLThresholds
 
+class ModelsConfig(BaseModel):
+    detector_model_path: str = "models/product/yolov8n.pt"
+    pose_model_path: str = "models/product/yolov8n-pose.pt"
+
 class PoseUtilsConfig(BaseModel):
     knee_bend_angle: float
     shoulder_raise: float
@@ -163,6 +167,7 @@ class AppConfig(BaseModel):
     project: ProjectConfig
     server: ServerConfig = Field(default_factory=ServerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
     phase1: Phase1Config
     phase2: Phase2Config
     phase3: Phase3Config

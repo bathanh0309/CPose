@@ -372,7 +372,6 @@ class CameraWorker(threading.Thread):
             self._pre_buffer.clear()
             self.rec_state = RecState.RECORDING
             logger.info("cam-%s: START recording -> %s", self.cam_id, self._clip_path.name)
-            self._log(f"recording started: {self._clip_path.name}")
             self._broadcast_status("recording")
             
         elif cmd == "STOP":
@@ -397,13 +396,21 @@ class CameraWorker(threading.Thread):
                         self.clip_count += 1
                         logger.info("cam-%s: clip saved %s (%.1f MB)", self.cam_id, path.name, size_mb)
                         from app.api.ws_handlers import emit_clip_saved, emit_event_log
+                        try:
+                            data_root = Path(__file__).resolve().parents[2] / "data"
+                            rel_path = path.relative_to(data_root).as_posix()
+                            raw_url = f"/api/video/{rel_path}"
+                        except Exception:
+                            raw_url = f"/api/video/{path.name}"
                         emit_clip_saved(
-                            filename=path.name,
+                            clip_id=path.stem,
+                            clip_name=path.name,
                             cam_id=self.cam_id,
+                            raw_url=raw_url,
+                            processed_url=None,
                             path=str(path),
-                            preview_url=f"/api/video/raw_videos/{path.name}"
                         )
-                        emit_event_log(f"Short clip saved: {path.name}", self.cam_id)
+                        emit_event_log("Clip queued", self.cam_id)
                         
                         if self._on_clip_ready:
                             self._on_clip_ready(path, self.cam_id)

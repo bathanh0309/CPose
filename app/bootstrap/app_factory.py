@@ -27,7 +27,9 @@ def create_app(static_dir: Path, config: AppConfig) -> Flask:
     )
     
     flask_app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "cpose-dev-secret")
-    flask_app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+    
+    # Increase limit to avoid failure for video/folder uploads
+    flask_app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB
     
     CORS(flask_app, resources={r"/*": {"origins": config.server.cors_origins}})
 
@@ -55,6 +57,10 @@ def create_app(static_dir: Path, config: AppConfig) -> Flask:
 
     # 3. Protocol & Routing Registration
     _register_blueprints(flask_app)
+    
+    from app.api.routes import setup_api_callbacks
+    setup_api_callbacks(flask_app)
+    
     _register_ui_routes(flask_app, static_dir)
     
     # 4. Initialize SocketIO with chosen async mode

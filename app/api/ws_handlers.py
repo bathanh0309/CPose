@@ -1,69 +1,107 @@
-"""WebSocket handlers and helper for requesting face registration from UI.
-
-This module uses Flask-SocketIO (already configured in `app.__init__`).
-Recognizer threads can call `request_face_registration(clip_stem, cam_id)`
-to emit a `register_face_request` to the frontend and block until the
-frontend emits back `register_face_done` with payload.
-"""
-
 from __future__ import annotations
-
 import logging
 import threading
 from typing import Any
-
 from app import socketio
 
 logger = logging.getLogger("[WS]")
-
-import asyncio
-from app.utils.serialize import track_to_json
-from cpose.pipeline.multicam_online_system import MultiCamOnlineSystem
-
-# pending map: clip_stem -> {event: threading.Event, payload: Any}
 _pending: dict[str, dict[str, Any]] = {}
 
-def push_camera_update(tracks: list, timestamp: float | None = None):
-    # Existing helper
-    pass
 
-async def camera_stream_ws(ws, system: MultiCamOnlineSystem):
-    """Loop to push snapshot updates to the UI."""
-    while True:
-        ts, tracks = system.get_current_tracks()
-        payload = {
-            "type": "camera_update",
-            "timestamp": ts,
-            "tracks": [track_to_json(t) for t in tracks],
-        }
-        try:
-            # Note: flask-socketio uses emit, but for pure websocket snippets:
-            # await ws.send_json(payload)
-            socketio.emit("camera_update", payload)
-        except Exception:
-            break
-        await asyncio.sleep(0.1)
-    """Broadcast current track states to all connected UIs."""
-    if timestamp is None:
-        import time
-        timestamp = time.time()
-        
+def emit_event_log(event: str, cam: str = "--"):
     payload = {
-        "type": "camera_update",
-        "timestamp": timestamp,
-        "tracks": [track_to_json(t) for t in tracks],
+        "time": _now_time_string(),
+        "event": event,
+        "cam": cam,
     }
-    try:
-        socketio.emit("camera_update", payload)
-    except Exception as exc:
-        logger.warning("Failed to emit camera_update: %s", exc)
+    socketio.emit("event_log", payload)
+
+
+def emit_metric_log(
+    *,
+    cam: str = "--",
+    fps: float | int | None = None,
+    frame: str | int | None = None,
+    conf: float | None = None,
+    adl: str | None = None,
+    event: str = "runtime",
+):
+    payload = {
+        "time": _now_time_string(),
+        "cam": cam,
+        "fps": fps if fps is not None else "--",
+        "frame": frame if frame is not None else "--",
+        "conf": conf if conf is not None else "--",
+        "adl": adl or "--",
+        "event": event,
+    }
+    socketio.emit("metric_log", payload)
+
+
+def emit_camera_status(cam_id: str, *, fps=None, frame=None, conf=None, status="IDLE"):
+    socketio.emit(
+        "camera_status",
+        {
+            "cam_id": cam_id,
+            "fps": fps,
+            "frame": frame,
+            "conf": conf,
+            "status": status,
+        },
+    )
+
+
+def emit_rec_status(*, is_recording: bool, cam_id: str | None = None):
+    socketio.emit(
+        "rec_status",
+        {
+            "is_recording": is_recording,
+            "cam_id": cam_id,
+        },
+    )
+
+
+def emit_clip_saved(*, filename: str, cam_id: str, path: str, preview_url: str | None = None):
+    socketio.emit(
+        "clip_saved",
+        {
+            "filename": filename,
+            "cam_id": cam_id,
+            "path": path,
+            "preview_url": preview_url,
+        },
+    )
+
+
+def emit_pose_progress(
+    *,
+    cam_id: str,
+    clip_stem: str,
+    frame_id: int,
+    total_frames: int,
+    fps: float | None,
+    conf: float | None,
+    adl: str | None,
+    pct: float | int | None,
+    event: str = "pose_progress",
+):
+    socketio.emit(
+        "pose_progress",
+        {
+            "cam_id": cam_id,
+            "clip": clip_stem,
+            "frame_id": frame_id,
+            "total_frames": total_frames,
+            "fps": fps,
+            "conf": conf,
+            "adl": adl,
+            "pct": pct,
+            "event": event,
+        },
+    )
 
 
 def request_face_registration(clip_stem: str, cam_id: str, timeout: float | None = 300.0) -> dict | None:
-    """Emit a register request and wait for the UI response.
-
-    Returns the payload from the client or None on timeout / disconnect.
-    """
     logger.info("Requesting face registration for %s (%s)", clip_stem, cam_id)
 
     ev = threading.Event()
@@ -80,7 +118,6 @@ def request_face_registration(clip_stem: str, cam_id: str, timeout: float | None
         logger.warning("Registration wait timed out or no response for %s", clip_stem)
         return None
 
-    logger.info("Received registration for %s", clip_stem)
     return entry.get("payload")
 
 
@@ -96,17 +133,9 @@ def _handle_disconnect():
 
 @socketio.on("register_face_done")
 def _handle_register_face_done(data):
-    """Client sends back registration payload.
-
-    Expected data: {"clip_stem": "...", "name": "..", "age":.., "person_id": ".."}
-    """
-    try:
-        clip_stem = str(data.get("clip_stem", ""))
-    except Exception:
-        clip_stem = ""
-
+    clip_stem = str((data or {}).get("clip_stem", ""))
     if not clip_stem:
-        logger.warning("register_face_done missing clip_stem: %s", data)
+        logger.warning("register_face_done missing clip_stem")
         return
 
     entry = _pending.get(clip_stem)
@@ -116,4 +145,8 @@ def _handle_register_face_done(data):
 
     entry["payload"] = data
     entry["event"].set()
-    logger.info("Set pending registration result for %s", clip_stem)
+
+
+def _now_time_string() -> str:
+    import datetime as _dt
+    return _dt.datetime.now().strftime("%H:%M:%S")

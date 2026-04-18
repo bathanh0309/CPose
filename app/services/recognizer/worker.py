@@ -2,6 +2,7 @@ import time
 import logging
 import threading
 import queue
+import cv2
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
@@ -21,7 +22,7 @@ class Job:
 
 class RecognizerConsumer:
     """
-    Consumer: Picks clips from the queue and runs Phase 2/3 Sequential engines.
+    Consumer: Picks clips from the queue and runs Phase 3 Sequential engines.
     """
     def __init__(self, config: AppConfig, socketio_instance):
         self.config = config
@@ -32,7 +33,6 @@ class RecognizerConsumer:
         
         # Load models once
         from ultralytics import YOLO
-        self.p2_model = YOLO(self.config.phase2.model) if hasattr(self.config, 'phase2') else None
         self.p3_model = YOLO(self.config.phase3.model) if hasattr(self.config, 'phase3') else None
         
         # Load ADL model
@@ -44,18 +44,37 @@ class RecognizerConsumer:
             logger.warning(f"Could not load ADL model: {e}")
             self.adl_model = None
 
-        self.status = {
-            "is_running": False,
-            "jobs_pending": 0,
-            "current_job": None,
-            "completed_total": 0
+        self._status = {
+            "running": False,
+            "mode": "idle",
+            "current_clip": None,
+            "current_cam": None,
+            "current_frame": 0,
+            "total_frames": 0,
+            "fps": 0,
+            "conf": 0,
+            "adl": "unknown",
+            "lamp_state": {
+                "cam01": "IDLE", "cam02": "IDLE", "cam03": "IDLE", "cam04": "IDLE"
+            },
+            "pending_results": []
         }
-        self._latest_snap: Optional[bytes] = None
+        
+        self._latest_original_jpeg: Optional[bytes] = None
+        self._latest_processed_jpeg: Optional[bytes] = None
         self._snap_lock = threading.Lock()
+        
+        # In-memory storage for results waiting to be saved
+        self._pending_storage = {}
+
+    def get_status(self) -> dict:
+        return self._status
 
     def get_snapshot(self, view: str) -> Optional[bytes]:
         with self._snap_lock:
-            return self._latest_snap
+            if view == "original":
+                return self._latest_original_jpeg
+            return self._latest_processed_jpeg
 
     def refresh_face_database(self):
         logger.info("Face database refresh requested.")
@@ -67,71 +86,96 @@ class RecognizerConsumer:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._worker_loop, name="RecognizerConsumer", daemon=True)
         self._thread.start()
-        self.status["is_running"] = True
+        self._status["running"] = True
         logger.info("Recognizer Consumer started.")
 
     def stop(self):
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=5.0)
-        self.status["is_running"] = False
+        self._status["running"] = False
 
     def enqueue(self, cam_id: str, clip_path: Path):
         job = Job(cam_id=cam_id, clip_path=clip_path, created_at=time.time())
         try:
             self._queue.put_nowait(job)
-            self.status["jobs_pending"] = self._queue.qsize()
             logger.info(f"Enqueued clip: {clip_path.name} from {cam_id}")
         except queue.Full:
             logger.warning(f"Queue full! Dropping clip from {cam_id}: {clip_path.name}")
 
+    def pending_results(self) -> List[dict]:
+        return list(self._pending_storage.values())
+
+    def save_pending_result(self, clip_stem: str) -> dict:
+        if clip_stem in self._pending_storage:
+            item = self._pending_storage.pop(clip_stem)
+            item["saved"] = True
+            logger.info(f"Result for {clip_stem} saved to 'permanent' (staged).")
+            return item
+        return {"error": "Result not found or already saved"}
+
     def _worker_loop(self):
+        from app.api.ws_handlers import emit_pose_progress, emit_metric_log, emit_event_log
+        
         while not self._stop_event.is_set():
             try:
                 job: Job = self._queue.get(timeout=1.0)
-                self.status["jobs_pending"] = self._queue.qsize()
-                self.status["current_job"] = job.clip_path.name
+                clip_stem = job.clip_path.stem
+                cam_id = job.cam_id
                 
-                logger.info(f"Starting processing for {job.clip_path.name}...")
+                self._status["mode"] = "processing"
+                self._status["current_clip"] = clip_stem
+                self._status["current_cam"] = cam_id
+                self._status["lamp_state"][cam_id] = "ACTIVE"
                 
-                # Update UI state to ACTIVE
-                self.socketio.emit("pose_lamp_state", {
-                    "active_camera": job.cam_id,
-                    "current_clip": job.clip_path.name,
-                    "lamp_state": {job.cam_id: "ACTIVE"}
-                })
+                logger.info(f"Processing {clip_stem}...")
+                emit_event_log(f"Processing started: {clip_stem}", cam_id)
 
                 start_time = time.time()
-                
-                # 1. Phase 2 (If enabled or needed)
-                # Output dir based on config
                 out_dir = Path("data/output_pose")
                 
-                # 2. Phase 3 (Pose & ADL)
                 if self.p3_model:
-                    # Pass config as dict for the engine
                     phase3_cfg = self.config.phase3.dict() if hasattr(self.config.phase3, 'dict') else self.config.phase3
                     
                     def _on_progress(p_data):
-                        # p_data: {frame_id, total_frames, adl, conf, frame}
-                        pct = int((p_data["frame_id"] / p_data["total_frames"]) * 100) if p_data["total_frames"] > 0 else 0
+                        # Update status
+                        self._status["current_frame"] = p_data["frame_id"]
+                        self._status["total_frames"] = p_data["total_frames"]
+                        self._status["adl"] = p_data["adl"]
+                        self._status["conf"] = p_data["conf"]
                         
-                        # Emit progress
-                        self.socketio.emit("pose_progress", {
-                            "clip_id": job.clip_path.name,
-                            "cam_id": job.cam_id,
-                            "frame_id": p_data["frame_id"],
-                            "total_frames": p_data["total_frames"],
-                            "adl": p_data["adl"],
-                            "conf": round(p_data["conf"], 2),
-                            "pct": pct
-                        })
+                        # Calculate FPS periodically
+                        # (Simple proxy for engine FPS)
                         
-                        # Update snapshot
-                        if "frame" in p_data:
-                            _, buf = cv2.imencode(".jpg", p_data["frame"])
-                            with self._snap_lock:
-                                self._latest_snap = buf.tobytes()
+                        # Emit standardized progress
+                        emit_pose_progress(
+                            cam_id=cam_id,
+                            clip_stem=clip_stem,
+                            frame_id=p_data["frame_id"],
+                            total_frames=p_data["total_frames"],
+                            fps=15.0, # Placeholder or calculated
+                            conf=p_data["conf"],
+                            adl=p_data["adl"],
+                            pct=int((p_data["frame_id"] / p_data["total_frames"]) * 100) if p_data["total_frames"] > 0 else 0
+                        )
+                        
+                        # Emit metric log
+                        emit_metric_log(
+                            cam=cam_id,
+                            fps=15.0,
+                            frame=p_data["frame_id"],
+                            conf=p_data["conf"],
+                            adl=p_data["adl"]
+                        )
+                        
+                        # Update snapshots
+                        with self._snap_lock:
+                            if "original" in p_data:
+                                _, b1 = cv2.imencode(".jpg", p_data["original"])
+                                self._latest_original_jpeg = b1.tobytes()
+                            if "processed" in p_data:
+                                _, b2 = cv2.imencode(".jpg", p_data["processed"])
+                                self._latest_processed_jpeg = b2.tobytes()
 
                     result = run_phase3(
                         self.p3_model, 
@@ -143,28 +187,29 @@ class RecognizerConsumer:
                     )
                     
                     elapsed = time.time() - start_time
-                    logger.info(f"Completed {job.clip_path.name} in {elapsed:.2f}s. KPs: {result['keypoints_written']}")
+                    logger.info(f"Completed {clip_stem} in {elapsed:.2f}s")
 
-                    # Emit completion
-                    self.socketio.emit("pose_complete", {
-                        "cam_id": job.cam_id,
-                        "clip": job.clip_path.name,
+                    # Stage result
+                    self._pending_storage[clip_stem] = {
+                        "clip_stem": clip_stem,
+                        "cam_id": cam_id,
                         "results": result,
-                        "elapsed": elapsed
-                    })
+                        "timestamp": time.time(),
+                        "saved": False
+                    }
                     
-                    # Reset lamp to IDLE or DONE
-                    self.socketio.emit("pose_lamp_state", {
-                        "active_camera": "",
-                        "lamp_state": {job.cam_id: "IDLE"}
-                    })
-
-                self.status["completed_total"] += 1
-                self.status["current_job"] = None
+                    emit_event_log(f"Finished processing: {clip_stem}", cam_id)
+                    
+                self._status["current_clip"] = None
+                self._status["current_cam"] = None
+                self._status["lamp_state"][cam_id] = "IDLE"
                 self._queue.task_done()
 
             except queue.Empty:
+                self._status["mode"] = "idle"
                 continue
             except Exception as e:
-                logger.error(f"Worker iteration failed: {e}", exc_info=True)
+                logger.error(f"Worker failure: {e}", exc_info=True)
+                if 'job' in locals():
+                    self._status["lamp_state"][job.cam_id] = "IDLE"
                 self._queue.task_done()

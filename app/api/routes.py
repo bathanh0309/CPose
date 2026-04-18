@@ -3,7 +3,8 @@
 from __future__ import annotations
 import logging
 from pathlib import Path
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, current_app
+from werkzeug.utils import secure_filename
 
 import app as _app_module
 from app.services.recorder import RecorderManager
@@ -16,25 +17,10 @@ from app.services.registration_service import RegistrationManager
 
 logger = logging.getLogger("[API]")
 
-# Tạo Blueprint cho tất cả các API
+# Blueprint for all APIs
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
-# Khởi tạo các service chính (singleton style)
-def _on_socket_emit(event, data):
-    # Tránh circular import bằng cách import tại runtime
-    from app import socketio
-    socketio.emit(event, data)
-
-
-def _on_request_registration(clip_stem, cam_id):
-    # Tránh circular import bằng cách import tại runtime
-    from app.api import ws_handlers
-    return ws_handlers.request_face_registration(clip_stem, cam_id)
-
-
-from flask import current_app
-
-# Các helper để lấy service từ app config (đã được init trong app_factory)
+# Helpers to get services from app config
 def get_recorder() -> RecorderManager:
     return current_app.config["recorder"]
 
@@ -46,20 +32,23 @@ _storage = StorageManager()
 _prober = StreamProber()
 _registration = RegistrationManager()
 
+# --- Internal Helpers ---
+def _body_json() -> dict:
+    return request.get_json(force=True, silent=True) or {}
+
+def _ok(**kwargs):
+    return jsonify({"ok": True, **kwargs})
+
+def _error(message: str, code: int = 400, **kwargs):
+    return jsonify({"ok": False, "error": message, **kwargs}), code
 
 def _resolve_dir(raw_value: str | None, default: Path) -> Path:
-    """Hàm hỗ trợ chuyển đổi đường dẫn tương đối thành tuyệt đối."""
     if not raw_value:
         return default
     candidate = Path(raw_value)
     return candidate if candidate.is_absolute() else (_app_module.BASE_DIR / candidate)
 
-
 def _json_safe(value):
-    """
-    Recursively convert non-JSON-serializable types (bytes, paths, etc.) to JSON-serializable forms.
-    Prevents jsonify() TypeErrors when status contains byte snapshots or other problematic types.
-    """
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="ignore")
     if isinstance(value, Path):
@@ -70,102 +59,37 @@ def _json_safe(value):
         return [_json_safe(v) for v in value]
     return value
 
-
 # ===================================================================
 #                          CONFIG & CAMERA
 # ===================================================================
 
 @api_bp.route("/config/upload", methods=["POST"])
 def upload_config():
-    """
-    Upload file resources.txt chứa thông tin cấu hình camera.
-    File sẽ được lưu vào đường dẫn RESOURCES_FILE và sau đó được parse để lấy danh sách camera.
-    """
     if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+        return _error("No file provided", 400)
 
     upload = request.files["file"]
     filename = upload.filename or ""
 
     if not filename.lower().endswith(".txt"):
-        return jsonify({"error": "Only .txt files are supported"}), 400
+        return _error("Only .txt files are supported", 400)
 
     upload.save(str(_app_module.RESOURCES_FILE))
     cameras = _storage.parse_resources(_app_module.RESOURCES_FILE)
 
-    logger.info("Loaded %d cameras from resources.txt", len(cameras))
-    return jsonify({"message": "resources.txt saved", "cameras": cameras})
+    from app.api.ws_handlers import emit_event_log
+    emit_event_log(f"Loaded resources.txt ({len(cameras)} cameras)", "CFG")
 
+    return _ok(message="resources.txt saved", cameras=cameras)
 
 @api_bp.route("/config/cameras", methods=["GET"])
 def get_cameras():
-    """
-    Lấy danh sách tất cả các camera đã được cấu hình trong file resources.txt.
-    Nếu file chưa tồn tại, trả về danh sách rỗng.
-    """
     if not _app_module.RESOURCES_FILE.exists():
         return jsonify({"cameras": []})
-
     return jsonify({"cameras": _storage.parse_resources(_app_module.RESOURCES_FILE)})
-
-
-@api_bp.route("/config/load_local", methods=["POST"])
-def load_local_test_cameras():
-    """Tạo resources.txt từ tất cả các file .mp4 trong thư mục data/multicam để test Phase 1"""
-    video_dir = _app_module.BASE_DIR / "data" / "multicam"
-    if not video_dir.exists():
-        return jsonify({"error": "Thư mục data/multicam không tồn tại"}), 404
-        
-    videos = list(video_dir.glob("*.mp4"))
-    if not videos:
-        return jsonify({"error": "Không có video .mp4 nào trong data/multicam"}), 404
-    
-    with open(_app_module.RESOURCES_FILE, "w", encoding="utf-8") as f:
-        f.write("# Automatically generated for local testing\n")
-        # Ensure sequential order cam01, cam02 etc.
-        for i, path in enumerate(sorted(videos)):
-            cam_str = f"cam{i+1:02d}"
-            f.write(f"{cam_str} __ {str(path.resolve())}\n")
-            
-    cameras = _storage.parse_resources(_app_module.RESOURCES_FILE)
-    logger.info("Loaded %d cameras dynamically from data/multicam", len(cameras))
-    return jsonify({"message": f"Loaded {len(videos)} local videos as cameras", "cameras": cameras})
-
-
-@api_bp.route("/cameras/probe", methods=["POST"])
-def probe_camera():
-    """
-    Kiểm tra (probe) một camera stream (RTSP/HTTP...) để lấy thông tin kỹ thuật:
-    độ phân giải, FPS, các resolution hỗ trợ.
-    Dùng để test xem camera có hoạt động tốt trước khi ghi hình.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    url = str(body.get("url", "")).strip()
-    cam_id = str(body.get("cam_id", "00")).zfill(2)
-
-    if not url:
-        return jsonify({"error": "url is required"}), 400
-
-    info = _prober.probe(url)
-    if info.get("error"):
-        return jsonify({"error": info["error"], "cam_id": cam_id}), 502
-
-    return jsonify({
-        "cam_id": cam_id,
-        "rtsp_url": url,
-        "width": info["width"],
-        "height": info["height"],
-        "fps": info["fps"],
-        "resolutions": info["resolutions"],
-    })
 
 @api_bp.route("/cameras/<cam_id>/snapshot", methods=["GET"])
 def camera_snapshot(cam_id: str):
-    """
-    Trả về ảnh JPEG mới nhất (snapshot) của camera đang chạy dưới dạng image/jpeg.
-    Nếu camera chưa chạy hoặc chưa có frame nào, trả về HTTP 204 No Content.
-    Dùng để hiển thị live view trên giao diện web.
-    """
     jpeg = get_recorder().get_snapshot(cam_id)
     if jpeg is None:
         return Response(status=204)
@@ -179,244 +103,154 @@ def camera_snapshot(cam_id: str):
         },
     )
 
-
-@api_bp.route("/cameras/status", methods=["GET"])
-def cameras_live_status():
-    """
-    Trả về trạng thái live của tất cả các camera đang chạy.
-    """
-    return jsonify({"cameras": get_recorder().camera_status_list()})
+# ===================================================================
+#                          RECORDING (PHASE 1)
+# ===================================================================
 
 @api_bp.route("/recording/start", methods=["POST"])
 def start_recording():
-    """
-    Bắt đầu quá trình ghi hình (Phase 1).
-    Cho phép chỉ định danh sách camera, giới hạn dung lượng lưu trữ,
-    và các cấu hình bổ sung cho Phase 1.
-    """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _body_json()
     selected_cams = body.get("cameras") or []
-    
+
     if isinstance(selected_cams, str):
         selected_cams = [selected_cams]
 
-    # Bổ sung logic map từ ID string sang dict cấu hình đầy đủ nhằm tránh lỗi TypeError
     all_cams = _storage.parse_resources(_app_module.RESOURCES_FILE)
     cameras = []
-    
-    # Nếu danh sách gửi lên là string (ID), ta tìm trong resources.txt
+
     if len(selected_cams) > 0 and isinstance(selected_cams[0], str):
         for c in all_cams:
             if c.get("cam_id") in selected_cams or c.get("label") in selected_cams:
                 cameras.append(c)
     else:
-        # Nếu đã là dict (Cách A), dùng luôn
         cameras = selected_cams
+
+    if not cameras:
+        return _error("No valid cameras found or specified", 400)
+
+    if get_recorder().is_running():
+        return _error("Recording is already running", 409)
 
     try:
         storage_limit_gb = float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB))
     except (TypeError, ValueError):
-        return jsonify({"error": "storage_limit_gb must be numeric"}), 400
-
-    if not cameras:
-        return jsonify({"error": "No valid cameras found or specified"}), 400
-
-    if get_recorder().is_running():
-        return jsonify({"error": "Recording is already running"}), 409
-
-    phase1_cfg = body.get("phase1_config", {})
-
-    from flask import current_app
-    on_clip_ready = current_app.config.get("on_clip_ready_cb")
+        return _error("storage_limit_gb must be numeric", 400)
 
     get_recorder().start(
         cameras=cameras,
         storage_limit_gb=storage_limit_gb,
         output_dir=_app_module.RAW_VIDEOS_DIR,
         model_path=_app_module.MODEL_PHASE1,
-        config=phase1_cfg,
-        on_clip_ready=on_clip_ready,
+        config=body.get("phase1_config", {}),
+        on_clip_ready=current_app.config.get("on_clip_ready_cb"),
     )
 
-    return jsonify({"message": "Recording started", "cameras": len(cameras)})
+    from app.api.ws_handlers import emit_event_log, emit_rec_status
+    emit_event_log("Recorder started", "SYS")
+    emit_rec_status(is_recording=True)
 
+    return _ok(message="Recording started", cameras=len(cameras))
 
 @api_bp.route("/recording/stop", methods=["POST"])
 def stop_recording():
-    """
-    Dừng quá trình ghi hình đang chạy (Phase 1).
-    """
     get_recorder().stop()
-    return jsonify({"message": "Recording stopped"})
-
+    from app.api.ws_handlers import emit_event_log, emit_rec_status
+    emit_event_log("Recorder stopped", "SYS")
+    emit_rec_status(is_recording=False)
+    return _ok(message="Recording stopped")
 
 @api_bp.route("/recording/status", methods=["GET"])
 def recording_status():
-    """
-    Lấy trạng thái hiện tại của quá trình ghi hình.
-    """
     return jsonify(get_recorder().status())
 
-@api_bp.route("/videos", methods=["GET"])
-def list_videos():
-    """
-    Liệt kê tất cả các file video (.mp4) đã ghi trong thư mục RAW_VIDEOS_DIR.
-    """
-    return jsonify({"videos": _storage.list_videos(_app_module.RAW_VIDEOS_DIR)})
-
-
-@api_bp.route("/videos/<path:filename>", methods=["DELETE"])
-def delete_video(filename: str):
-    """
-    Xóa một file video theo tên file.
-    Chỉ cho phép xóa file có đuôi .mp4.
-    """
-    if not filename.endswith(".mp4"):
-        return jsonify({"error": "Only .mp4 files can be deleted"}), 400
-
-    target = _app_module.RAW_VIDEOS_DIR / filename
-    if not target.exists() or not target.is_file():
-        return jsonify({"error": "File not found"}), 404
-
-    target.unlink()
-    return jsonify({"message": f"{filename} deleted"})
-
-@api_bp.route("/analysis/start", methods=["POST"])
-def start_analysis():
-    """
-    Bắt đầu quá trình phân tích video (Phase 2).
-    Nhận vào thư mục chứa các file video cần phân tích.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    video_dir = _resolve_dir(body.get("video_dir") or body.get("folder"), _app_module.RAW_VIDEOS_DIR)
-
-    if not video_dir.is_dir():
-        return jsonify({"error": f"Directory not found: {video_dir}"}), 400
-
-    if _analyzer.is_running():
-        return jsonify({"error": "Analysis is already running"}), 409
-
-    clips = sort_multicam_clips(video_dir.glob("*.mp4"))
-    if not clips:
-        return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
-
-    _analyzer.start(clips, _app_module.OUTPUT_DIR, _app_module.MODEL_PHASE2)
-
-    return jsonify({"message": "Analysis started", "clips": len(clips)})
-
-
-@api_bp.route("/analysis/stop", methods=["POST"])
-def stop_analysis():
-    """
-    Yêu cầu dừng quá trình phân tích video đang chạy (Phase 2).
-    """
-    _analyzer.stop()
-    return jsonify({"message": "Analysis stop requested"})
-
-
-@api_bp.route("/analysis/status", methods=["GET"])
-def analysis_status():
-    """
-    Lấy trạng thái hiện tại của quá trình phân tích (Phase 2).
-    """
-    return jsonify(_analyzer.status())
-
-
-@api_bp.route("/analysis/results", methods=["GET"])
-def analysis_results():
-    """
-    Liệt kê các kết quả phân tích trong thư mục chỉ định (mặc định là OUTPUT_DIR).
-    """
-    folder = _resolve_dir(request.args.get("folder"), _app_module.OUTPUT_DIR)
-    if not folder.exists():
-        return jsonify({"results": []})
-    return jsonify({"results": _storage.list_results(folder)})
+# ===================================================================
+#                          POSE & ADL (PHASE 3)
+# ===================================================================
 
 @api_bp.route("/pose/start", methods=["POST"])
 def start_pose():
-    """
-    Bắt đầu quá trình nhận diện Pose và ADL (Phase 3).
-    Có thể chọn thư mục video đầu vào và bật/tắt việc lưu video overlay.
-    """
-    mode = body.get("mode", "multicam_folder") # "rtsp" | "multicam_folder"
-    cameras_req = body.get("cameras", [])
+    body = _body_json()
+    mode = str(body.get("mode", "multicam_folder")).strip().lower()
+    recognizer = get_pose()
 
     if mode == "rtsp":
-        # RTSP mode starts the recorder, which will then trigger the recognizer via callback
+        cameras_req = body.get("cameras") or []
         all_cams = _storage.parse_resources(_app_module.RESOURCES_FILE)
         selected_cams = [c for c in all_cams if c.get("cam_id") in cameras_req]
         if not selected_cams:
-            return jsonify({"error": "No valid cameras for RTSP mode"}), 400
-        
-        get_recorder().start(
-            cameras=selected_cams,
-            storage_limit_gb=float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB)),
-            output_dir=_app_module.RAW_VIDEOS_DIR,
-            model_path=_app_module.MODEL_PHASE1,
-            on_clip_ready=current_app.config.get("on_clip_ready_cb")
-        )
-        return jsonify({"status": "started", "mode": "rtsp", "cameras": len(selected_cams)})
-    
-    else:
-        # Folder mode reads existing files and enqueues them
-        video_dir = _resolve_dir(body.get("folder"), _app_module.RAW_VIDEOS_DIR)
+            return _error("No valid cameras for RTSP mode", 400)
+
+        if not get_recorder().is_running():
+            get_recorder().start(
+                cameras=selected_cams,
+                storage_limit_gb=float(body.get("storage_limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB)),
+                output_dir=_app_module.RAW_VIDEOS_DIR,
+                model_path=_app_module.MODEL_PHASE1,
+                on_clip_ready=current_app.config.get("on_clip_ready_cb"),
+            )
+
+        from app.api.ws_handlers import emit_event_log
+        emit_event_log("Pose pipeline started in RTSP mode", "SYS")
+        return _ok(status="started", mode="rtsp", cameras=len(selected_cams))
+
+    if mode == "multicam_folder":
+        folder = body.get("folder")
+        if folder:
+            video_dir = _resolve_dir(folder, _app_module.RAW_VIDEOS_DIR)
+        else:
+            video_dir = _app_module.BASE_DIR / "data" / "multicam"
+
         if not video_dir.is_dir():
-            return jsonify({"error": f"Directory not found: {video_dir}"}), 400
+            return _error(f"Directory not found: {video_dir}", 400)
 
         clips = sort_multicam_clips(video_dir.glob("*.mp4"))
         if not clips:
-            return jsonify({"error": "No .mp4 files found in the selected folder"}), 400
+            return _error("No .mp4 files found in the selected folder", 400)
 
-        # Enqueue clips in order
-        recognizer = get_pose()
         for clip in clips:
-            cam_id = _app_module.extract_multicam_camera_id(clip) or "unknown"
+            cam_id = _app_module.extract_multicam_camera_id(clip) if hasattr(_app_module, "extract_multicam_camera_id") else "unknown"
             recognizer.enqueue_clip(cam_id, clip)
 
-        return jsonify({
-            "status": "started",
-            "mode": "multicam_folder",
-            "total_clips": len(clips)
-        })
+        from app.api.ws_handlers import emit_event_log
+        emit_event_log(f"Pose pipeline started in multicam_folder mode ({len(clips)} clips)", "SYS")
+        return _ok(status="started", mode="multicam_folder", total_clips=len(clips))
 
+    return _error(f"Unsupported mode: {mode}", 400)
 
 @api_bp.route("/pose/stop", methods=["POST"])
 def stop_pose():
-    """
-    Yêu cầu dừng quá trình nhận diện Pose và ADL đang chạy (Phase 3).
-    """
     get_pose().stop()
     get_recorder().stop()
-    return jsonify({"status": "stopped"})
-
+    from app.api.ws_handlers import emit_event_log, emit_rec_status
+    emit_event_log("Pose processing stopped", "SYS")
+    emit_rec_status(is_recording=False)
+    return _ok(status="stopped")
 
 @api_bp.route("/pose/status", methods=["GET"])
 def pose_status():
-    """
-    Lấy trạng thái hiện tại của quá trình Pose & ADL recognition (Phase 3).
-    """
-    return jsonify(_json_safe(get_pose().get_status()))
-
-
-@api_bp.route("/pose/results", methods=["GET"])
-def pose_results():
-    """
-    Liệt kê các kết quả Pose trong thư mục chỉ định (mặc định là OUTPUT_POSE_DIR).
-    """
-    folder = _resolve_dir(request.args.get("folder"), _app_module.OUTPUT_POSE_DIR)
-    if not folder.exists():
-        return jsonify({"results": []})
-    return jsonify({"results": _storage.list_pose_results(folder)})
-
+    status = _json_safe(get_pose().get_status())
+    lamp_state = status.get("lamp_state") or {
+        "cam01": "IDLE", "cam02": "IDLE", "cam03": "IDLE", "cam04": "IDLE",
+    }
+    normalized = {
+        "running": status.get("running", False),
+        "mode": status.get("mode", "idle"),
+        "current_clip": status.get("current_clip"),
+        "current_cam": status.get("current_cam"),
+        "current_frame": status.get("current_frame", 0),
+        "total_frames": status.get("total_frames", 0),
+        "fps": status.get("fps", 0),
+        "conf": status.get("conf", 0),
+        "adl": status.get("adl", "unknown"),
+        "lamp_state": lamp_state,
+        "pending_results": status.get("pending_results", []),
+    }
+    return jsonify(normalized)
 
 @api_bp.route("/pose/snapshot/<view>", methods=["GET"])
 def pose_snapshot(view: str):
-    """
-    Trả về ảnh JPEG mới nhất (snapshot) của quá trình Pose đang chạy.
-    view: 'original' hoặc 'processed'.
-    """
     if view not in ("original", "processed"):
-        return jsonify({"error": "Invalid view type"}), 400
+        return _error("Invalid view type", 400)
 
     jpeg = get_pose().get_snapshot(view)
     if jpeg is None:
@@ -431,107 +265,88 @@ def pose_snapshot(view: str):
         },
     )
 
-
-
-@api_bp.route("/pose/save_result", methods=["POST"])
-def save_pose_result():
-    """
-    Save a pending pose result to permanent storage.
-    The result must have been staged during processing.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    clip_stem = body.get("clip_stem")
-    if not clip_stem:
-        return jsonify({"error": "clip_stem is required"}), 400
-    
-    result = get_pose().save_pending_result(clip_stem)
-    if "error" in result:
-        return jsonify(result), 400
-    
-    return jsonify({"status": "ok", "message": f"Result saved for {clip_stem}", **result})
-
-
 @api_bp.route("/pose/pending_results", methods=["GET"])
 def pose_pending_results():
-    """
-    Get all pending results waiting to be saved by user.
-    """
     pending = _json_safe(get_pose().pending_results())
     return jsonify({"pending_results": pending})
 
-
-@api_bp.route("/pose/adl_summary", methods=["GET"])
-def pose_adl_summary():
-    """
-    Lấy tóm tắt phân bố các hoạt động ADL (Activities of Daily Living)
-    của một clip video cụ thể (ví dụ: ngồi, đứng, nằm, đi lại...).
-    """
-    clip_stem = str(request.args.get("clip", "")).strip()
+@api_bp.route("/pose/save_result", methods=["POST"])
+def save_pose_result():
+    body = _body_json()
+    clip_stem = body.get("clip_stem")
     if not clip_stem:
-        return jsonify({"error": "clip is required"}), 400
-
-    folder = _resolve_dir(request.args.get("folder"), _app_module.OUTPUT_POSE_DIR)
-    summary = _storage.get_pose_summary(folder, clip_stem)
-
-    if summary is None:
-        return jsonify({"error": f"Pose result not found for clip: {clip_stem}"}), 404
-
-    return jsonify({"clip": clip_stem, "adl_distribution": summary})
-
-@api_bp.route("/storage/info", methods=["GET"])
-def storage_info():
-    """
-    Lấy thông tin dung lượng lưu trữ của thư mục video
-    (dung lượng đã dùng, còn trống, số lượng file...).
-    """
-    return jsonify(_storage.storage_info(_app_module.RAW_VIDEOS_DIR))
-
-
-@api_bp.route("/storage/limit", methods=["POST"])
-def set_storage_limit():
-    """
-    Cập nhật giới hạn dung lượng lưu trữ tối đa cho quá trình ghi hình.
-    """
-    body = request.get_json(force=True, silent=True) or {}
-
-    try:
-        limit_gb = float(body.get("limit_gb", _app_module.DEFAULT_STORAGE_LIMIT_GB))
-    except (TypeError, ValueError):
-        return jsonify({"error": "limit_gb must be numeric"}), 400
-
-    if limit_gb <= 0:
-        return jsonify({"error": "limit_gb must be greater than zero"}), 400
-
-    get_recorder().set_storage_limit(limit_gb)
-    return jsonify({"message": f"Storage limit updated to {limit_gb:.2f} GB"})
-
-
-@api_bp.route("/video/<path:filepath>")
-def serve_video(filepath):
-    from flask import send_from_directory
-    data_dir = _app_module.BASE_DIR / "data"
-    return send_from_directory(data_dir, filepath)
-
+        return _error("clip_stem is required", 400)
+    
+    result = get_pose().save_pending_result(clip_stem)
+    if "error" in result:
+        return _error(result["error"], 400)
+    
+    return _ok(message=f"Result saved for {clip_stem}", **result)
 
 # ===================================================================
-#                          FACE REGISTRATION
+#                          WORKSPACE HELPERS
+# ===================================================================
+
+@api_bp.route("/workspace/load_multicam_default", methods=["POST"])
+def load_multicam_default():
+    video_dir = _app_module.BASE_DIR / "data" / "multicam"
+    if not video_dir.exists():
+        return _error(f"Directory not found: {video_dir}", 404)
+
+    clips = sort_multicam_clips(video_dir.glob("*.mp4"))
+    if not clips:
+        return _error("No .mp4 files found in data/multicam", 400)
+
+    items = []
+    for clip in clips:
+        cam_id = _app_module.extract_multicam_camera_id(clip) if hasattr(_app_module, "extract_multicam_camera_id") else "unknown"
+        items.append({
+            "name": clip.name,
+            "cam": cam_id,
+            "path": str(clip),
+            "url": f"/api/video/{clip.relative_to(_app_module.DATA_DIR).as_posix()}",
+        })
+
+    from app.api.ws_handlers import emit_event_log
+    emit_event_log(f"Loaded default multicam folder ({len(items)} clips)", "MC")
+    return _ok(mode="multicam_folder", clips=items, total=len(items))
+
+@api_bp.route("/workspace/start_multicam", methods=["POST"])
+def workspace_start_multicam():
+    body = _body_json()
+    folder = body.get("folder")
+    if not folder:
+        folder = str((_app_module.BASE_DIR / "data" / "multicam").resolve())
+
+    # We can call start_pose internal logic directly or via request context
+    with current_app.test_request_context(
+        "/api/pose/start",
+        method="POST",
+        json={"mode": "multicam_folder", "folder": folder},
+    ):
+        return start_pose()
+
+@api_bp.route("/workspace/stop", methods=["POST"])
+def workspace_stop():
+    get_pose().stop()
+    get_recorder().stop()
+    from app.api.ws_handlers import emit_event_log, emit_rec_status
+    emit_event_log("Workspace stopped", "SYS")
+    emit_rec_status(is_recording=False)
+    return _ok(status="stopped")
+
+# ===================================================================
+#                          REGISTRATION
 # ===================================================================
 
 @api_bp.route("/registration/next_id", methods=["GET"])
 def get_next_registration_id():
-    """
-    Lấy ID tiếp theo trong chuỗi tăng dần (0001, 0002...).
-    """
     next_id = _registration.get_next_id()
     return jsonify({"next_id": next_id})
 
-
 @api_bp.route("/registration/start", methods=["POST"])
 def start_registration():
-    """
-    Bắt đầu session đăng ký khuôn mặt đa góc với đầy đủ metadata.
-    """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _body_json()
     source = body.get("source")
     rtsp_url = body.get("rtsp_url")
     user_name = body.get("name")
@@ -539,18 +354,21 @@ def start_registration():
     person_id = body.get("person_id") or _registration.get_next_id()
 
     if not user_name:
-        return jsonify({"error": "Name is required"}), 400
-    
+        return _error("Name is required", 400)
+
     if source == "rtsp" and not rtsp_url:
-        return jsonify({"error": "RTSP URL is required for RTSP source"}), 400
-    
+        return _error("RTSP URL is required for RTSP source", 400)
+
     camera_source = "local" if source == "local" else rtsp_url
-    
+
     def on_progress(data):
-        _on_socket_emit("registration_progress", data)
-        
+        from app.api.ws_handlers import emit_metric_log
+        # Standard socket notify
+        current_app.config["on_socket_emit_cb"]("registration_progress", data)
+        emit_metric_log(cam="REG", event=data.get("message", "registration_progress"))
+
     def on_done(data):
-        _on_socket_emit("registration_done", data)
+        current_app.config["on_socket_emit_cb"]("registration_done", data)
         if data.get("status") == "success":
             get_pose().refresh_face_database()
 
@@ -560,31 +378,22 @@ def start_registration():
         user_age=user_age,
         person_id=person_id,
         on_progress=on_progress,
-        on_done=on_done
+        on_done=on_done,
     )
 
-    return jsonify({"session_id": session_id, "status": "started", "person_id": person_id})
-
+    return _ok(session_id=session_id, status="started", user_id=person_id, person_id=person_id)
 
 @api_bp.route("/registration/stop", methods=["POST"])
 def stop_registration():
-    """
-    Dừng session đăng ký khuôn mặt.
-    """
-    body = request.get_json(force=True, silent=True) or {}
+    body = _body_json()
     session_id = body.get("session_id")
     if not session_id:
-        return jsonify({"error": "session_id is required"}), 400
-    
+        return _error("session_id is required", 400)
     _registration.stop_session(session_id)
-    return jsonify({"message": "Stopped"})
-
+    return _ok(message="Stopped")
 
 @api_bp.route("/registration/snapshot/<session_id>", methods=["GET"])
 def registration_snapshot(session_id: str):
-    """
-    Trả về snapshot của session đăng ký đang chạy.
-    """
     jpeg = _registration.get_snapshot(session_id)
     if jpeg is None:
         return Response(status=204)
@@ -597,3 +406,20 @@ def registration_snapshot(session_id: str):
             "Pragma": "no-cache",
         },
     )
+
+# --- Serving Static Videos ---
+@api_bp.route("/video/<path:filepath>")
+def serve_video(filepath):
+    data_dir = _app_module.BASE_DIR / "data"
+    from flask import send_from_directory
+    return send_from_directory(str(data_dir), filepath)
+
+# --- Helper for direct socket notify ---
+def _on_socket_emit(event, data):
+    from app import socketio
+    socketio.emit(event, data)
+
+# Link callback in create_app for registration
+# Callback setup moved to factory or handled via direct imports
+def setup_api_callbacks(app: Flask):
+    app.config["on_socket_emit_cb"] = _on_socket_emit

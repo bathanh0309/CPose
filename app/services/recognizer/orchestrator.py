@@ -30,17 +30,17 @@ class RecognizerService:
         
     def get_status(self) -> Dict[str, Any]:
         """Returns the current status of the consumer and queue."""
-        return self.consumer.status
+        return self.consumer.get_status()
 
     def get_snapshot(self, view: str) -> Optional[bytes]:
         """Return latest snapshot (original or processed) from the consumer."""
         return self.consumer.get_snapshot(view)
 
-    def pending_results(self) -> Dict[str, Any]:
-        return {} # Placeholder or implement if needed
+    def pending_results(self) -> List[dict]:
+        return self.consumer.pending_results()
 
     def save_pending_result(self, clip_stem: str) -> Dict[str, Any]:
-        return {"ok": True} # Placeholder
+        return self.consumer.save_pending_result(clip_stem)
 
     def refresh_face_database(self):
         """Reload embeddings in the AI pipeline."""

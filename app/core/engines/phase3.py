@@ -88,6 +88,10 @@ def run_phase3(
             tracked_people, expired_track_ids = tracker.update(detections, frame.shape[:2], frame_id)
             
             # 3. Processing each person
+            processed_frame = frame.copy() if (save_overlay or progress_callback) else None
+            best_adl = "idle"
+            best_conf = 0.0
+
             for person in tracked_people:
                 tid = person.track_id
                 
@@ -95,6 +99,10 @@ def run_phase3(
                 combined_kp = np.column_stack([person.keypoints_xy, person.keypoints_conf])
                 smoothed = pose_smoother.merge_pose(tid, combined_kp)
                 p_xy, p_conf = smoothed[:, :2], smoothed[:, 2]
+
+                # Draw if requested
+                if processed_frame is not None:
+                    draw_skeleton(processed_frame, p_xy, p_conf, label=f"ID:{tid}")
 
                 # Write Keypoints
                 flat_kp = " ".join([f"{v:.1f}" for row in smoothed for v in row])
@@ -105,12 +113,8 @@ def run_phase3(
                 window = person_windows[tid]
                 window.append((p_xy, p_conf))
                 if len(window) == window_size:
-                    # Prepare sequence for GCN
-                    xy_seq = np.stack([xy for xy, conf in window], axis=0) # (T, V, 2)
-                    conf_seq = np.stack([conf for xy, conf in window], axis=0) # (T, V)
-                    
                     if adl_model is not None:
-                        label, conf = adl_model.infer_sequence(xy_seq, conf_seq)
+                        label, conf = adl_model.infer_sequence(np.stack([xy for xy, c in window]), np.stack([c for xy, c in window]))
                     else:
                         label, conf = rule_based_adl(list(window), config)
                         
@@ -118,15 +122,20 @@ def run_phase3(
                     adl_h.write(f"{frame_id} {tid} {s_label} {s_conf:.2f}\n")
                     adl_count += 1
 
-                    # Trigger progress callback for one person (main track)
-                    if progress_callback and frame_id % 10 == 0:
-                        progress_callback({
-                            "frame_id": frame_id,
-                            "total_frames": total_frames,
-                            "adl": s_label,
-                            "conf": s_conf,
-                            "frame": frame # Pass raw frame for snapshot extraction if needed
-                        })
+                    if s_conf > best_conf:
+                        best_conf = s_conf
+                        best_adl = s_label
+
+            # Trigger progress callback 
+            if progress_callback and (frame_id % 5 == 0):
+                progress_callback({
+                    "frame_id": frame_id,
+                    "total_frames": total_frames,
+                    "adl": best_adl,
+                    "conf": best_conf,
+                    "original": frame,
+                    "processed": processed_frame if processed_frame is not None else frame
+                })
             
             # Cleanup smoothing memory
             for etid in expired_track_ids:

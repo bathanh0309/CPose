@@ -373,7 +373,7 @@ class CameraWorker(threading.Thread):
             self.rec_state = RecState.RECORDING
             logger.info("cam-%s: START recording -> %s", self.cam_id, self._clip_path.name)
             self._log(f"recording started: {self._clip_path.name}")
-            self._emit("rec_status", self._status_payload("recording"))
+            self._broadcast_status("recording")
             
         elif cmd == "STOP":
             if self._writer:
@@ -396,20 +396,19 @@ class CameraWorker(threading.Thread):
                         size_mb = path.stat().st_size / 1e6
                         self.clip_count += 1
                         logger.info("cam-%s: clip saved %s (%.1f MB)", self.cam_id, path.name, size_mb)
-                        self._log(f"clip saved: {path.name} ({duration:.1f}s)")
-                        self._emit("clip_saved", {
-                            "filename": path.name,
-                            "cam_id": self.cam_id,
-                            "url": f"/api/video/raw_videos/{path.name}",
-                            "size_mb": round(size_mb, 2),
-                            "duration_s": round(duration, 1),
-                            "fps": round(fps, 2),
-                            "total_frames": int(duration * fps)
-                        })
+                        from app.api.ws_handlers import emit_clip_saved, emit_event_log
+                        emit_clip_saved(
+                            filename=path.name,
+                            cam_id=self.cam_id,
+                            path=str(path),
+                            preview_url=f"/api/video/raw_videos/{path.name}"
+                        )
+                        emit_event_log(f"Short clip saved: {path.name}", self.cam_id)
+                        
                         if self._on_clip_ready:
                             self._on_clip_ready(path, self.cam_id)
                 
-                self._emit("rec_status", self._status_payload("online"))
+                self._broadcast_status("online")
 
     # ── Helper methods ──────────────────────────────────────────────────────
     def _detect_person(self, frame, frame_area: int) -> tuple[bool, float]:
@@ -467,29 +466,19 @@ class CameraWorker(threading.Thread):
         FileHandler().enforce_storage_limit(self.output_dir, limit_gb)
 
     def _log(self, message: str) -> None:
-        self._emit("rec_log", {"cam_id": self.cam_id, "message": message,
-                               "timestamp": datetime.now().isoformat()})
+        from app.api.ws_handlers import emit_event_log
+        emit_event_log(message, self.cam_id)
 
-    def _status_payload(self, status: str, **extra) -> dict:
+    def _broadcast_status(self, status: str, **extra):
+        from app.api.ws_handlers import emit_camera_status
         is_rec = self.rec_state in (RecState.RECORDING, RecState.POST_ROLL)
-        payload = {
-            "cam_id": self.cam_id,
-            "label": self.label,
-            "status": status,
-            "is_recording": is_rec,
-            "fps": round(self.fps_actual, 2),
-            "frame": self.detect_count, # Using detect_count as a frame proxy for status
-            "conf": 0.0, # Placeholder, updated if person_detected
-            "resolution": f"{self.resolution[0]}x{self.resolution[1]}",
-            "person_detected": self.person_detected,
-            "rec_state": self.rec_state.value,
-            "clip_duration": round(self.current_clip_duration, 1),
-            "clip_count": self.clip_count,
-        }
-        if self.person_detected:
-            payload["conf"] = 0.85 # Mock or real if available
-        payload.update(extra)
-        return payload
+        emit_camera_status(
+            cam_id=self.cam_id,
+            fps=round(self.fps_actual, 2),
+            frame=self.detect_count,
+            conf=0.9 if self.person_detected else 0.0,
+            status=status if not is_rec else "RECORDING"
+        )
 
 
 

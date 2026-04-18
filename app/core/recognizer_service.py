@@ -144,6 +144,18 @@ class RecognizerService:
                 self._update_state(lamp_state=lamp_state)
                 
                 self._emit("pose_lamp_state", {cam_id: "ACTIVE"})
+                try:
+                    from app.api.ws_handlers import emit_workspace_state
+                    emit_workspace_state(
+                        mode="multicam_folder",
+                        running=True,
+                        current_clip=clip_stem,
+                        current_cam=cam_id,
+                        output_dir="output_pose",
+                        queued=self._queue.qsize(),
+                    )
+                except Exception:
+                    logger.debug("workspace_state emit failed at clip start", exc_info=True)
 
                 # Registration hook for specific cams if needed
                 if cam_id == "cam01" and self.registration_callback:
@@ -191,6 +203,18 @@ class RecognizerService:
                 lamp_state[cam_id] = "IDLE"
                 self._update_state(mode="idle", current_clip=None, active_camera=None, lamp_state=lamp_state)
                 self._emit("pose_complete", {"clip": clip_stem, "cam": cam_id})
+                try:
+                    from app.api.ws_handlers import emit_workspace_state
+                    emit_workspace_state(
+                        mode="multicam_folder",
+                        running=True,
+                        current_clip=clip_stem,
+                        current_cam=cam_id,
+                        output_dir="output_pose",
+                        queued=self._queue.qsize(),
+                    )
+                except Exception:
+                    logger.debug("workspace_state emit failed at clip finish", exc_info=True)
                 self._queue.task_done()
 
             except queue.Empty:

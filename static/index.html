@@ -435,12 +435,13 @@
       // Start hidden; we toggle them ON after boot (avoids toggling OFF on first render).
       preview: { multicamVisible: false, originalVisible: false, processedVisible: false, registrationVisible: false },
       cameras: { rtspList: [], activeRtspCam: null, registrationCamOpen: false, registrationStream: null },
+      workspace: { mode: 'idle', running: false, currentClip: null, currentCam: null, outputDir: 'output_pose', queued: 0, stagedClips: [] },
       clips: [],
       eventLogs: [],
       metricLogs: [],
       maxLogs: 300,
       selectedClip: null,
-      polling: { multicam: null, original: null, processed: null, status: null },
+      polling: { multicam: null, original: null, processed: null, workspace: null },
       registration: { sessionId: null, isCapturing: false, nextUserId: 1, currentUser: null }
     };
 
@@ -477,6 +478,69 @@
       } catch (_) { }
     }
 
+    function buildClipItems(rawClips) {
+      return (rawClips || []).map((c, idx) => {
+        const name = c?.name || `clip_${idx}`;
+        const cam = c?.cam || 'UNK';
+        const path = c?.path || name;
+        const stem = String(path).split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+        const id = path || `${name}-${idx}`;
+        return {
+          id,
+          name,
+          stem,
+          cam,
+          url: c?.url || '',
+          status: c?.status || 'ready',
+          progress: Number(c?.progress || 0),
+          sourceType: c?.sourceType || 'multicam_server',
+          path,
+        };
+      });
+    }
+
+    function applyWorkspaceState(payload, source = 'socket') {
+      const ws = payload?.workspace || payload || {};
+      state.workspace = {
+        ...state.workspace,
+        mode: ws.mode || state.workspace.mode,
+        running: !!ws.running,
+        currentClip: ws.current_clip ?? ws.currentClip ?? state.workspace.currentClip,
+        currentCam: ws.current_cam ?? ws.currentCam ?? state.workspace.currentCam,
+        outputDir: ws.output_dir || state.workspace.outputDir,
+        queued: Number(ws.queued ?? state.workspace.queued ?? 0),
+        stagedClips: Array.isArray(ws.staged_clips) ? ws.staged_clips.slice() : state.workspace.stagedClips,
+      };
+
+      state.system.mode = state.workspace.mode;
+      state.system.running = state.workspace.running;
+      state.system.folderLoaded = state.workspace.mode === 'multicam_folder' || state.system.folderLoaded;
+      state.system.resourcesLoaded = state.workspace.mode === 'rtsp' || state.system.resourcesLoaded;
+
+      updateMainStatus(state.system.running ? 'RUNNING' : 'STANDBY');
+      updateRecLamp(state.system.running ? 'recording' : 'ready');
+
+      const stagedMap = Array.isArray(ws.staged_camera_map) ? ws.staged_camera_map : null;
+      if (stagedMap && stagedMap.length) {
+        state.clips = buildClipItems(stagedMap);
+        renderClipQueue();
+      }
+
+      if (state.workspace.currentClip) {
+        const match = state.clips.find((c) => c.name === state.workspace.currentClip || c.stem === state.workspace.currentClip || c.id === state.workspace.currentClip || c.path === state.workspace.currentClip);
+        if (match) state.selectedClip = match.id;
+      } else if (state.clips.length && state.selectedClip === null && state.workspace.mode === 'multicam_folder') {
+        state.selectedClip = state.clips[0].id;
+      }
+
+      if (state.selectedClip) {
+        renderClipQueue();
+      }
+
+      syncPreviewPolling();
+      if (state.workspace.running) startWorkspacePolling(); else stopWorkspacePolling();
+    }
+
     function updateRecLamp(st) {
       const led = $('#recLed'); const text = $('#recLedText');
       led.className = 'rec-led';
@@ -486,33 +550,67 @@
     }
     function updateMainStatus(txt) { $('#mStatus').innerHTML = txt; }
 
-    function startStatusPolling() {
-      if (state.polling.status) return;
-      state.polling.status = setInterval(async () => {
+    function startWorkspacePolling() {
+      if (state.polling.workspace) return;
+      state.polling.workspace = setInterval(async () => {
         try {
-          const res = await fetch('/api/pose/status');
+          const res = await fetch('/api/workspace/status');
           if (!res.ok) return;
           const st = await res.json();
-          state.system.running = !!st.running;
-          updateMainStatus(state.system.running ? 'RUNNING' : 'STANDBY');
-          updateRecLamp(state.system.running ? 'recording' : 'ready');
-          if (state.system.running && (st.current_frame || st.fps || st.conf || st.adl)) {
-            pushMetricLog({
-              cam: st.current_cam || '--',
-              fps: st.fps ?? '--',
-              frame: st.total_frames ? `${st.current_frame || 0}/${st.total_frames}` : (st.current_frame ?? '--'),
-              conf: st.conf !== undefined && st.conf !== null ? ((Number(st.conf) <= 1 ? Number(st.conf) * 100 : Number(st.conf)).toFixed(0) + '%') : '--',
-              adl: st.adl || '--',
-            });
-          }
-          if (!state.system.running) stopStatusPolling();
+          applyWorkspaceState(st, 'poll');
         } catch (_) { }
-      }, 1000);
+      }, 5000);
     }
 
-    function stopStatusPolling() {
-      if (state.polling.status) clearInterval(state.polling.status);
-      state.polling.status = null;
+    function stopWorkspacePolling() {
+      if (state.polling.workspace) clearInterval(state.polling.workspace);
+      state.polling.workspace = null;
+    }
+
+    function syncPreviewPolling() {
+      const isRunning = !!state.system.running;
+      const isMulticamMode = state.system.mode === 'multicam_folder';
+      const rtspCamId = $('#slotSel1')?.value;
+
+      const originalShouldRun = isRunning && state.preview.originalVisible;
+      const processedShouldRun = isRunning && state.preview.processedVisible;
+      const multicamShouldRun = state.preview.multicamVisible && ((state.system.resourcesLoaded && isRunning && rtspCamId) || (isMulticamMode && isRunning));
+
+      if (originalShouldRun && !state.polling.original) {
+        state.polling.original = setInterval(() => { pullSnapshot(`/api/pose/snapshot/original?t=${Date.now()}`, $('#originalVideo')); }, 700);
+      } else if (!originalShouldRun && state.polling.original) {
+        clearInterval(state.polling.original);
+        state.polling.original = null;
+        if (!isRunning) $('#originalVideo').src = DUMMY;
+      }
+
+      if (processedShouldRun && !state.polling.processed) {
+        state.polling.processed = setInterval(() => { pullSnapshot(`/api/pose/snapshot/processed?t=${Date.now()}`, $('#processedVideo')); }, 700);
+      } else if (!processedShouldRun && state.polling.processed) {
+        clearInterval(state.polling.processed);
+        state.polling.processed = null;
+        if (!isRunning) $('#processedVideo').src = DUMMY;
+      }
+
+      if (multicamShouldRun && !state.polling.multicam) {
+        state.polling.multicam = setInterval(() => {
+          const img = $('#slotSnap1');
+          const camId = $('#slotSel1').value;
+          if (state.system.resourcesLoaded && camId) {
+            pullSnapshot(`/api/cameras/${camId}/snapshot?t=${Date.now()}`, img);
+          } else if (isMulticamMode) {
+            pullSnapshot(`/api/pose/snapshot/original?t=${Date.now()}`, img);
+          }
+        }, 900);
+      } else if (!multicamShouldRun && state.polling.multicam) {
+        clearInterval(state.polling.multicam);
+        state.polling.multicam = null;
+        if (!isRunning) {
+          $('#slotSnap1').src = DUMMY;
+          $('#slotEmpty1').classList.remove('hidden');
+          $('#slotSnap1').classList.add('hidden');
+        }
+      }
     }
 
     function pushEventLog(ev, cam = '--', timeStr = null) { state.eventLogs.unshift({ time: timeStr || nowStr(), event: ev, cam }); if (state.eventLogs.length > state.maxLogs) state.eventLogs.pop(); renderLeftEventTable(); }
@@ -567,21 +665,21 @@
         const data = await res.json();
         if (!res.ok || data.ok === false) throw new Error(data.error || 'Failed to load multicam folder');
 
-        const items = (data.clips || []).map((c, idx) => ({
-          id: `${c.name || 'clip'}-${idx}`,
-          name: c.name || `clip_${idx}`,
-          cam: c.cam || 'UNK',
-          url: c.url || '',
-          status: 'ready',
-          progress: 0,
-          sourceType: 'multicam_server',
-        }));
-
+        const items = buildClipItems(data.workspace?.staged_camera_map || data.clips || []);
         state.clips = items;
         state.system.folderLoaded = true;
         state.system.resourcesLoaded = false;
         state.system.mode = 'multicam_folder';
-        updateRecLamp('ready');
+        applyWorkspaceState(data.workspace || {
+          mode: 'multicam_folder',
+          running: false,
+          current_clip: null,
+          current_cam: null,
+          output_dir: 'output_pose',
+          queued: data.total || items.length,
+          staged_clips: items.map((c) => c.name),
+          staged_camera_map: items,
+        }, 'load');
         renderClipQueue();
         if (items.length) selectClipPreview(items[0].id);
         pushEventLog(`Loaded ${items.length} multicam clips (server)`, 'MC');
@@ -626,45 +724,50 @@
     }
     function renderClipQueue() {
       const q = $('#clipQueue');
-      if (!state.clips.length) { q.innerHTML = '<div class="text-center text-slate-300 text-[10px] py-4">Chưa có clip</div>'; return; }
-      q.innerHTML = state.clips.map(c => `<div class="bg-slate-50 rounded-lg p-2 text-[10px] border" data-id="${c.id}"><div class="font-bold truncate">${c.name}</div><div class="flex justify-between"><span>${c.cam}</span><span class="pill ${c.status === 'ready' ? 'pill-green' : 'pill-blue'}">${c.status}</span></div><div class="w-full bg-gray-200 h-1 mt-1"><div class="bg-pink-500 h-1" style="width:${c.progress || 0}%"></div></div><button class="preview-clip-btn text-blue-600 text-[9px] mt-1" data-id="${c.id}">Preview</button></div>`).join('');
+      if (!state.clips.length) { q.innerHTML = '<div class="text-center text-slate-300 text-[10px] py-4">Ch??a c?? clip</div>'; return; }
+      q.innerHTML = state.clips.map(c => {
+        const activeClass = state.selectedClip === c.id ? ' ring-2 ring-pink-400 bg-pink-50' : '';
+        return `<div class="bg-slate-50 rounded-lg p-2 text-[10px] border${activeClass}" data-id="${c.id}"><div class="font-bold truncate">${c.name}</div><div class="flex justify-between"><span>${c.cam}</span><span class="pill ${c.status === 'ready' ? 'pill-green' : 'pill-blue'}">${c.status}</span></div><div class="w-full bg-gray-200 h-1 mt-1"><div class="bg-pink-500 h-1" style="width:${c.progress || 0}%"></div></div><button class="preview-clip-btn text-blue-600 text-[9px] mt-1" data-id="${c.id}">Preview</button></div>`;
+      }).join('');
       q.querySelectorAll('.preview-clip-btn').forEach(btn => btn.onclick = () => selectClipPreview(btn.dataset.id));
     }
     function selectClipPreview(id) {
       const clip = state.clips.find(c => c.id === id);
       if (!clip) return;
+      state.selectedClip = id;
+      renderClipQueue();
       const video = $('#previewVideoLocal'), empty = $('#previewVideoEmpty');
       empty.classList.add('hidden'); video.classList.remove('hidden');
       video.src = clip.url; video.play().catch(e => console.log);
       $('#outputDirLabel').innerText = `Playing: ${clip.name}`;
     }
-    // ---------------------------- ORIGINAL / PROCESSED TOGGLE (camera riêng) ----------------------------
+    // ---------------------------- ORIGINAL / PROCESSED TOGGLE (camera ri??ng) ----------------------------
     function toggleOriginal() {
       const img = $('#originalVideo'), empty = $('#originalVideoEmpty'), btn = $('#originalToggleBtn');
       if (state.preview.originalVisible) {
         state.preview.originalVisible = false;
-        clearInterval(state.polling.original); state.polling.original = null;
+        if (state.polling.original) clearInterval(state.polling.original); state.polling.original = null;
         img.classList.add('hidden'); empty.classList.remove('hidden');
         btn.innerHTML = '<i class="fas fa-eye-slash"></i>'; btn.className = 'cam-toggle off';
       } else {
         state.preview.originalVisible = true;
         empty.classList.add('hidden'); img.classList.remove('hidden');
-        if (!state.polling.original) state.polling.original = setInterval(() => { pullSnapshot(`/api/pose/snapshot/original?t=${Date.now()}`, $('#originalVideo')); }, 500);
         btn.innerHTML = '<i class="fas fa-eye"></i>'; btn.className = 'cam-toggle on';
+        syncPreviewPolling();
       }
     }
     function toggleProcessed() {
       const img = $('#processedVideo'), empty = $('#processedVideoEmpty'), btn = $('#processedToggleBtn');
       if (state.preview.processedVisible) {
         state.preview.processedVisible = false;
-        clearInterval(state.polling.processed); state.polling.processed = null;
+        if (state.polling.processed) clearInterval(state.polling.processed); state.polling.processed = null;
         img.classList.add('hidden'); empty.classList.remove('hidden');
         btn.innerHTML = '<i class="fas fa-eye-slash"></i>'; btn.className = 'cam-toggle off';
       } else {
         state.preview.processedVisible = true;
         empty.classList.add('hidden'); img.classList.remove('hidden');
-        if (!state.polling.processed) state.polling.processed = setInterval(() => { pullSnapshot(`/api/pose/snapshot/processed?t=${Date.now()}`, $('#processedVideo')); }, 500);
         btn.innerHTML = '<i class="fas fa-eye"></i>'; btn.className = 'cam-toggle on';
+        syncPreviewPolling();
       }
     }
     // ---------------------------- WEBCAM TOGGLE (Registration) ----------------------------
@@ -689,8 +792,8 @@
     }
     // ---------------------------- START / STOP PIPELINE ----------------------------
     async function startPipeline() {
-      if (state.system.running) { showToast('Pipeline đang chạy', 'warning'); return; }
-      if (!state.system.resourcesLoaded && !state.system.folderLoaded) { showToast('Chưa có nguồn (resources.txt hoặc folder)', 'error'); return; }
+      if (state.system.running) { showToast('Pipeline ??ang ch???y', 'warning'); return; }
+      if (!state.system.resourcesLoaded && !state.system.folderLoaded) { showToast('Ch??a c?? ngu???n (resources.txt ho???c folder)', 'error'); return; }
       const mode = state.system.resourcesLoaded ? 'rtsp' : 'multicam_folder';
       const payload = { mode, cameras: state.cameras.rtspList.map(c => c.cam_id) };
       try {
@@ -699,19 +802,22 @@
           : await fetch('/api/workspace/start_multicam', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         state.system.running = true; updateRecLamp('recording'); updateMainStatus('RUNNING');
-        startStatusPolling();
+        startWorkspacePolling();
+        syncPreviewPolling();
         pushEventLog(`Pipeline started (${mode})`, 'SYS');
-        if (state.preview.originalVisible && !state.polling.original) toggleOriginal();
-        if (state.preview.processedVisible && !state.polling.processed) toggleProcessed();
       } catch (err) { showToast(err.message, 'error'); }
     }
     async function stopAll() {
       if (!state.system.running) return;
       await fetch('/api/workspace/stop', { method: 'POST' }).catch(() => { });
       state.system.running = false; updateRecLamp('ready'); updateMainStatus('STANDBY');
-      stopStatusPolling();
+      stopWorkspacePolling();
+      syncPreviewPolling();
       pushEventLog('Pipeline stopped', 'SYS');
-      clearInterval(state.polling.original); clearInterval(state.polling.processed); state.polling.original = state.polling.processed = null;
+      if (state.polling.original) clearInterval(state.polling.original);
+      if (state.polling.processed) clearInterval(state.polling.processed);
+      if (state.polling.multicam) clearInterval(state.polling.multicam);
+      state.polling.original = state.polling.processed = state.polling.multicam = null;
     }
     // ---------------------------- REGISTRATION FLOW ----------------------------
     async function openRegistrationFlow() {
@@ -779,6 +885,13 @@
 
     socket.on('connect', () => pushEventLog('Socket connected', 'SYS'));
     socket.on('connect_error', (e) => pushEventLog(`Socket error: ${e?.message || e}`, 'SYS'));
+    socket.on('workspace_state', (d) => {
+      applyWorkspaceState(d, 'socket');
+      if (Array.isArray(d?.staged_camera_map) && d.staged_camera_map.length) {
+        state.clips = buildClipItems(d.staged_camera_map);
+        renderClipQueue();
+      }
+    });
     socket.on('registration_progress', (d) => {
       pushEventLog(d?.message || 'registration_progress', 'REG', d?.time);
       if (d?.progress !== undefined && d?.progress !== null) $('#regTotalPct').innerText = `${d.progress}%`;
@@ -806,6 +919,8 @@
         progress: 0,
         sourceType: 'rtsp_short'
       });
+      state.workspace.currentClip = name;
+      state.workspace.currentCam = d?.cam_id || 'UNK';
       renderClipQueue();
       pushEventLog(`New clip: ${name}`, d?.cam_id || 'SYS');
     });
@@ -846,7 +961,7 @@
       try {
         const [camsRes, statusRes] = await Promise.all([
           fetch('/api/config/cameras'),
-          fetch('/api/pose/status'),
+          fetch('/api/workspace/status'),
         ]);
 
         if (camsRes.ok) {
@@ -859,11 +974,9 @@
 
         if (statusRes.ok) {
           const st = await statusRes.json();
-          state.system.running = !!st.running;
-          updateMainStatus(state.system.running ? 'RUNNING' : 'STANDBY');
-          updateRecLamp(state.system.running ? 'recording' : 'ready');
-          if (state.system.running) startStatusPolling();
-          else stopStatusPolling();
+          applyWorkspaceState(st, 'boot');
+          if (state.system.running) startWorkspacePolling();
+          else stopWorkspacePolling();
         }
 
         pushEventLog('Synced from backend', 'SYS');
@@ -883,8 +996,9 @@
       if (img) img.onerror = () => { img.src = DUMMY; };
     });
     // Đảm bảo các preview polling khởi tạo đúng trạng thái
-    syncFromBackend();
-    loadMulticamDefault();
+    syncFromBackend().then(() => {
+      if (!state.workspace.running && !state.clips.length) loadMulticamDefault();
+    });
     toggleOriginal();
     toggleProcessed();
   </script>

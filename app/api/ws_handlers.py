@@ -38,6 +38,33 @@ def emit_metric_log(
     socketio.emit("metric_log", payload)
 
 
+def emit_workspace_state(
+    *,
+    mode: str,
+    running: bool,
+    current_clip: str | None = None,
+    current_cam: str | None = None,
+    output_dir: str | None = None,
+    queued: int = 0,
+    staged_clips: list[str] | None = None,
+    staged_camera_map: list[dict] | None = None,
+):
+    payload = {
+        "time": _now_time_string(),
+        "mode": mode,
+        "running": running,
+        "current_clip": current_clip,
+        "current_cam": current_cam,
+        "output_dir": output_dir,
+        "queued": queued,
+    }
+    if staged_clips is not None:
+        payload["staged_clips"] = staged_clips
+    if staged_camera_map is not None:
+        payload["staged_camera_map"] = staged_camera_map
+    socketio.emit("workspace_state", payload)
+
+
 def emit_camera_status(cam_id: str, *, fps=None, frame=None, conf=None, status="IDLE"):
     socketio.emit(
         "camera_status",
@@ -68,6 +95,7 @@ def emit_clip_saved(*, filename: str, cam_id: str, path: str, preview_url: str |
             "filename": filename,
             "cam_id": cam_id,
             "path": path,
+            "rel_path": path,
             "preview_url": preview_url,
         },
     )

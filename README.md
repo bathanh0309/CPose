@@ -102,14 +102,23 @@ Capstone_Project/
 │   ├── output_labels/              # File nhãn JSON sinh ra từ Phase 2
 │   ├── output_pose/                # Kết quả video và JSON từ Phase 3
 │   └── research_runs/              # Nhật ký và kết quả các lần chạy nghiên cứu
-├── models/                         # TRỌNG SỐ MÔ HÌNH (Product & Research)
-├── static/                         # GIAO DIỆN NGƯỜI DÙNG (HTML/JS/CSS)
-├── main.py                         # Điểm khởi đầu của ứng dụng Flask Dashboard
-├── requirements.txt                # Danh sách thư viện cần cài đặt
-├── AGENTS.md                       # Bản quy định bắt buộc cho AI trợ giúp dự án
-├── PIPELINE.md                     # Tài liệu quy trình 3 giai đoạn xử lý
-├── TFCS-PAR.md                     # Đặc tả thuật toán tracking xuyên camera
-└── README.md                       # Tài liệu hướng dẫn sử dụng tổng quát
+|-- models/                         # Core AI models (Product & Research)
+|-- static/                         # UI assets (HTML/JS/CSS + Tailwind build)
+|   |-- index.html                  # Main dashboard UI for Flask/SocketIO
+|   |-- tailwind.input.css          # Tailwind input used to build local CSS
+|   `-- tailwind.css                # Built CSS used by the dashboard at runtime
+|-- main.py                         # Flask dashboard entry point
+|-- package.json                    # Frontend scripts and Node.js dependencies
+|-- package-lock.json               # Locked Node.js dependency versions
+|-- requirements.txt                # Python dependencies to install
+|-- resources.txt                   # Camera source list for multicam/RTSP
+|-- run-product.bat                 # Start product dashboard and build CSS
+|-- run-push-git.bat                # Commit and push code to GitHub
+|-- run-research.bat                # Start the research environment
+|-- AGENTS.md                       # Mandatory AI assistant rules for the project
+|-- PIPELINE.md                     # Documentation for the 3-stage pipeline
+|-- TFCS-PAR.md                     # Cross-camera tracking technical spec
+`-- README.md                       # General usage documentation
 
 ```
 

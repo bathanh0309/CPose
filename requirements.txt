@@ -73,7 +73,7 @@ Pillow==11.0.0               # Image processing, vẽ text overlay
 # [9] CONFIGURATION & UTILITIES
 # -----------------------------------------------------------------------------
 pyyaml==6.0.2                # Đọc config.yaml, research.yaml, model_registry.yaml
-python-dotenv==1.0.1         # Load biến môi trường từ .env (dev local)
+python-dotenv==1.2.2         # Load biến môi trường từ .env (dev local)
 rich==13.9.4                 # Pretty print log, progress bar trong CLI
 click==8.1.8                 # CLI argument parser (dùng trong tools/ và scripts/)
 tqdm==4.67.1                 # Progress bar cho vòng lặp dài (experiment runner)

@@ -7,6 +7,10 @@ echo === Git push script for MrPhu/MultiCam_Surveillance_App ===
 
 set "TARGET_REPO_URL=https://github.com/MrPhu/MultiCam_Surveillance_App.git"
 set "TARGET_BRANCH=feat/research-ADL"
+rem Only source and config files are included here; generated media stays out of the push.
+set "CODE_ONLY_INDEX=%TEMP%\cp_code_only_%RANDOM%_%RANDOM%.idx"
+set "CODE_ONLY_PATHS=.gitignore README.md main.py package.json package-lock.json requirements.txt run-product.bat run-push-CP.bat run-push-git.bat run-research.bat app cpose configs research shared static tools"
+set "SNAPSHOT_MESSAGE=feat: code-only sync snapshot"
 
 git --version >nul 2>&1
 if errorlevel 1 (
@@ -36,33 +40,70 @@ if "%CUR_BRANCH%"=="" set "CUR_BRANCH=main"
 
 echo Current branch: %CUR_BRANCH%
 echo Target branch: %TARGET_BRANCH%
+echo Code-only paths: %CODE_ONLY_PATHS%
 
-git add -A
+set "HAS_CODE_CHANGES="
+for /f "delims=" %%i in ('git status --porcelain --untracked-files=normal -- %CODE_ONLY_PATHS%') do (
+  set "HAS_CODE_CHANGES=1"
+  goto :code_changes_detected
+)
+:code_changes_detected
 
-git diff --cached --quiet
-if not errorlevel 1 (
-  echo No new changes to commit.
-) else (
-  git commit -m "feat[update app Pose vs ADL ]"
-  if errorlevel 1 (
-    echo [ERROR] Commit failed.
-    echo Check your Git user.name and user.email settings, or inspect the staged changes.
-    pause
-    exit /b 1
-  )
+if not defined HAS_CODE_CHANGES (
+  echo No code changes to push.
+  goto :cleanup_ok
 )
 
-echo Pushing local content to origin/%TARGET_BRANCH% without pull...
-git push -u origin %CUR_BRANCH%:%TARGET_BRANCH% --force
+echo Building code-only snapshot...
+set "GIT_INDEX_FILE=%CODE_ONLY_INDEX%"
+git read-tree --empty
+if errorlevel 1 (
+  echo [ERROR] Failed to initialize the temporary Git index.
+  goto :cleanup_fail
+)
+
+git add -A -- %CODE_ONLY_PATHS%
+if errorlevel 1 (
+  echo [ERROR] Failed to stage the code-only paths.
+  goto :cleanup_fail
+)
+
+for /f %%i in ('git write-tree') do set "TREE_SHA=%%i"
+if "%TREE_SHA%"=="" (
+  echo [ERROR] Failed to create the snapshot tree.
+  goto :cleanup_fail
+)
+
+for /f %%i in ('git commit-tree %TREE_SHA% -m "%SNAPSHOT_MESSAGE%"') do set "SNAPSHOT_COMMIT=%%i"
+if "%SNAPSHOT_COMMIT%"=="" (
+  echo [ERROR] Failed to create the snapshot commit.
+  goto :cleanup_fail
+)
+
+set "GIT_INDEX_FILE="
+
+echo Pushing code-only snapshot to origin/%TARGET_BRANCH% without pull...
+git push origin %SNAPSHOT_COMMIT%:refs/heads/%TARGET_BRANCH% --force
 
 if errorlevel 1 (
   echo.
   echo [ERROR] Push failed.
   echo If GitHub asks for authentication, use a Personal Access Token instead of password.
-  pause
-  exit /b 1
+  goto :cleanup_fail
 )
 
 echo.
-echo [DONE] Push completed successfully.
+echo [DONE] Code-only push completed successfully.
+goto :cleanup_ok
+
+:cleanup_fail
+set "GIT_INDEX_FILE="
+if exist "%CODE_ONLY_INDEX%" del /f /q "%CODE_ONLY_INDEX%" >nul 2>&1
 pause
+exit /b 1
+
+:cleanup_ok
+set "GIT_INDEX_FILE="
+if exist "%CODE_ONLY_INDEX%" del /f /q "%CODE_ONLY_INDEX%" >nul 2>&1
+pause
+exit /b 0

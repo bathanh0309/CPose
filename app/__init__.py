@@ -1,5 +1,8 @@
 from __future__ import annotations
+
+import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # 1. Define Paths
@@ -36,6 +39,9 @@ for runtime_dir in [CONFIG_DIR, RAW_VIDEOS_DIR, OUTPUT_DIR, OUTPUT_POSE_DIR, MOD
 # 3. Config Setup
 RESOURCES_FILE = CONFIG_DIR / "resources.txt"
 UNIFIED_CONFIG_FILE = Path(__file__).resolve().parent / "config.yaml"
+APP_CONFIG_ENV_VAR = "CPOSE_APP_CONFIG"
+DASHBOARD_URL_ENV_VAR = "CPOSE_DASHBOARD_URL"
+CORS_ORIGINS_ENV_VAR = "CPOSE_CORS_ORIGINS"
 
 if not RESOURCES_FILE.exists():
     RESOURCES_FILE.write_text("# RTSP URLs, one per line\n", encoding="utf-8")
@@ -43,21 +49,50 @@ if not RESOURCES_FILE.exists():
 # Lazy-loaded singleton for config
 _GLOBAL_CONFIG = None
 
+
+def _resolve_app_config_path() -> Path:
+    raw_path = os.environ.get(APP_CONFIG_ENV_VAR, "").strip()
+    if not raw_path:
+        return UNIFIED_CONFIG_FILE
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = BASE_DIR / candidate
+    return candidate
+
+
+def _apply_runtime_overrides(config):
+    dashboard_url = os.environ.get(DASHBOARD_URL_ENV_VAR, "").strip()
+    if dashboard_url:
+        config.project.dashboard_url = dashboard_url
+
+    cors_origins = os.environ.get(CORS_ORIGINS_ENV_VAR, "").strip()
+    if cors_origins:
+        config.server.cors_origins = [
+            origin.strip()
+            for origin in cors_origins.split(",")
+            if origin.strip()
+        ]
+    return config
+
+
 def get_config():
     """Retrieve validated Pydantic config."""
     global _GLOBAL_CONFIG
     if _GLOBAL_CONFIG is None:
         from app.bootstrap.config_loader import load_config
-        _GLOBAL_CONFIG = load_config(UNIFIED_CONFIG_FILE)
+
+        _GLOBAL_CONFIG = _apply_runtime_overrides(load_config(_resolve_app_config_path()))
     return _GLOBAL_CONFIG
+
 
 # 4. App Factory Proxy
 def create_app():
     """Canonical entry point to create the Flask application."""
     from app.bootstrap.app_factory import create_app as _create_app
-    
+
     config = get_config()
     return _create_app(static_dir=STATIC_DIR, config=config)
+
 
 from app.bootstrap.app_factory import socketio
 

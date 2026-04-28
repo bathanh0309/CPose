@@ -1,0 +1,8 @@
+tunnel: f09dc95d-e3e5-4102-99e9-02fdf29edc1a
+credentials-file: C:\Users\LENOVO\.cloudflared\f09dc95d-e3e5-4102-99e9-02fdf29edc1a.json
+ingress:
+  - hostname: lephongphu.cloud
+    service: http://localhost:5000
+  - hostname: www.lephongphu.cloud
+    service: http://localhost:5000
+  - service: http_status:404

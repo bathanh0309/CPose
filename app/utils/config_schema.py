@@ -155,7 +155,7 @@ class ServerConfig(BaseModel):
     port: int = 5000
     debug: bool = False
     socket_async_mode: str = "threading"
-    cors_origins: str = "*"
+    cors_origins: str | List[str] = "*"
     secret_key: str = "cpose-dev-secret"
 
 class LoggingConfig(BaseModel):

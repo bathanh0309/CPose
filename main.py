@@ -1,12 +1,13 @@
 """
-CPose — main.py
-Main Entry Point. Orchestrates startup and runs the server.
+CPose - main.py
+Main entry point. Orchestrates startup and runs the server.
 """
-import logging
-import webbrowser
-import threading
 
-from app import create_app, socketio, get_config
+import logging
+import threading
+import webbrowser
+
+from app import create_app, get_config, socketio
 
 # Setup console logging
 logging.basicConfig(
@@ -20,28 +21,29 @@ logger = logging.getLogger("[Main]")
 # Create app instance using the factory
 flask_app = create_app()
 
+
 def _open_browser():
     """Wait for server startup and open the dashboard."""
     import time
+
     time.sleep(2.0)
-    webbrowser.open("http://localhost:5000")
+    webbrowser.open(get_config().project.dashboard_url)
+
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  CPose — AI-Powered Person Recognition & Tracking")
-    print("  Dashboard: http://localhost:5000")
-    print("=" * 60)
-    
-    # Auto-open browser in a separate thread
-    threading.Thread(target=_open_browser, daemon=True).start()
-    
-    # Get server settings from config
     config = get_config()
-    
-    # Start the SocketIO server
+    dashboard_url = config.project.dashboard_url
+
+    print("=" * 60)
+    print("  CPose - AI-Powered Person Recognition & Tracking")
+    print(f"  Dashboard: {dashboard_url}")
+    print("=" * 60)
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+
     socketio.run(
-        flask_app, 
-        host=config.server.host, 
-        port=config.server.port, 
-        debug=config.server.debug
+        flask_app,
+        host=config.server.host,
+        port=config.server.port,
+        debug=config.server.debug,
     )

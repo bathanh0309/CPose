@@ -54,6 +54,7 @@ data/multicam/*
 data/output_process/
 data/multicam_uploads/
 docs/**/*.pdf
+backend/outputs/
 
 .vscode/
 .idea/

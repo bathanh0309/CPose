@@ -68,3 +68,5 @@ docs/latex/*.png
 resources.txt
 
 node_modules/
+fixbug/
+research_outputs/

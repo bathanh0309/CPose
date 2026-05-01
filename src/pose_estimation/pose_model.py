@@ -8,9 +8,11 @@ from src.pose_estimation.config import COCO_KEYPOINT_NAMES
 
 
 class PoseModel:
-    def __init__(self, model_path: str | Path, conf: float = 0.5) -> None:
+    def __init__(self, model_path: str | Path, conf: float = 0.5, keypoint_conf: float = 0.30, min_visible_keypoints: int = 8) -> None:
         self.model = get_yolo_model(str(model_path))
         self.conf = conf
+        self.keypoint_conf = keypoint_conf
+        self.min_visible_keypoints = min_visible_keypoints
 
     def estimate(self, frame: Any) -> list[dict]:
         results = self.model.predict(frame, conf=self.conf, classes=[0], verbose=False)
@@ -39,11 +41,18 @@ class PoseModel:
                     "y": float(point[1]),
                     "confidence": confidence,
                 })
+            visible_count = sum(1 for item in person_keypoints if float(item["confidence"]) >= self.keypoint_conf)
+            visible_ratio = visible_count / len(person_keypoints) if person_keypoints else 0.0
+            failure_reason = "OK" if visible_count >= self.min_visible_keypoints else "LOW_KEYPOINT_VISIBILITY"
             persons.append({
                 "track_id": None,
                 "bbox": bbox,
+                "bbox_confidence": float(box.conf[0].detach().cpu().item()) if box.conf is not None else None,
                 "keypoints": person_keypoints,
                 "is_confirmed": False,
-                "failure_reason": "NO_MATCHED_TRACK",
+                "visible_keypoint_count": visible_count,
+                "visible_keypoint_ratio": visible_ratio,
+                "pose_track_iou": None,
+                "failure_reason": failure_reason,
             })
         return persons

@@ -12,6 +12,7 @@ def evaluate(run_dir: Path, gt_dir: Path) -> dict[str, Any]:
     rows = [load_json(path, {}) for path in metric_files(run_dir, "tracking_metrics.json")]
     result.update({
         "idf1": None,
+        "idf1_status": "not_implemented",
         "id_switch_count": None,
         "fragmentation_count": None,
         "track_purity": None,

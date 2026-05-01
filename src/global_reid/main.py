@@ -22,11 +22,7 @@ def main() -> None:
     parser.add_argument("--topology", default=None)
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
-    for name in ("manifest", "topology", "config"):
-        value = getattr(args, name)
-        if value:
-            print(f"[WARN] --{name} is accepted for CLI compatibility; module uses local defaults: {value}")
-    process_folder(args.video_dir or args.input, args.output, args.pose_dir, args.adl_dir)
+    process_folder(args.video_dir or args.input, args.output, args.pose_dir, args.adl_dir, manifest=args.manifest, topology=args.topology)
 
 
 if __name__ == "__main__":

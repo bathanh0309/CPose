@@ -11,10 +11,9 @@ def evaluate(run_dir: Path, gt_dir: Path) -> dict[str, Any]:
     result = base_result("reid", has_gt)
     rows = [load_json(path, {}) for path in metric_files(run_dir, "reid_metrics.json")]
     result.update({
-        "global_id_accuracy": None,
         "cross_camera_idf1": None,
-        "false_split_rate": None,
-        "false_merge_rate": None,
+        "false_split_count": None,
+        "false_merge_count": None,
         "transfer_success_rate": None,
         "blind_zone_recovery_rate": None,
         "clothing_change_preservation": None,
@@ -22,4 +21,12 @@ def evaluate(run_dir: Path, gt_dir: Path) -> dict[str, Any]:
         "unknown_rate": None,
         "evaluated_files": len(rows),
     })
+    if has_gt:
+        result.update({
+            "global_id_accuracy": None,
+            "false_split_count": None,
+            "false_merge_count": None,
+            "transfer_success_rate": None,
+            "blind_zone_recovery_rate": None,
+        })
     return result

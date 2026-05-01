@@ -28,6 +28,9 @@ def process_video(
     tracker: str = "bytetrack.yaml",
     conf: float = 0.5,
     detection_dir: str | Path | None = None,
+    min_hits: int = 3,
+    max_age: int = 30,
+    window_size: int = 30,
 ) -> dict:
     video_path = resolve_path(video_path)
     video_output_dir = ensure_dir(resolve_path(output_dir) / video_path.stem)
@@ -40,8 +43,8 @@ def process_video(
 
     detection_json = _detection_json_for(video_path, detection_dir)
     detection_records = load_json(detection_json, []) if detection_json else []
-    simple_tracker = SimpleIoUTracker() if detection_records else None
-    yolo_tracker = None if detection_records else YoloByteTracker(resolve_tracking_model(model), conf, tracker)
+    simple_tracker = SimpleIoUTracker(min_hits=min_hits, max_missing=max_age, window_size=window_size) if detection_records else None
+    yolo_tracker = None if detection_records else YoloByteTracker(resolve_tracking_model(model), conf, tracker, min_hits, max_age, window_size)
 
     records: list[dict] = []
     frame_id = 0
@@ -75,7 +78,7 @@ def process_video(
     metrics = build_tracking_metrics(records, timer.elapsed(), str(overlay_path), str(json_path))
     metrics.update({
         "metric_type": "proxy",
-        "model_info": {"model": str(resolve_tracking_model(model)), "tracker": tracker, "confidence": conf},
+        "model_info": {"model": str(resolve_tracking_model(model)), "tracker": tracker, "confidence": conf, "min_hits": min_hits, "max_age": max_age},
         "input_video": str(video_path),
         "camera_id": video_path.stem.split("_")[0],
         "start_time": None,
@@ -96,6 +99,9 @@ def process_folder(
     tracker: str = "bytetrack.yaml",
     conf: float = 0.5,
     detection_dir: str | Path | None = None,
+    min_hits: int = 3,
+    max_age: int = 30,
+    window_size: int = 30,
 ) -> list[dict]:
     videos = list_video_files(input_dir)
     output_dir = ensure_dir(output_dir)
@@ -114,7 +120,7 @@ def process_folder(
     for index, video in enumerate(videos, 1):
         print_video_progress(index, len(videos), video)
         try:
-            results.append(process_video(video, output_dir, model, tracker, conf, detection_dir))
+            results.append(process_video(video, output_dir, model, tracker, conf, detection_dir, min_hits, max_age, window_size))
         except Exception as exc:
             print(f"ERROR processing {video.name}: {exc}")
     print_header("SUMMARY")

@@ -1,9 +1,29 @@
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from src.common.errors import ErrorCode
 from src.common.paths import resolve_path
+
+
+@dataclass(slots=True)
+class ResolvedModel:
+    section: str
+    name: str | None
+    path: Path | None
+    requested_path: str | None
+    fallback_used: bool
+    fallback_name: str | None
+    conf: float | None
+    params: dict[str, Any]
+    failure_reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["path"] = str(self.path) if self.path is not None else None
+        return payload
 
 
 def load_model_registry(path: str | Path | None) -> dict[str, Any]:
@@ -20,14 +40,84 @@ def load_model_registry(path: str | Path | None) -> dict[str, Any]:
         return {}
 
 
-def resolve_model_path(registry: dict[str, Any], section: str) -> Path | None:
-    item = registry.get(section, {})
-    candidates = [item.get("path"), *item.get("fallback", [])]
-    for candidate in candidates:
+def get_section(registry: dict[str, Any], section: str, default: dict[str, Any] | None = None) -> dict[str, Any]:
+    value = registry.get(section, default or {})
+    return value if isinstance(value, dict) else {}
+
+
+def _candidate_to_path(candidate: str | Path | None) -> Path | None:
+    if not candidate:
+        return None
+    path = Path(str(candidate))
+    if path.is_absolute():
+        return path
+    resolved = resolve_path(path)
+    return resolved if resolved.exists() else path
+
+
+def resolve_model_path(registry: dict[str, Any], section: str) -> ResolvedModel:
+    item = get_section(registry, section)
+    requested = item.get("model") or item.get("path")
+    candidates = [requested, *(item.get("fallback") or [])]
+    for index, candidate in enumerate(candidates):
         if not candidate:
             continue
-        path = resolve_path(candidate)
-        if path.exists():
-            return path
+        path = _candidate_to_path(candidate)
+        if path is None:
+            continue
+        resolved_abs = resolve_path(path) if not path.is_absolute() else path
+        if resolved_abs.exists():
+            return ResolvedModel(
+                section=section,
+                name=str(candidate),
+                path=resolved_abs,
+                requested_path=str(requested) if requested else None,
+                fallback_used=index > 0,
+                fallback_name=str(candidate) if index > 0 else None,
+                conf=float(item["conf"]) if item.get("conf") is not None else None,
+                params={k: v for k, v in item.items() if k not in {"model", "path", "fallback"}},
+                failure_reason=ErrorCode.OK.value,
+            )
+        if Path(str(candidate)).name == str(candidate):
+            return ResolvedModel(
+                section=section,
+                name=str(candidate),
+                path=Path(str(candidate)),
+                requested_path=str(requested) if requested else None,
+                fallback_used=index > 0,
+                fallback_name=str(candidate) if index > 0 else None,
+                conf=float(item["conf"]) if item.get("conf") is not None else None,
+                params={k: v for k, v in item.items() if k not in {"model", "path", "fallback"}},
+                failure_reason=ErrorCode.OK.value,
+            )
     print(f"[WARN] No model path found for registry section: {section}")
-    return None
+    return ResolvedModel(
+        section=section,
+        name=None,
+        path=None,
+        requested_path=str(requested) if requested else None,
+        fallback_used=False,
+        fallback_name=None,
+        conf=float(item["conf"]) if item.get("conf") is not None else None,
+        params={k: v for k, v in item.items() if k not in {"model", "path", "fallback"}},
+        failure_reason=ErrorCode.MODEL_MISSING.value,
+    )
+
+
+def build_effective_runtime_config(registry: dict[str, Any], manifest: Any, topology: Any, args: Any) -> dict[str, Any]:
+    sections = [
+        "human_detection",
+        "human_tracking",
+        "pose_estimation",
+        "adl_recognition",
+        "face",
+        "global_reid",
+    ]
+    return {
+        "runtime": get_section(registry, "runtime"),
+        "models": {section: resolve_model_path(registry, section).to_dict() for section in sections},
+        "sections": {section: get_section(registry, section) for section in sections},
+        "manifest_video_count": len(manifest) if manifest is not None else 0,
+        "topology_transition_count": len(getattr(topology, "transitions", []) or []),
+        "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()} if hasattr(args, "__dict__") else {},
+    }

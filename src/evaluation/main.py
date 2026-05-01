@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 import argparse
 from pathlib import Path
 from typing import Any
 
+from src import ANNOTATIONS_DIR, OUTPUT_DIR, print_module_console
 from src.evaluation import adl_eval, detection_eval, pose_eval, reid_eval, tracking_eval
 from src.evaluation.metrics import save_csv, save_json
 
@@ -36,10 +41,11 @@ def evaluate_all(run_dir: str | Path, gt_dir: str | Path, output_dir: str | Path
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate CPose pipeline outputs")
-    parser.add_argument("--outputs", required=True)
-    parser.add_argument("--gt", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--outputs", default=str(OUTPUT_DIR))
+    parser.add_argument("--gt", default=str(ANNOTATIONS_DIR), help="Train/val annotation root")
+    parser.add_argument("--out", default=str(OUTPUT_DIR / "evaluation"))
     args = parser.parse_args()
+    print_module_console("evaluation", args)
     evaluate_all(args.outputs, args.gt, args.out)
 
 

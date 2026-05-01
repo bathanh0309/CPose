@@ -7,7 +7,7 @@ import cv2
 from src.common.console import print_header, print_metric_table, print_saved, print_video_progress
 from src.common.metrics import Timer, load_json, save_json
 from src.common.paths import ensure_dir, resolve_path
-from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video
+from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video, show_frame_preview
 from src.common.visualization import draw_track
 from src.human_tracking.config import resolve_tracking_model
 from src.human_tracking.metrics import build_tracking_metrics
@@ -31,6 +31,7 @@ def process_video(
     min_hits: int = 3,
     max_age: int = 30,
     window_size: int = 30,
+    preview: bool = True,
 ) -> dict:
     video_path = resolve_path(video_path)
     video_output_dir = ensure_dir(resolve_path(output_dir) / video_path.stem)
@@ -69,11 +70,13 @@ def process_video(
                 "failure_reason": "OK",
             })
             writer.write(frame)
+            if preview:
+                show_frame_preview(f"CPose Tracking | {video_path.stem}", frame)
             frame_id += 1
     finally:
         capture.release()
         writer.release()
-        cv2.destroyAllWindows()
+        cv2.destroyWindow(f"CPose Tracking | {video_path.stem}")
 
     metrics = build_tracking_metrics(records, timer.elapsed(), str(overlay_path), str(json_path))
     metrics.update({
@@ -102,6 +105,7 @@ def process_folder(
     min_hits: int = 3,
     max_age: int = 30,
     window_size: int = 30,
+    preview: bool = True,
 ) -> list[dict]:
     videos = list_video_files(input_dir)
     output_dir = ensure_dir(output_dir)
@@ -120,7 +124,7 @@ def process_folder(
     for index, video in enumerate(videos, 1):
         print_video_progress(index, len(videos), video)
         try:
-            results.append(process_video(video, output_dir, model, tracker, conf, detection_dir, min_hits, max_age, window_size))
+            results.append(process_video(video, output_dir, model, tracker, conf, detection_dir, min_hits, max_age, window_size, preview))
         except Exception as exc:
             print(f"ERROR processing {video.name}: {exc}")
     print_header("SUMMARY")

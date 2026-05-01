@@ -90,3 +90,44 @@ def iter_video_frames(video_path: str | Path) -> Iterator[tuple[np.ndarray, floa
             frame_id += 1
     finally:
         capture.release()
+
+
+_PREVIEW_AVAILABLE: bool | None = None  # None = not yet checked
+
+
+def show_frame_preview(window_name: str, frame: np.ndarray) -> bool:
+    """Show *frame* in an OpenCV window during processing.
+
+    Returns:
+        True  — user pressed ``q`` or ``Esc``: caller should stop showing
+                (processing continues normally, MP4 still saved).
+        False — window is alive, keep going.
+
+    Behaviour:
+        - First call tests whether a display is available.  If not, one
+          ``[WARN]`` line is printed and the function becomes a no-op for
+          the rest of the run (CLAUDE.md §11).
+        - Never raises; never crashes the pipeline.
+    """
+    global _PREVIEW_AVAILABLE
+    if _PREVIEW_AVAILABLE is False:
+        return False
+    try:
+        cv2.imshow(window_name, frame)
+        # waitKey(16) ≈ 60 fps cap; also pumps the Win32/X11 event queue
+        # so Q and Esc actually register.  waitKey(1) is too short on Windows.
+        key = cv2.waitKey(16) & 0xFF
+        if _PREVIEW_AVAILABLE is None:
+            _PREVIEW_AVAILABLE = True  # first imshow succeeded
+        return key in (ord('q'), ord('Q'), 27)  # 27 = Esc
+    except cv2.error:
+        if _PREVIEW_AVAILABLE is None:
+            print("[WARN] No display available — live preview disabled. MP4 will still be saved.")
+            _PREVIEW_AVAILABLE = False
+        return False
+
+
+def reset_preview_state() -> None:
+    """Call once per module run (before the first video) to re-evaluate display availability."""
+    global _PREVIEW_AVAILABLE
+    _PREVIEW_AVAILABLE = None

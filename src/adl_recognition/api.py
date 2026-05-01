@@ -11,7 +11,7 @@ from src.adl_recognition.metrics import build_adl_metrics
 from src.common.console import print_header, print_metric_table, print_saved
 from src.common.metrics import Timer, load_json, save_json
 from src.common.paths import ensure_dir, resolve_path
-from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video
+from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video, show_frame_preview
 from src.common.visualization import draw_adl_label, draw_skeleton
 
 
@@ -53,6 +53,7 @@ def process_pose_file(
     video_dir: str | Path,
     window_size: int = 30,
     config: ADLConfig | dict | None = None,
+    preview: bool = True,
 ) -> dict:
     pose_json = resolve_path(pose_json)
     video_stem = pose_json.parent.name
@@ -112,11 +113,13 @@ def process_pose_file(
                         draw_adl_label(frame, person["bbox"], track_id, event["adl_label"], event["confidence"])
                     draw_skeleton(frame, person.get("keypoints", []))
                 writer.write(frame)
+                if preview:
+                    show_frame_preview(f"CPose ADL | {video_stem}", frame)
                 frame_id += 1
         finally:
             capture.release()
             writer.release()
-            cv2.destroyAllWindows()
+            cv2.destroyWindow(f"CPose ADL | {video_stem}")
         saved_overlay = overlay_path
 
     metrics = build_adl_metrics(events, timer.elapsed(), str(events_path), str(saved_overlay) if saved_overlay else None)
@@ -142,6 +145,7 @@ def process_folder(
     output_dir: str | Path,
     window_size: int = 30,
     config: ADLConfig | dict | None = None,
+    preview: bool = True,
 ) -> list[dict]:
     files = _pose_files(pose_dir)
     output_dir = ensure_dir(output_dir)
@@ -160,7 +164,7 @@ def process_folder(
     for index, pose_file in enumerate(files, 1):
         print(f"\n[{index}/{len(files)}] Processing {pose_file.parent.name}")
         try:
-            results.append(process_pose_file(pose_file, output_dir, video_dir, window_size, config))
+            results.append(process_pose_file(pose_file, output_dir, video_dir, window_size, config, preview))
         except Exception as exc:
             print(f"ERROR processing {pose_file}: {exc}")
     print_header("SUMMARY")

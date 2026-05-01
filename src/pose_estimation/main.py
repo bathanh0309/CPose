@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import argparse
 
+from src import ANNOTATIONS_DIR, print_module_console
 from src.common.paths import MULTICAM_DIR, OUTPUT_DIR
 from src.pose_estimation.api import process_folder
 
@@ -18,7 +19,9 @@ def main() -> None:
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument("--track-dir", "--tracks", dest="track_dir", default=str(OUTPUT_DIR / "2_tracking"))
     parser.add_argument("--config", default=None)
+    parser.add_argument("--labels", default=str(ANNOTATIONS_DIR), help="Train/val label root for metric context")
     args = parser.parse_args()
+    print_module_console("pose_estimation", args)
     if args.config:
         print(f"[WARN] --config is accepted for CLI compatibility; module uses local defaults: {args.config}")
     process_folder(args.input, args.output, args.model, args.conf, args.track_dir)

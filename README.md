@@ -11,66 +11,103 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+*(Ghi chú: `pytest` và các thư viện test đã được cấu hình sẵn bên trong `requirements.txt` tại mục `[12] DEV / TESTING`)*
 
 Nếu máy chưa có PyTorch, vui lòng cài đặt `torch` và `torchvision` (hỗ trợ CUDA nếu có GPU) theo hướng dẫn trên trang chủ PyTorch trước khi chạy.
 
-Để xem trực tiếp kết quả video MP4 trong VSCode, bạn nên cài đặt extension **Video Preview**:
-- Tên extension: `Video Preview` (ID: `batchnepal.vscode-video-preview`)
-- Hoặc tìm "mp4" trong tab Extensions của VSCode.
+## 2. Cấu trúc mã nguồn (`src/`)
 
-## 2. Chuẩn bị dữ liệu
-
-Đặt video đầu vào (từ các camera) trong:
 ```text
-data-test/
+src/
+├── adl_recognition/   # Module 4: Nhận diện hành vi (Activities of Daily Living) dựa trên bộ khung xương.
+├── common/            # Các tiện ích dùng chung: xử lý video I/O, vẽ hình ảnh (visualization), tính toán metrics.
+├── evaluation/        # Scripts so sánh kết quả dự đoán với Ground Truth (tính mAP, IDF1, Accuracy...).
+├── face/              # Module hỗ trợ trích xuất đặc trưng khuôn mặt (InsightFace).
+├── global_reid/       # Module 5: Định danh chéo camera (Cross-Camera ReID) sử dụng TFCS-PAR.
+├── human_detection/   # Module 1: Nhận diện người (Person Detection) dùng YOLO.
+├── human_tracking/    # Module 2: Theo dõi người trong 1 camera (Local Tracking) dùng ByteTrack/IoU.
+├── modules/           # Shim package (tương thích ngược) giúp import các module từ src.modules.
+├── pipeline/          # Các script chạy toàn bộ quy trình từ đầu đến cuối (run_all.py) và tự động benchmark.
+├── pose_estimation/   # Module 3: Ước lượng khung xương (Pose Estimation) dựa trên YOLO Pose.
+└── reports/           # Scripts tạo bảng biểu, báo cáo markdown phục vụ viết bài báo nghiên cứu (Paper Tables).
 ```
 
-**Quy tắc đặt tên file cực kỳ quan trọng đối với thuật toán ReID:**
+## 3. Quy trình các Module xử lý (Pipeline)
+
+Hệ thống được chia thành 5 module xử lý nối tiếp. Kết quả đầu ra của module trước làm đầu vào cho module sau.
+
+### Module 1: Person Detection
 ```text
-cam<X>_YYYY-MM-DD_HH-MM-SS.mp4
-Ví dụ: cam1_2026-01-29_16-26-25.mp4
+[Input]
+- Video thô (VD: .mp4) từ thư mục `data-test/`
+
+[Output]
+- Video có vẽ bounding box (không gán ID)
+- `detections.json` (chứa tọa độ khung hình)
 ```
-Hệ thống sẽ đọc timestamp từ tên file để sắp xếp luồng xử lý theo đúng dòng thời gian thực tế.
 
-## 3. Các Module
+### Module 2: Person Tracking
+```text
+[Input]
+- Video thô
+- `detections.json` (từ Module 1)
 
-Hệ thống được chia thành 5 module xử lý nối tiếp. Bạn có thể chạy từng module bằng CLI hoặc chạy toàn bộ thông qua file python ở `src/pipeline/run_all.py`.
+[Output]
+- Video có vẽ bounding box và ID cục bộ (VD: T1, T2...)
+- `tracks.json` (chứa tọa độ và Track ID)
+```
 
-| Module | Input | Output |
-| :--- | :--- | :--- |
-| **1. Person Detection**| `.mp4` | *Video vẽ box không gán ID*<br/>`detections.json` |
-| **2. Person Tracking** | <br/> `detections.json` | <br/> *Video vẽ box kèm ID cục bộ (`T1`, `T2`...)*<br/> `tracks.json` |
-| **3. Pose Estimation**| <br/>`tracks.json` | `dataset/outputs/3_pose/<timestamp>/`<br/> *Video vẽ khung xương không ID*<br/> `keypoints.json` |
-| **4. ADL Recognition** | <br/> `keypoints.json` | <br/>*Video vẽ nhãn hành vi (VD: `walking 0.85`)*<br/> `adl_events.json` |
-| **5. Cross-Camera ReID** | <br/> `keypoints.json`<br/> `adl_events.json` | `dataset/outputs/5_reid/<timestamp>/`<br/> **Video vẽ Global ID (`GID-001`, `ACTIVE`...)**<br/> `reid_tracks.json`<br/> `global_person_table.json` |
+### Module 3: Pose Estimation
+```text
+[Input]
+- Video thô
+- `tracks.json` (từ Module 2)
 
-## 4. Chạy toàn bộ Pipeline
+[Output]
+- Video vẽ bộ khung xương người (Skeleton)
+- `keypoints.json` (chứa tọa độ 17 điểm khớp trên cơ thể)
+```
 
-Bạn có thể chạy tự động toàn bộ 5 bước trên theo thứ tự (từ Module 1 đến Module 5) bằng lệnh sau:
+### Module 4: ADL Recognition
+```text
+[Input]
+- Video thô
+- `keypoints.json` (từ Module 3)
+
+[Output]
+- Video hiển thị nhãn hành vi bên dưới mỗi người (VD: walking, standing...)
+- `adl_events.json` (chứa danh sách hành vi theo khung hình)
+```
+
+### Module 5: Cross-Camera Global ReID
+```text
+[Input]
+- Video thô
+- `keypoints.json` (từ Module 3)
+- `adl_events.json` (từ Module 4)
+- Các file cấu hình hệ thống camera (`multicam_manifest.json`, `camera_topology.yaml`)
+
+[Output]
+- Video vẽ nhãn GID hợp nhất xuyên camera (VD: GID-001) và trạng thái (ACTIVE, DORMANT...)
+- `reid_tracks.json` (danh sách ID đã được hợp nhất)
+- `global_person_table.json` (hồ sơ vòng đời của mỗi người trên toàn hệ thống)
+```
+
+## 4. Cách chạy toàn bộ Pipeline
+
+Sử dụng script tiện ích `.bat` đã được cấu hình sẵn Python ảo (`.venv`):
+
+```bat
+run_06_pipeline.bat
+```
+
+Hoặc chạy thủ công qua lệnh CLI:
 
 ```bash
-python -m src.pipeline.run_all \
+.venv\Scripts\python.exe -m src.pipeline.run_all \
   --input data-test/ \
   --output dataset/outputs \
   --config configs/model_registry.demo_i5.yaml \
-  --manifest configs/multicam_manifest.example.json \
-  --topology configs/camera_topology.example.yaml
+  --manifest configs/multicam_manifest.json \
+  --topology configs/camera_topology.yaml
 ```
-
-Sau khi chạy xong, kết quả cuối cùng (kèm Global ID hoàn chỉnh) sẽ nằm trong `dataset/outputs/pipeline/<timestamp>/`. Cấu trúc chi tiết của các tham số và lệnh chạy từng phần được cung cấp trong file `CLAUDE.md`.
-
-## 5. Cấu trúc Dataset & Tham số Đánh giá
-
-Hệ thống hỗ trợ cơ chế tự động đánh giá (benchmark) thông qua thư mục `dataset/annotations/`. Để lấy các chỉ số (metrics) thực tế, bạn cần sắp xếp ground truth của các tập dữ liệu như sau:
-
-| Module | Dataset / Nguồn | Vị trí thư mục Annotation | Tham số / Chỉ số chính được đo (Metrics) |
-| :--- | :--- | :--- | :--- |
-| **1. Detection** | COCO 2017 | `gt-person-detection/coco2017/` | Dùng `instances_val2017.json`.<br/>Đo *Precision, Recall, F1, mAP@50*. |
-| **2. Tracking** | MOT17 | `gt-person-tracking/mot17/` | File cấu trúc MOT.<br/>Đo *IDF1, ID Switch, Fragmentation*. |
-| **3. Pose** | COCO / MPII | `gt-pose-estimation/coco2017/` | Dùng `person_keypoints_val2017.json`.<br/>Đo *PCK, Missing keypoint rate*. |
-| **4. ADL** | Tự thu / Toyota Smarthome | `gt-adl-recognition/` hoặc `gt-cpose-custom/adl_gt.csv` | File CSV chứa start_frame, end_frame, label.<br/>Đo *Accuracy, Macro-F1, Confusion Matrix*. |
-| **5. Global ReID** | Market-1501 / CPose Custom | `gt-global-reid/` hoặc `gt-cpose-custom/global_id_gt.csv` | File chứa tọa độ bbox & Global ID chuẩn.<br/>Đo *Cross-camera IDF1, False Split, False Merge*. |
-
-***Lưu ý:***
-- Đối với **demo cục bộ**, dự án sử dụng các video kiểm thử đặt trong `data-test/`.
-- File cấu hình `configs/model_registry.demo_i5.yaml` chứa toàn bộ ngưỡng cấu hình cho module (ví dụ: `conf: 0.5` cho YOLO, `strong_threshold: 0.65` cho ReID). Hệ thống sẽ tải thông số trực tiếp từ file yaml này trong quá trình xử lý.

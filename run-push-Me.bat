@@ -1,9 +1,9 @@
-echo off
+@echo off
 setlocal enabledelayedexpansion
 
 cd /d %~dp0
 
-echo === Git push script for bathanh0309/CPose ===
+echo === Git push-only script for bathanh0309/CPose ===
 
 git --version >nul 2>&1
 if errorlevel 1 (
@@ -42,13 +42,15 @@ if errorlevel 1 (
   echo No new commit created. Continuing to push current state...
 )
 
-echo Pushing all local content to origin/%CUR_BRANCH% without pull...
+echo Push only to origin/%CUR_BRANCH%...
+echo This script does not run git pull.
 git push -u origin %CUR_BRANCH% --force
 
 if errorlevel 1 (
   echo.
   echo [ERROR] Push failed.
-  echo If GitHub asks for authentication, use a Personal Access Token instead of password.
+  echo This script only pushes. It does not pull remote code.
+  echo If GitHub rejects the push, resolve it manually or keep using force push intentionally.
   pause
   exit /b 1
 )

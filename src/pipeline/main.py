@@ -9,6 +9,7 @@ import importlib
 from pathlib import Path
 from typing import Any
 
+from src import ANNOTATIONS_DIR, OUTPUT_DIR, print_module_console
 from src.evaluation.metrics import save_csv, save_json
 
 
@@ -46,10 +47,11 @@ def evaluate_all(outputs: str | Path, gt: str | Path, out: str | Path | None = N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate CPose pipeline outputs")
-    parser.add_argument("--outputs", required=True, help="Pipeline run directory")
-    parser.add_argument("--gt", default="data/annotations", help="Annotation directory")
+    parser.add_argument("--outputs", default=str(OUTPUT_DIR), help="Pipeline run directory")
+    parser.add_argument("--gt", default=str(ANNOTATIONS_DIR), help="Train/val annotation directory")
     parser.add_argument("--out", default=None, help="Evaluation output directory")
     args = parser.parse_args()
+    print_module_console("evaluation", args)
     evaluate_all(args.outputs, args.gt, args.out)
 
 

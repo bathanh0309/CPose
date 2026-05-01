@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import argparse
 from pathlib import Path
 
+from src import ANNOTATIONS_DIR, DEFAULT_CONFIG, print_module_console
 from src.common.console import print_header
 from src.common.paths import MULTICAM_DIR, OUTPUT_DIR, ensure_dir, resolve_path
 from src.human_detection.api import process_folder as process_detection
@@ -59,7 +60,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the full CPose TFCS-PAR pipeline")
     parser.add_argument("--input", default=str(MULTICAM_DIR))
     parser.add_argument("--output", default=str(OUTPUT_DIR))
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--gt", default=str(ANNOTATIONS_DIR), help="Train/val annotation root")
     args = parser.parse_args()
+    print_module_console("pipeline", args)
     run_pipeline(args.input, args.output)
 
 

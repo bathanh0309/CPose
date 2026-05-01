@@ -1,144 +1,177 @@
-# CPose Unified AI Modules Guide
+# CLAUDE.md — CPose System Guide
 
-**Dự án:** CPose — Time-First Cross-Camera Pose–ADL–ReID  
-**Repo:** <https://github.com/bathanh0309/CPose>  
-**Mục tiêu trước mắt:** demo ổn định trên **PC i5**, **4 camera**, **3 người**, dùng short video trong `data-test/`.  
-**Mục tiêu sau:** mở rộng RTX/GPU, thay các baseline nhẹ bằng model mạnh hơn.
+> **Purpose:** This file is the primary reference for any AI assistant (Claude or otherwise) working on the CPose codebase. It defines architecture decisions, module contracts, CLI commands, metric policies, coding constraints, and review rules. Read this file completely before making any change.
 
 ---
 
-## 0. Quyết định kỹ thuật thống nhất
+## Table of Contents
 
-### 0.1 Chọn YOLOv8 hay YOLOv11?
-
-Để tránh lan man và tránh mỗi module dùng một phiên bản khác nhau, tài liệu này **thống nhất dùng YOLOv8 cho bản demo trước**:
-
-| Hạng mục | Lựa chọn chính cho PC i5 | Lý do |
-|---|---|---|
-| Human detection | `yolov8n.pt` | nhẹ, ổn định, dễ chạy CPU, tích hợp Ultralytics tốt |
-| Pose estimation | `yolov8n-pose.pt` | có sẵn 17 COCO keypoints, dễ chạy, đủ cho demo 3 người |
-| Tracking | ByteTrack trong Ultralytics | không cần train, hợp với video ngắn và terminal demo |
-| ADL | Rule-based skeleton baseline | nhẹ, giải thích được, dễ debug trước khi train GCN |
-| Face detect | SCRFD/RetinaFace ONNX qua InsightFace | chính xác hơn Haar, vẫn có thể chạy CPU nếu chỉ dùng theo track crop |
-| Face recognition | ArcFace ONNX | chuẩn công nghiệp, embedding 512-D |
-| Face anti-spoofing | MiniFASNet/CDCN ONNX, optional | chỉ bật khi có model; không có thì ghi `spoof_status: unchecked` |
-| Cross-camera Global ReID | TFCS-PAR score fusion | đóng góp chính của CPose |
-
-**Không trộn YOLOv8 và YOLOv11 trong bản demo.**  
-Nếu sau này deploy RTX, có thể tạo nhánh benchmark riêng so sánh `YOLOv8n` vs `YOLO11n`, nhưng paper/demo chính nên giữ một pipeline nhất quán.
+1. [Project Overview](#1-project-overview)
+2. [Repository Structure](#2-repository-structure)
+3. [Module Architecture & Contracts](#3-module-architecture--contracts)
+4. [Pipeline & Orchestration](#4-pipeline--orchestration)
+5. [Run Output Structure](#5-run-output-structure)
+6. [CLI Commands](#6-cli-commands)
+7. [Config Files](#7-config-files)
+8. [JSON Schemas](#8-json-schemas)
+9. [Metrics Policy](#9-metrics-policy)
+10. [Terminal Logging Rules](#10-terminal-logging-rules)
+11. [Video Comparison Rules](#11-video-comparison-rules)
+12. [Error Taxonomy](#12-error-taxonomy)
+13. [Paper Report Output](#13-paper-report-output)
+14. [Coding Constraints](#14-coding-constraints)
+15. [Review Constraints](#15-review-constraints)
+16. [Roadmap](#16-roadmap)
+17. [Reference Numbers](#17-reference-numbers)
 
 ---
 
-## 1. Kiến trúc tổng thể CPose
+## 1. Project Overview
 
-```text
-data-test/
-  cam01_YYYY-MM-DD_HH-MM-SS.mp4
-  cam02_YYYY-MM-DD_HH-MM-SS.mp4
-  cam03_YYYY-MM-DD_HH-MM-SS.mp4
-  cam04_YYYY-MM-DD_HH-MM-SS.mp4
-        │
-        ▼
-[1] Human Detection
-        │ detections.json
-        ▼
-[2] Human Tracking
-        │ tracks.json
-        ▼
-[3] Pose Estimation
-        │ keypoints.json
-        ▼
-[4] Skeleton + ADL Recognition
-        │ adl_events.json
-        ▼
-[5] Face Detect + Face Recognition + Anti-Spoofing
-        │ face_events.json
-        ▼
-[6] Cross-Camera Global ReID / TFCS-PAR
-        │ reid_tracks.json + global_person_table.json
-        ▼
-[7] Benchmark + Evaluation
-        │ benchmark_summary.json / csv
-        ▼
-Paper-ready metrics
+**CPose** is a terminal-based, multi-camera human monitoring system designed for R&D Computer Vision and AI Edge deployment. It does **not** use a frontend, web server, Flask, or Socket.IO.
+
+### System description
+
+> CPose is a terminal-only, multi-camera human monitoring pipeline that uses YOLOv8n/YOLOv8n-pose for person detection and pose estimation, ByteTrack for local tracking, rule-based skeleton ADL for lightweight activity recognition, ArcFace as an auxiliary face signal, and TFCS-PAR for fusing Global IDs across cameras using face, body, pose, height, time, and camera topology.
+
+### Research focus
+
+The novelty of CPose is **not** about replacing YOLO with a newer model. It is about:
+
+- Time-first, topology-gated cross-camera identity fusion (TFCS-PAR)
+- Maintaining stable Global IDs through blind zones, room entries, and clothing changes
+- Proxy vs. ground-truth metric distinction (no fake accuracy)
+- Failure-reason taxonomy across all modules
+- Paper-ready benchmark tables from every run
+
+### Key constraints (non-negotiable)
+
+| Constraint | Rule |
+|---|---|
+| No frontend | No Flask, no WebSocket, no HTML, no dashboard |
+| No frame-level terminal log | Only summary per video, then overall summary |
+| No fake metrics | Never compute accuracy without ground truth |
+| No absolute paths | Use `pathlib` everywhere |
+| No hardcoded paths | All paths from config or `paths.py` |
+| UTF-8 JSON output | `json.dumps(..., ensure_ascii=False, indent=2)` |
+| Proxy metric label | Any metric without GT must be `"metric_type": "proxy"` |
+| GT metric label | Any metric with GT must be `"metric_type": "ground_truth"` |
+
+---
+
+## 2. Repository Structure
+
 ```
-
-### 1.1 Nguyên tắc quan trọng
-
-1. **Track ID không phải Global ID.**  
-   `track_id` chỉ ổn định trong một camera/clip. `global_id` mới là định danh xuyên camera.
-
-2. **Không dùng index detection làm person ID.**  
-   Detection index thay đổi theo frame, dễ trộn người.
-
-3. **Không báo accuracy nếu chưa có ground truth.**  
-   Nếu không có nhãn chuẩn, ghi `metric_type: proxy`.
-
-4. **Xử lý time-first trước, camera-order sau.**  
-   Với 4 camera, clip phải được sort theo timestamp hoặc manifest.
-
-5. **Demo i5 ưu tiên ổn định hơn SOTA.**  
-   Dùng model nhẹ, giảm frame rate xử lý, ghi log rõ ràng.
-
----
-
-## 2. Cấu trúc thư mục đề xuất
-
-```text
-Capstone-Project/
+CPose/
+├── README.md
+├── CLAUDE.md                        ← this file
+├── ACADEMIC.md
+├── pyproject.toml
+├── requirements.txt
+├── .gitignore
+│
+├── configs/
+│   ├── cpose_default.yaml           ← master runtime config
+│   ├── model_registry.yaml          ← model paths + fallbacks
+│   ├── model_registry.demo_i5.yaml  ← CPU-optimised variant
+│   ├── camera_topology.yaml         ← cross-camera transition rules
+│   ├── multicam_manifest.json
+│   ├── logging.yaml
+│   └── edge_profile.yaml
+│
+├── data-test/                       ← demo input videos (not committed)
+│   └── README.md
+│
+├── dataset/
+│   ├── annotations/
+│   │   ├── detection_gt/
+│   │   ├── tracking_gt/
+│   │   ├── pose_gt/
+│   │   ├── adl_gt/
+│   │   └── global_id_gt/
+│   ├── outputs/                     ← legacy compat only
+│   └── runs/                        ← all research runs live here
+│       └── <run_id>/
+│
+├── models/
+│   ├── weights/                     ← .pt / .onnx model files
+│   ├── exports/
+│   │   ├── onnx/
+│   │   └── tensorrt/
+│   └── README.md
+│
 ├── src/
-│   ├── common/
+│   ├── __init__.py
+│   │
+│   ├── cli/                         ← thin CLI entrypoints
+│   │   ├── run_detection.py
+│   │   ├── run_tracking.py
+│   │   ├── run_pose.py
+│   │   ├── run_adl.py
+│   │   ├── run_reid.py
+│   │   ├── run_pipeline.py
+│   │   └── run_benchmark.py
+│   │
+│   ├── common/                      ← shared utilities, no model logic
 │   │   ├── paths.py
-│   │   ├── video_io.py
-│   │   ├── schemas.py
-│   │   ├── metrics.py
-│   │   ├── visualization.py
+│   │   ├── config.py
 │   │   ├── manifest.py
 │   │   ├── topology.py
-│   │   ├── model_registry.py
-│   │   └── errors.py
+│   │   ├── schemas.py
+│   │   ├── errors.py
+│   │   ├── timer.py
+│   │   ├── json_io.py
+│   │   ├── video_io.py
+│   │   ├── visualization.py
+│   │   ├── logging_utils.py
+│   │   └── paper_logger.py
 │   │
-│   ├── human_detection/
-│   │   ├── api.py
-│   │   ├── detector_yolov8.py
-│   │   ├── metrics.py
-│   │   └── main.py
+│   ├── modules/
+│   │   ├── detection/
+│   │   │   ├── api.py               ← public API used by pipeline
+│   │   │   ├── detector.py          ← model wrapper
+│   │   │   ├── metrics.py
+│   │   │   ├── schemas.py
+│   │   │   └── main.py              ← CLI __main__ entrypoint
+│   │   │
+│   │   ├── tracking/
+│   │   │   ├── api.py
+│   │   │   ├── tracker.py
+│   │   │   ├── metrics.py
+│   │   │   ├── schemas.py
+│   │   │   └── main.py
+│   │   │
+│   │   ├── pose_estimation/
+│   │   │   ├── api.py
+│   │   │   ├── pose_model.py
+│   │   │   ├── keypoint_utils.py
+│   │   │   ├── metrics.py
+│   │   │   ├── schemas.py
+│   │   │   └── main.py
+│   │   │
+│   │   ├── adl_recognition/
+│   │   │   ├── api.py
+│   │   │   ├── skeleton_features.py
+│   │   │   ├── rule_based_adl.py
+│   │   │   ├── smoothing.py
+│   │   │   ├── metrics.py
+│   │   │   ├── schemas.py
+│   │   │   └── main.py
+│   │   │
+│   │   └── global_reid/
+│   │       ├── api.py
+│   │       ├── global_id_manager.py
+│   │       ├── state_machine.py
+│   │       ├── matching.py
+│   │       ├── metrics.py
+│   │       ├── schemas.py
+│   │       └── main.py
 │   │
-│   ├── human_tracking/
-│   │   ├── api.py
-│   │   ├── tracker_bytetrack.py
-│   │   ├── metrics.py
-│   │   └── main.py
-│   │
-│   ├── pose_estimation/
-│   │   ├── api.py
-│   │   ├── pose_yolov8.py
-│   │   ├── metrics.py
-│   │   └── main.py
-│   │
-│   ├── adl_recognition/
-│   │   ├── api.py
-│   │   ├── skeleton_features.py
-│   │   ├── adl_rules.py
-│   │   ├── metrics.py
-│   │   └── main.py
-│   │
-│   ├── face/
-│   │   ├── api.py
-│   │   ├── face_detector.py
-│   │   ├── face_recognizer.py
-│   │   ├── anti_spoofing.py
-│   │   ├── metrics.py
-│   │   └── main.py
-│   │
-│   ├── global_reid/
-│   │   ├── api.py
-│   │   ├── body_features.py
-│   │   ├── fusion_score.py
-│   │   ├── state_machine.py
-│   │   ├── global_id_manager.py
-│   │   ├── metrics.py
-│   │   └── main.py
+│   ├── pipeline/
+│   │   ├── orchestrator.py          ← coordinates all modules
+│   │   ├── run_all.py               ← full pipeline CLI entrypoint
+│   │   ├── stage_registry.py        ← module order + enable/disable
+│   │   └── benchmark_all.py
 │   │
 │   ├── evaluation/
 │   │   ├── detection_eval.py
@@ -148,258 +181,598 @@ Capstone-Project/
 │   │   ├── reid_eval.py
 │   │   └── main.py
 │   │
-│   └── pipeline/
-│       ├── run_all.py
-│       └── benchmark_all.py
+│   └── reports/
+│       ├── make_paper_tables.py
+│       ├── make_run_summary.py
+│       └── export_metrics_csv.py
 │
-├── configs/
-│   ├── model_registry.demo_i5.yaml
-│   ├── model_registry.rtx.yaml
-│   ├── multicam_manifest.example.json
-│   └── camera_topology.example.yaml
-├──data-test/
-├── dataset/
-│   ├── annotations/
-│   └── outputs/
+│ run_01_detection.bat
+│ run_02_tracking.bat
+│ run_03_pose.bat
+│ run_04_adl.bat
+│ run_05_reid.bat
+│ run_06_pipeline.bat
+│ run_07_benchmark.bat
 │
-├── models/
-│   ├── yolo/
-│   ├── face/
-│   └── reid/
+├── docs/
+│   ├── module_contracts.md
+│   ├── metrics_policy.md
+│   └── paper_logging.md
 │
-├── scripts/
-└── README.md
+├── experiments/
+│
+└── tests/
+    ├── test_manifest.py
+    ├── test_topology.py
+    ├── test_detection_schema.py
+    ├── test_tracking_schema.py
+    ├── test_pose_schema.py
+    ├── test_adl_schema.py
+    └── test_reid_schema.py
+```
+
+### Legacy compatibility
+
+The legacy path `python -m src.pipeline.run_all` must still work via a compatibility wrapper. However, all new development targets:
+
+```bash
+python -m src.modules.<module>.main
+python -m src.pipeline.run_all
 ```
 
 ---
 
-## 3. Cấu hình demo PC i5
+## 3. Module Architecture & Contracts
 
-### 3.1 `configs/model_registry.demo_i5.yaml`
+Each module must have:
+- `api.py` — callable from the pipeline orchestrator
+- `main.py` — `__main__` entrypoint for standalone CLI use
+- `metrics.py` — computes and saves metrics; never fakes numbers
+- `schemas.py` — defines Pydantic or dataclass schemas for input/output
+
+### 3.1 Module 1 — Detection
+
+**Responsibility:** Detect persons in video frames only.
+
+| Item | Value |
+|---|---|
+| Input | video file(s) in `data-test/` |
+| Model | `yolo11n.pt` (fallback: `yolov8n.pt`) |
+| Output | `detections.json`, `detection_overlay.mp4`, `detection_metrics.json` |
+| Class filter | class_id = 0 (person) only |
+
+**Forbidden:**
+- Must NOT assign track IDs
+- Must NOT run pose estimation
+- Must NOT classify ADL labels
+
+**Proxy metrics (no GT needed):**
+
+| Metric | Description |
+|---|---|
+| `total_frames` | frames processed |
+| `total_detections` | total person detections |
+| `avg_confidence` | mean detection confidence |
+| `avg_persons_per_frame` | average concurrent detections |
+| `fps` | processing speed |
+| `latency_ms` | ms per frame |
+
+**GT metrics (requires `dataset/annotations/detection_gt/`):**
+Precision, Recall, F1, mAP@50
+
+---
+
+### 3.2 Module 2 — Tracking
+
+**Responsibility:** Assign stable local track IDs within a single camera/video.
+
+| Item | Value |
+|---|---|
+| Input | `detections.json` + original video |
+| Tracker | ByteTrack (default) |
+| Output | `tracks.json`, `tracking_overlay.mp4`, `tracking_metrics.json` |
+
+**Forbidden:**
+- Must NOT create Global IDs
+- Must NOT run pose estimation
+- Must NOT classify ADL labels
+
+**Track quality score formula:**
+
+```
+Q_track = 0.5 * mean_conf + 0.3 * min(age / W, 1) - 0.2 * min(misses / max_age, 1)
+```
+
+Where `W` = ADL window (default 30), `max_age` = 30.
+
+**Proxy metrics:**
+
+| Metric | Description |
+|---|---|
+| `total_tracks` | total distinct track IDs |
+| `mean_track_age` | average track lifespan in frames |
+| `confirmed_track_ratio` | ratio of confirmed vs tentative tracks |
+| `fragment_proxy` | estimated track break count |
+| `fps` | processing speed |
+| `latency_ms` | ms per frame |
+
+**GT metrics (requires `dataset/annotations/tracking_gt/`):**
+IDF1, ID Switch Count, Fragmentation, HOTA
+
+---
+
+### 3.3 Module 3 — Pose Estimation
+
+**Responsibility:** Extract COCO-17 keypoints for each tracked person.
+
+| Item | Value |
+|---|---|
+| Input | video + `tracks.json` (or raw video if tracks unavailable) |
+| Model | `yolo11n-pose.pt` (fallback: `yolov8n-pose.pt`) |
+| Keypoints | COCO-17 (nose through right ankle) |
+| Output | `keypoints.json`, `pose_overlay.mp4`, `pose_metrics.json` |
+
+**Forbidden:**
+- Must NOT infer ADL labels from keypoints
+- Must NOT create Global IDs
+- Must NOT re-run detection or tracking
+
+**Visible keypoint formula:**
+
+```
+visible(K_i) = 1 if conf_i >= tau_kp else 0
+r_visible = (1/17) * sum(visible(K_i) for i in 0..16)
+```
+
+Default `tau_kp = 0.30`.
+
+**Proxy metrics:**
+
+| Metric | Description |
+|---|---|
+| `total_pose_instances` | total persons with keypoints |
+| `mean_keypoint_confidence` | average keypoint confidence |
+| `visible_keypoint_ratio` | average `r_visible` across all instances |
+| `missing_keypoint_rate` | 1 - visible_keypoint_ratio |
+| `fps` | processing speed |
+| `latency_ms` | ms per frame |
+
+**GT metrics (requires `dataset/annotations/pose_gt/`):**
+PCK@0.1, PCK@0.05, missing keypoint rate per joint
+
+---
+
+### 3.4 Module 4 — ADL Recognition
+
+**Responsibility:** Classify Activities of Daily Living from skeleton sequences only.
+
+| Item | Value |
+|---|---|
+| Input | `keypoints.json` + original video (for overlay only) |
+| Method | Rule-based baseline (window size 30 frames) |
+| Output | `adl_events.json`, `adl_overlay.mp4`, `adl_metrics.json` |
+
+**Forbidden:**
+- Must NOT create Global IDs
+- Must NOT re-run detection, tracking, or pose
+
+**ADL class labels:**
+
+| Label | Description |
+|---|---|
+| `standing` | upright, low ankle velocity |
+| `sitting` | low knee angle, low velocity |
+| `walking` | high ankle velocity, upright torso |
+| `lying_down` | high torso angle, wide bbox aspect ratio |
+| `falling` | high torso angle + sudden velocity spike |
+| `reaching` | wrist above shoulder |
+| `bending` | torso angle 30–68°, low velocity |
+| `unknown` | fewer than 8 visible keypoints |
+
+**Rule-based decision tree (simplified):**
+
+```
+if visible_keypoints < 8:          → unknown
+elif torso_angle > 68 and ankle_velocity high:  → falling
+elif torso_angle > 68 and bbox_ar > 1.15:       → lying_down
+elif knee_angle < 150 and ankle_velocity low:   → sitting
+elif torso_angle > 45 and ankle_velocity low:   → bending
+elif wrist_above_shoulder:                      → reaching
+elif ankle_velocity > threshold:               → walking
+else:                                          → standing
+```
+
+**Temporal smoothing:** majority vote over 5–7 frames to reduce label flickering.
+
+**Proxy metrics:**
+
+| Metric | Description |
+|---|---|
+| `total_adl_events` | total ADL event records |
+| `class_distribution` | count and ratio per label |
+| `unknown_rate` | ratio of `unknown` labels |
+| `avg_confidence` | mean rule confidence |
+| `fps_equivalent` | ADL events processed per second |
+
+**GT metrics (requires `dataset/annotations/adl_gt/`):**
+Accuracy, Macro-F1, per-class F1, Confusion Matrix
+
+---
+
+### 3.5 Module 5 — Global ReID (TFCS-PAR)
+
+**Responsibility:** Assign stable Global IDs across cameras using time, topology, face, body, pose, and height evidence fusion.
+
+| Item | Value |
+|---|---|
+| Input | `tracks.json`, `keypoints.json`, `adl_events.json`, manifest, topology |
+| Method | TFCS-PAR score fusion |
+| Output | `reid_tracks.json`, `global_person_table.json`, `reid_overlay.mp4`, `reid_metrics.json` |
+
+**Forbidden:**
+- Must NOT re-run detection, tracking, or pose if JSON inputs exist
+- Must NOT use body appearance as the sole matching signal
+
+**Score fusion formula:**
+
+```
+S_total = w_f*S_face + w_b*S_body + w_p*S_pose + w_h*S_height + w_t*S_time + w_c*S_camera
+```
+
+**Time-window gating:**
+
+```
+G_time(i,j) = 1 if delta_t in [T_min(i→j), T_max(i→j)] else 0
+```
+
+**Camera topology gating:**
+
+```
+G_camera(c_i, c_j) = 1 if (c_i, c_j) in topology_edges else 0
+```
+
+**Identity decision:**
+
+```
+if S_total >= strong_threshold (0.65):  → assign existing GID (strong_match)
+elif S_total >= weak_threshold (0.45):  → assign tentatively (weak_match)
+else:                                   → new GID or UNK
+```
+
+**Person state machine:**
+
+| State | Meaning |
+|---|---|
+| `ACTIVE` | person currently visible in a camera |
+| `PENDING_TRANSFER` | recently left via exit zone |
+| `IN_BLIND_ZONE` | in elevator, stairwell, or unmapped area |
+| `IN_ROOM` | entered a room, may exit same camera |
+| `CLOTHING_CHANGE_SUSPECTED` | body appearance changed significantly post-room |
+| `DORMANT` | not seen for a while but not yet closed |
+| `CLOSED` | track ended |
+
+**Clothing-change handling:** When state is `IN_ROOM` or `CLOTHING_CHANGE_SUSPECTED`, reduce body appearance weight, increase time/topology/height/pose weights. Do not create a new GID immediately if transition window is valid.
+
+**Proxy metrics:**
+
+| Metric | Description |
+|---|---|
+| `global_id_count` | total unique Global IDs assigned |
+| `pending_count` | GIDs in PENDING_TRANSFER state |
+| `conflict_count` | multi-candidate conflicts |
+| `topology_conflict_count` | transitions rejected by topology |
+| `unknown_match_count` | tracks that could not be matched |
+
+**GT metrics (requires `dataset/annotations/global_id_gt/`):**
+Global ID Accuracy, Cross-camera IDF1, False Split Rate, False Merge Rate, ID Switch Count
+
+---
+
+### 3.6 Module — Evaluation (standalone)
+
+**Responsibility:** Compute ground-truth metrics from saved pipeline outputs. Does NOT modify pipeline outputs.
+
+| Input | Pipeline run directory + `dataset/annotations/` |
+| Output | Evaluation results in `07_evaluation/` within the run directory |
+
+---
+
+### 3.7 Module — Reports (standalone)
+
+**Responsibility:** Generate paper-ready CSV and Markdown tables from saved metrics. Does NOT run any model.
+
+| Input | Pipeline run directory |
+| Output | CSV/Markdown files in `08_paper_report/` within the run directory |
+
+---
+
+## 4. Pipeline & Orchestration
+
+### Pipeline execution order
+
+```
+Stage 0: Input validation + manifest loading
+Stage 1: Detection        → 01_detection/
+Stage 2: Tracking         → 02_tracking/
+Stage 3: Pose Estimation  → 03_pose/
+Stage 4: ADL Recognition  → 04_adl/
+Stage 5: Global ReID      → 05_global_reid/
+Stage 6: Comparison video → 06_comparison/
+Stage 7: Evaluation       → 07_evaluation/  (only if --gt provided)
+Stage 8: Paper Report     → 08_paper_report/
+```
+
+### Error handling
+
+- If a single video fails in any stage, log one error line and continue with the next video.
+- If an entire stage fails, log the error and skip downstream stages that depend on it.
+- Never crash the entire pipeline over one bad video.
+
+### Stage registry
+
+`pipeline/stage_registry.py` controls which stages are enabled. Each stage can be independently disabled via config or CLI flag.
+
+---
+
+## 5. Run Output Structure
+
+Every pipeline run creates a unique directory:
+
+```
+dataset/runs/<run_id>/
+├── run_config.yaml          ← copy of effective config for this run
+├── run_manifest.json        ← resolved video list + camera IDs
+├── console_summary.txt      ← full terminal output saved to file
+├── 00_input/                ← symlinks or copies of input videos
+├── 01_detection/
+│   ├── <video_stem>_detections.json
+│   ├── <video_stem>_detection_overlay.mp4
+│   └── detection_metrics.json
+├── 02_tracking/
+│   ├── <video_stem>_tracks.json
+│   ├── <video_stem>_tracking_overlay.mp4
+│   └── tracking_metrics.json
+├── 03_pose/
+│   ├── <video_stem>_keypoints.json
+│   ├── <video_stem>_pose_overlay.mp4
+│   └── pose_metrics.json
+├── 04_adl/
+│   ├── <video_stem>_adl_events.json
+│   ├── <video_stem>_adl_overlay.mp4
+│   └── adl_metrics.json
+├── 05_global_reid/
+│   ├── <video_stem>_reid_tracks.json
+│   ├── global_person_table.json
+│   ├── <video_stem>_reid_overlay.mp4
+│   └── reid_metrics.json
+├── 06_comparison/
+│   ├── <video_stem>_raw_vs_detection.mp4
+│   ├── <video_stem>_raw_vs_tracking.mp4
+│   ├── <video_stem>_raw_vs_pose.mp4
+│   ├── <video_stem>_raw_vs_adl.mp4
+│   ├── <video_stem>_raw_vs_reid.mp4
+│   └── preview_index.json
+├── 07_evaluation/
+│   └── (populated only when --gt is provided)
+└── 08_paper_report/
+    ├── paper_metrics_summary.md
+    ├── table_module_runtime.csv
+    ├── table_detection_results.csv
+    ├── table_tracking_results.csv
+    ├── table_pose_results.csv
+    ├── table_adl_results.csv
+    ├── table_reid_results.csv
+    └── figure_list.md
+```
+
+### Run ID format
+
+```
+<YYYY-MM-DD>_<HH-MM-SS>_<tag>
+
+Examples:
+  2026-05-01_15-30-22_baseline
+  2026-05-01_20-10-15_ablation_no_face
+```
+
+The `<tag>` is user-supplied via `--run-id`; defaults to `run` if not provided.
+
+### Legacy output path
+
+`dataset/outputs/` is kept for backward compatibility only. All new research runs must use `dataset/runs/<run_id>/`.
+
+---
+
+## 6. CLI Commands
+
+### Module-level commands (standalone)
+
+```bash
+# Detection
+python -m src.modules.detection.main \
+  --input data-test \
+  --run-id test_detection \
+  --make-comparison \
+  --compare-count 2
+
+# Tracking (reads from existing detection run)
+python -m src.modules.tracking.main \
+  --run-dir dataset/runs/test_detection \
+  --make-comparison \
+  --compare-count 2
+
+# Pose estimation
+python -m src.modules.pose_estimation.main \
+  --run-dir dataset/runs/test_detection \
+  --make-comparison \
+  --compare-count 2
+
+# ADL recognition
+python -m src.modules.adl_recognition.main \
+  --run-dir dataset/runs/test_detection \
+  --make-comparison \
+  --compare-count 2
+
+# Global ReID
+python -m src.modules.global_reid.main \
+  --run-dir dataset/runs/test_detection \
+  --make-comparison \
+  --compare-count 2
+```
+
+### Full pipeline
+
+```bash
+python -m src.pipeline.run_all \
+  --input data-test \
+  --output dataset/runs \
+  --config configs/cpose_default.yaml \
+  --models configs/model_registry.yaml \
+  --manifest configs/multicam_manifest.example.json \
+  --topology configs/camera_topology.yaml \
+  --run-id demo_baseline \
+  --make-comparison \
+  --compare-count 2
+```
+
+### Benchmark
+
+```bash
+python -m src.pipeline.benchmark_all \
+  --run-dir dataset/runs/<run_id>
+```
+
+### Evaluation (with ground truth)
+
+```bash
+python -m src.evaluation.main \
+  --run-dir dataset/runs/<run_id> \
+  --gt dataset/annotations
+```
+
+### Paper report generation
+
+```bash
+python -m src.reports.make_paper_tables \
+  --run-dir dataset/runs/<run_id>
+```
+
+### Legacy compatibility (still works, not recommended)
+
+```bash
+python -m src.pipeline.run_all   # legacy path, wraps new pipeline
+```
+
+### CLI flags reference
+
+| Flag | Type | Description |
+|---|---|---|
+| `--input` | path | Input video directory |
+| `--run-dir` | path | Existing run directory (for downstream modules) |
+| `--run-id` | str | Tag appended to run timestamp |
+| `--output` | path | Root output directory (`dataset/runs` by default) |
+| `--config` | path | Path to `cpose_default.yaml` |
+| `--models` | path | Path to `model_registry.yaml` |
+| `--manifest` | path | Path to `multicam_manifest.json` |
+| `--topology` | path | Path to `camera_topology.yaml` |
+| `--gt` | path | Path to ground-truth annotations |
+| `--make-comparison` | flag | Generate raw vs. processed comparison videos |
+| `--compare-count` | int | Number of videos to create comparisons for (default: 2) |
+| `--preview` | flag | Open OpenCV window for live preview (requires display) |
+| `--debug` | flag | Print full stack traces and verbose logs |
+
+---
+
+## 7. Config Files
+
+### `configs/cpose_default.yaml`
 
 ```yaml
-runtime:
-  device: cpu
-  demo_mode: true
-  target_resolution: 640
-  process_every_n_frames: 2
-  max_people_per_frame: 3
+project:
+  name: CPose
+  task: multi_camera_human_monitoring
+  output_root: dataset/runs
 
-human_detection:
-  backend: ultralytics
-  model: models/yolo/yolov8n.pt
-  fallback: yolov8n.pt
+input:
+  default_video_dir: data-test
+  video_exts: [".mp4", ".avi", ".mov", ".mkv"]
+
+runtime:
+  device: auto          # auto | cpu | cuda | mps
+  save_overlay: true
+  save_json: true
+  save_metrics: true
+  make_comparison: false
+  compare_count: 2
+  preview: false
+  debug: false
+
+logging:
+  console_level: summary
+  save_console_summary: true
+  paper_ready_tables: true
+
+metrics:
+  require_ground_truth_for_accuracy: true
+  default_metric_type: proxy
+```
+
+### `configs/model_registry.yaml`
+
+```yaml
+detector:
+  name: yolo11n
+  path: models/weights/yolo11n.pt
+  fallback:
+    - models/weights/yolov8n.pt
+  conf: 0.5
   imgsz: 640
-  conf: 0.50
-  iou: 0.50
   class_id: 0
 
-human_tracking:
-  backend: ultralytics_bytetrack
-  tracker_config: bytetrack.yaml
+tracker:
+  name: bytetrack
   min_hits: 3
   max_age: 30
-  min_track_quality: 0.45
 
-pose_estimation:
-  backend: ultralytics
-  model: models/yolo/yolov8n-pose.pt
-  fallback: yolov8n-pose.pt
-  imgsz: 640
+pose:
+  name: yolo11n-pose
+  path: models/weights/yolo11n-pose.pt
+  fallback:
+    - models/weights/yolov8n-pose.pt
   conf: 0.45
   keypoint_conf: 0.30
-  run_on_confirmed_tracks_only: true
+  imgsz: 640
 
-adl_recognition:
+adl:
   method: rule_based
   window_size: 30
   min_visible_keypoints: 8
-  smoothing_frames: 7
-  labels:
-    - standing
-    - sitting
-    - walking
-    - lying_down
-    - falling
-    - reaching
-    - bending
-    - unknown
+  smoothing_frames: 5
 
-face:
-  enabled: true
-  run_every_n_frames: 10
-  min_face_size: 40
-  detector: scrfd_500m
-  recognizer: arcface_r100
-  anti_spoofing_enabled: false
-  anti_spoofing_model: models/face/minifasnet.onnx
-  spoof_threshold: 0.50
-
-global_reid:
+reid:
   method: tfcs_par
   strong_threshold: 0.65
   weak_threshold: 0.45
-  confirm_frames: 3
-  max_candidate_age_sec: 300
-  weights:
-    face: 0.30
-    body: 0.20
-    pose: 0.15
-    height: 0.10
-    time: 0.15
-    topology: 0.10
-```
-
-### 3.2 Cấu hình RTX sau này
-
-| Module | PC i5 demo | RTX/GPU sau này |
-|---|---|---|
-| Human detect | YOLOv8n | YOLOv8s/m hoặc YOLO11n/s ablation |
-| Pose | YOLOv8n-pose | RTMPose-m, RTMO-l, YOLOv8s-pose |
-| Tracking | ByteTrack | BoT-SORT / Deep OC-SORT |
-| ADL | Rule-based | CTR-GCN, BlockGCN, SkateFormer |
-| Face | ArcFace CPU ONNX | ArcFace + RetinaFace GPU |
-| Anti-spoof | optional | MiniFASNet/CDCN enabled |
-| Global ReID | TFCS-PAR baseline | KPR / Pose2ID-assisted fusion |
-
----
-
-## 4. Chuẩn dữ liệu demo
-
-### 4.1 Video input
-
-```text
-data-test/
-  cam01_2026-01-29_16-26-25.mp4
-  cam02_2026-01-29_16-26-40.mp4
-  cam03_2026-01-29_16-26-55.mp4
-  cam04_2026-01-29_16-27-20.mp4
-```
-
-### 4.2 Manifest input
-
-Nên dùng manifest để không phụ thuộc tuyệt đối vào tên file:
-
-```json
-[
-  {
-    "video": "cam01_2026-01-29_16-26-25.mp4",
-    "camera_id": "cam01",
-    "start_time": "2026-01-29T16:26:25+07:00",
-    "fps": 30,
-    "location": "entrance",
-    "timezone": "Asia/Ho_Chi_Minh"
-  },
-  {
-    "video": "cam02_2026-01-29_16-26-40.mp4",
-    "camera_id": "cam02",
-    "start_time": "2026-01-29T16:26:40+07:00",
-    "fps": 30,
-    "location": "corridor",
-    "timezone": "Asia/Ho_Chi_Minh"
-  }
-]
-```
-
-### 4.3 Camera topology
-
-```yaml
-transitions:
-  - from: cam01
-    to: cam02
-    min_sec: 0
-    max_sec: 60
-    from_zone: exit_right
-    to_zone: entry_left
-    confidence: 1.0
-
-  - from: cam02
-    to: cam03
-    min_sec: 0
-    max_sec: 60
-    from_zone: exit_right
-    to_zone: entry_left
-    confidence: 1.0
-
-  - from: cam03
-    to: cam04
-    min_sec: 20
-    max_sec: 180
-    from_zone: elevator
-    to_zone: elevator
-    confidence: 0.9
-
-  - from: cam04
-    to: cam04
-    min_sec: 5
-    max_sec: 300
-    from_zone: room_door
-    to_zone: room_door
-    confidence: 0.7
+  top_k_candidates: 20
 ```
 
 ---
 
-# PART A — MODULE SPECIFICATION
+## 8. JSON Schemas
 
----
+All JSON files must be UTF-8, indent=2, and include `failure_reason` on every record.
 
-## 5. Module Human Detection
-
-### 5.1 Mục tiêu
-
-Phát hiện người trong từng frame video. Chỉ lấy class `person`.
-
-### 5.2 Model thống nhất
-
-| Mục | Giá trị |
-|---|---|
-| Model | `yolov8n.pt` |
-| Class | COCO class `0 = person` |
-| Input | video `.mp4` |
-| Output | bbox người theo frame |
-| Demo i5 | chạy mỗi 2 frame hoặc resize 640 |
-| RTX sau | có thể nâng lên YOLOv8s/m |
-
-### 5.3 Công thức
-
-**Bounding box:**
-
-```math
-B_i = (x_1, y_1, x_2, y_2, c_i)
-```
-
-**IoU giữa hai box:**
-
-```math
-IoU(A,B)=\frac{|A\cap B|}{|A\cup B|}
-```
-
-**Precision / Recall / F1:**
-
-```math
-Precision = \frac{TP}{TP + FP}
-```
-
-```math
-Recall = \frac{TP}{TP + FN}
-```
-
-```math
-F1 = \frac{2PR}{P+R}
-```
-
-### 5.4 Output JSON
+### `detections.json`
 
 ```json
 [
   {
     "frame_id": 0,
     "timestamp_sec": 0.0,
-    "camera_id": "cam01",
+    "camera_id": "cam1",
     "detections": [
       {
-        "bbox": [320, 120, 520, 680],
+        "bbox": [x1, y1, x2, y2],
         "confidence": 0.91,
         "class_id": 0,
         "class_name": "person",
@@ -410,85 +783,24 @@ F1 = \frac{2PR}{P+R}
 ]
 ```
 
-### 5.5 Metrics
-
-| Metric | Có ground truth | Không ground truth |
-|---|---:|---:|
-| Precision | yes | no |
-| Recall | yes | no |
-| F1 | yes | no |
-| mAP@50 | yes | no |
-| total_detections | yes | yes |
-| avg_confidence | yes | yes |
-| detection_fps | yes | yes |
-| metric_type | `ground_truth` | `proxy` |
-
----
-
-## 6. Module Human Tracking
-
-### 6.1 Mục tiêu
-
-Gán `track_id` ổn định cho mỗi người trong từng camera/clip.
-
-### 6.2 Model/thuật toán
-
-| Mục | Giá trị |
-|---|---|
-| Tracker mặc định | ByteTrack |
-| Input | `detections.json` hoặc video trực tiếp |
-| Output | `tracks.json`, overlay video |
-| Dùng cho | ADL window, Global ID candidate |
-
-ByteTrack phù hợp demo vì liên kết cả detection confidence thấp để giảm fragmentation trong tracking-by-detection.
-
-### 6.3 Công thức
-
-**Cost IoU:**
-
-```math
-C_{iou}(i,j)=1-IoU(B_i^{track},B_j^{det})
-```
-
-**EMA cho feature track nếu có appearance:**
-
-```math
-e_t = \alpha e_{t-1} + (1-\alpha)f_t
-```
-
-**Track quality score đề xuất:**
-
-```math
-Q_{track}=0.5\bar{c}+0.3\min(\frac{age}{W},1)-0.2\min(\frac{misses}{max\_age},1)
-```
-
-Trong đó:
-
-- \(\bar{c}\): confidence trung bình
-- `age`: số frame track tồn tại
-- `misses`: số frame mất detection
-- \(W\): ADL window, ví dụ 30
-
-### 6.4 Output JSON
+### `tracks.json`
 
 ```json
 [
   {
-    "frame_id": 30,
-    "timestamp_sec": 1.0,
-    "camera_id": "cam01",
+    "frame_id": 0,
+    "timestamp_sec": 0.0,
+    "camera_id": "cam1",
     "tracks": [
       {
         "track_id": 1,
-        "bbox": [320, 120, 520, 680],
+        "bbox": [x1, y1, x2, y2],
         "confidence": 0.88,
-        "class_name": "person",
-        "age": 30,
-        "hits": 28,
+        "age": 45,
+        "hits": 40,
         "misses": 2,
         "is_confirmed": true,
-        "fragment_count": 0,
-        "quality_score": 0.84,
+        "quality_score": 0.87,
         "failure_reason": "OK"
       }
     ]
@@ -496,94 +808,22 @@ Trong đó:
 ]
 ```
 
-### 6.5 Metrics
-
-| Metric | Ý nghĩa |
-|---|---|
-| total_tracks | tổng track sinh ra |
-| active_track_count_mean | số track trung bình/frame |
-| track_fragmentation_proxy | số lần track bị đứt ước lượng |
-| id_switch_count | cần GT |
-| IDF1 | cần GT |
-| tracking_fps | tốc độ module |
-
----
-
-## 7. Module Pose Estimation
-
-### 7.1 Mục tiêu
-
-Trích xuất skeleton COCO-17 cho từng người đã tracking.
-
-### 7.2 Model thống nhất
-
-| Mục | Giá trị |
-|---|---|
-| Model | `yolov8n-pose.pt` |
-| Keypoints | COCO-17 |
-| Input | video + tracks |
-| Output | `keypoints.json` |
-| Demo i5 | chỉ chạy trên confirmed track, mỗi 2 frame nếu cần |
-
-### 7.3 COCO-17 keypoints
-
-| ID | Keypoint | ID | Keypoint |
-|---:|---|---:|---|
-| 0 | nose | 9 | left_wrist |
-| 1 | left_eye | 10 | right_wrist |
-| 2 | right_eye | 11 | left_hip |
-| 3 | left_ear | 12 | right_hip |
-| 4 | right_ear | 13 | left_knee |
-| 5 | left_shoulder | 14 | right_knee |
-| 6 | right_shoulder | 15 | left_ankle |
-| 7 | left_elbow | 16 | right_ankle |
-| 8 | right_elbow |  |  |
-
-### 7.4 Công thức
-
-**Keypoint:**
-
-```math
-K_i=(x_i,y_i,c_i)
-```
-
-**Visible keypoint:**
-
-```math
-visible(K_i)=
-\begin{cases}
-1, & c_i \geq \tau_{kp}\\
-0, & c_i < \tau_{kp}
-\end{cases}
-```
-
-**Visible ratio:**
-
-```math
-r_{visible}=\frac{1}{17}\sum_{i=0}^{16}visible(K_i)
-```
-
-**PCK nếu có ground truth:**
-
-```math
-PCK@a = \frac{1}{N}\sum_i \mathbb{1}\left(\frac{||\hat{K}_i-K_i||_2}{s} < a\right)
-```
-
-### 7.5 Output JSON
+### `keypoints.json`
 
 ```json
 [
   {
-    "frame_id": 30,
-    "timestamp_sec": 1.0,
-    "camera_id": "cam01",
+    "frame_id": 0,
+    "timestamp_sec": 0.0,
+    "camera_id": "cam1",
     "persons": [
       {
         "track_id": 1,
-        "bbox": [320, 120, 520, 680],
+        "bbox": [x1, y1, x2, y2],
         "visible_keypoint_ratio": 0.82,
         "keypoints": [
-          {"id": 0, "name": "nose", "x": 421.0, "y": 150.0, "confidence": 0.91}
+          {"id": 0, "name": "nose", "x": 123.0, "y": 222.0, "confidence": 0.91},
+          {"id": 1, "name": "left_eye", "x": 130.0, "y": 215.0, "confidence": 0.88}
         ],
         "failure_reason": "OK"
       }
@@ -592,125 +832,14 @@ PCK@a = \frac{1}{N}\sum_i \mathbb{1}\left(\frac{||\hat{K}_i-K_i||_2}{s} < a\righ
 ]
 ```
 
----
-
-## 8. Module Skeleton Feature Extraction
-
-### 8.1 Mục tiêu
-
-Từ COCO-17 keypoints, trích xuất đặc trưng hình học cho ADL và Global ReID.
-
-### 8.2 Skeleton feature đề xuất
-
-| Feature | Công thức/ý nghĩa | Dùng cho |
-|---|---|---|
-| torso_angle | độ nghiêng thân | ADL |
-| knee_angle | góc gối | sitting/falling |
-| ankle_velocity | vận tốc cổ chân | walking/falling |
-| bbox_aspect_ratio | rộng/cao bbox | lying_down |
-| height_ratio | chiều cao tương đối | Global ReID |
-| shoulder_width_ratio | tỉ lệ vai | ReID phụ |
-| visible_ratio | chất lượng skeleton | quality gate |
-| gait_signature | thống kê chuyển động cổ chân/hông | Global ReID |
-
-### 8.3 Công thức góc khớp
-
-Với ba điểm \(p_1, v, p_2\):
-
-```math
-\theta = \cos^{-1}\left(
-\frac{(p_1-v)\cdot(p_2-v)}
-{||p_1-v||||p_2-v||}
-\right)
-```
-
-### 8.4 Vận tốc cổ chân
-
-```math
-v_{ankle}=\frac{1}{W-1}\sum_{t=2}^{W}||A_t-A_{t-1}||_2
-```
-
-Trong đó \(W\) là sliding window, mặc định 30 frame.
-
-### 8.5 Chiều cao tương đối
-
-```math
-h_{rel}=\frac{y_{ankle}-y_{head}}{H_{frame}}
-```
-
-### 8.6 Gait signature đơn giản
-
-```math
-g = [\mu(v_{ankle}), \sigma(v_{ankle}), \mu(v_{hip}), \sigma(v_{hip}), h_{rel}]
-```
-
----
-
-## 9. Module ADL Recognition
-
-### 9.1 Mục tiêu
-
-Nhận dạng hành vi sinh hoạt hằng ngày từ skeleton sequence.
-
-### 9.2 Class demo
-
-| Label | Ý nghĩa |
-|---|---|
-| standing | đứng |
-| sitting | ngồi |
-| walking | đi |
-| lying_down | nằm |
-| falling | té/ngã |
-| reaching | với tay |
-| bending | cúi người |
-| unknown | không đủ dữ liệu |
-
-### 9.3 Rule-based ADL baseline
-
-Rule baseline dùng cho demo i5:
-
-```text
-if visible_keypoints < 8:
-    unknown
-
-elif torso_angle > 68 and ankle_velocity high:
-    falling
-
-elif torso_angle > 68 and bbox_aspect_ratio > 1.15:
-    lying_down
-
-elif knee_angle < 150 and ankle_velocity low:
-    sitting
-
-elif torso_angle > 45 and ankle_velocity low:
-    bending
-
-elif wrist_above_shoulder:
-    reaching
-
-elif ankle_velocity > threshold:
-    walking
-
-else:
-    standing
-```
-
-### 9.4 Temporal smoothing
-
-```math
-\hat{y}_t = mode(y_{t-k},...,y_t)
-```
-
-Dùng majority vote 5–7 frame để giảm label flickering.
-
-### 9.5 Output JSON
+### `adl_events.json`
 
 ```json
 [
   {
-    "frame_id": 60,
-    "timestamp_sec": 2.0,
-    "camera_id": "cam01",
+    "frame_id": 30,
+    "timestamp_sec": 1.0,
+    "camera_id": "cam1",
     "track_id": 1,
     "raw_label": "walking",
     "smoothed_label": "walking",
@@ -723,769 +852,410 @@ Dùng majority vote 5–7 frame để giảm label flickering.
 ]
 ```
 
-### 9.6 Metrics
+### `reid_tracks.json`
 
-| Metric | Ý nghĩa |
-|---|---|
-| total_adl_events | tổng event ADL |
-| class_distribution | phân bố nhãn |
-| unknown_rate | tỉ lệ unknown |
-| avg_confidence | confidence trung bình |
-| macro_f1 | cần ground truth |
-| confusion_matrix | cần ground truth |
-
----
-
-## 10. Module Face Detection
-
-### 10.1 Mục tiêu
-
-Phát hiện và căn chỉnh khuôn mặt trong crop người để hỗ trợ Global ID.
-
-### 10.2 Lựa chọn demo
-
-| Thành phần | Demo i5 |
-|---|---|
-| Detector | SCRFD/RetinaFace ONNX qua InsightFace |
-| Chạy mỗi | 10 frame/track |
-| Input | crop người từ bbox track |
-| Output | face bbox + landmarks |
-
-Không nên chạy face detect full frame mọi frame trên i5. Nên chạy theo track crop và giảm tần suất.
-
-### 10.3 Face alignment
-
-Dùng 5 landmarks: mắt trái, mắt phải, mũi, khóe miệng trái, khóe miệng phải.
-
-Similarity transform:
-
-```math
-x' = sRx + t
+```json
+[
+  {
+    "frame_id": 30,
+    "timestamp_sec": 1.0,
+    "camera_id": "cam2",
+    "local_track_id": 1,
+    "global_id": "GID-001",
+    "state": "ACTIVE",
+    "match_status": "strong_match",
+    "score_total": 0.72,
+    "score_time": 1.0,
+    "score_topology": 1.0,
+    "score_pose": 0.68,
+    "score_body": 0.51,
+    "score_face": null,
+    "delta_time_sec": 42.0,
+    "topology_allowed": true,
+    "failure_reason": "OK"
+  }
+]
 ```
 
-Sau alignment, resize về `112x112` cho ArcFace.
+### Metrics JSON (all modules)
 
-### 10.4 Output JSON
+Every `*_metrics.json` file must include these top-level fields:
 
 ```json
 {
-  "frame_id": 120,
-  "camera_id": "cam01",
-  "track_id": 1,
-  "face_detected": true,
-  "face_bbox": [350, 130, 440, 230],
-  "landmarks": [[370, 160], [415, 160], [392, 182], [375, 210], [410, 210]],
-  "face_quality": 0.78,
-  "failure_reason": "OK"
+  "metric_type": "proxy",
+  "run_id": "2026-05-01_15-30-22_baseline",
+  "module": "pose_estimation",
+  "input_videos": ["cam1.mp4", "cam2.mp4"],
+  "model_info": {"name": "yolo11n-pose", "path": "models/weights/yolo11n-pose.pt"},
+  "output_paths": {"json": "...", "overlay": "...", "paper_table": "..."},
+  "metrics": { ... }
 }
 ```
 
 ---
 
-## 11. Module Face Recognition
+## 9. Metrics Policy
 
-### 11.1 Mục tiêu
+### Core rule
 
-Trích xuất embedding khuôn mặt và so khớp người.
+> **Never report accuracy unless you have ground truth. Never call a proxy metric an accuracy.**
 
-### 11.2 Model
+| Situation | `metric_type` field | Can use "accuracy"? |
+|---|---|---|
+| No ground truth available | `"proxy"` | NO |
+| Ground truth loaded from `dataset/annotations/` | `"ground_truth"` | YES |
 
-| Mục | Giá trị |
+### Proxy metrics are valid research outputs
+
+Proxy metrics measure system behaviour without GT labels. They are legitimate for:
+- Benchmarking runtime (FPS, latency)
+- Describing output volume (detections per frame, pose instances)
+- Measuring signal quality (keypoint visibility, track confirmation rate)
+- Comparing system variants (ablation studies)
+
+### What to never do
+
+- Do not compute `accuracy = correct / total` unless you have labelled GT.
+- Do not call `avg_confidence` an accuracy metric — it is a proxy.
+- Do not invent numbers. If a metric cannot be computed, omit it or set it to `null`.
+- Do not pretend `unknown_rate` is a performance metric — it is a coverage proxy.
+
+### Runtime metrics (always proxy)
+
+| Metric | Unit |
 |---|---|
-| Model | ArcFace ONNX |
-| Embedding | 512-D |
-| Similarity | cosine |
-| Dùng trong CPose | evidence phụ cho Global ID |
-
-### 11.3 ArcFace loss tham khảo
-
-ArcFace dùng additive angular margin:
-
-```math
-L=-\frac{1}{N}\sum_{i=1}^{N}\log
-\frac{e^{s\cos(\theta_{y_i}+m)}}
-{e^{s\cos(\theta_{y_i}+m)}+\sum_{j\neq y_i}e^{s\cos\theta_j}}
-```
-
-### 11.4 Cosine similarity
-
-```math
-S_{face}(a,b)=\frac{f_a\cdot f_b}{||f_a||||f_b||}
-```
-
-Nếu embedding đã L2-normalized:
-
-```math
-S_{face}(a,b)=f_a\cdot f_b
-```
-
-### 11.5 Quy tắc dùng face
-
-| Case | Quy tắc |
-|---|---|
-| mặt rõ | dùng face score mạnh |
-| không thấy mặt | `score_face = null`, không fail |
-| spoof risk | không update identity bằng face |
-| quay lưng | dùng body + pose + time + topology |
+| `module_fps` | frames / second |
+| `end_to_end_fps` | frames / second |
+| `total_runtime_sec` | seconds |
+| `latency_ms_per_frame` | milliseconds |
 
 ---
 
-## 12. Module Face Anti-Spoofing
+## 10. Terminal Logging Rules
 
-### 12.1 Mục tiêu
+### What is allowed per module run
 
-Ngăn ảnh in/video replay được dùng để đăng ký hoặc cập nhật face embedding.
+1. Header block with module name and run ID
+2. Key config summary (input, output, model, video count, mode)
+3. One line per video processed
+4. One summary block at the end
+5. Paths to all output files
 
-### 12.2 Demo i5
+### What is forbidden
 
-Face anti-spoofing nên để optional:
+- Per-frame log lines (absolutely forbidden)
+- Stack traces unless `--debug` flag is set
+- Verbose model loading output (suppress unless `--debug`)
+- Repeated warnings for the same condition
 
-```yaml
-anti_spoofing_enabled: false
+### Reference terminal format
+
 ```
-
-Khi có model ONNX:
-
-```yaml
-anti_spoofing_enabled: true
-spoof_threshold: 0.50
-```
-
-### 12.3 Output
-
-```json
-{
-  "track_id": 1,
-  "face_live_score": 0.83,
-  "spoof_status": "live",
-  "anti_spoofing_model": "MiniFASNet",
-  "failure_reason": "OK"
-}
-```
-
-Nếu chưa bật:
-
-```json
-{
-  "spoof_status": "unchecked",
-  "failure_reason": "ANTI_SPOOF_DISABLED"
-}
-```
-
-### 12.4 Metric
-
-| Metric | Cần dataset |
-|---|---|
-| APCER | Face anti-spoofing GT |
-| BPCER | Face anti-spoofing GT |
-| ACER | Face anti-spoofing GT |
-| live/spoof count | không cần GT |
-
----
-
-## 13. Module Body Appearance ReID
-
-### 13.1 Mục tiêu
-
-Tạo feature ngoại hình cơ thể để hỗ trợ Global ID khi face yếu.
-
-### 13.2 Demo i5 feature nhẹ
-
-Không cần model deep ReID ngay. Dùng:
-
-| Feature | Kích thước |
-|---|---:|
-| HSV histogram head/body/legs | 168 |
-| Hu moments | 7 |
-| aspect ratio | 1 |
-| height ratio | 1 |
-| Tổng | ~177 |
-
-### 13.3 HSV body split
-
-```text
-person crop
-  head: 0%–20%
-  body: 20%–70%
-  legs: 70%–100%
-```
-
-### 13.4 Similarity
-
-```math
-S_{body}=\frac{h_a\cdot h_b}{||h_a||||h_b||}
-```
-
-### 13.5 Lưu ý
-
-Body appearance dễ sai khi:
-
-- thay áo;
-- ánh sáng khác camera;
-- crop bị che;
-- người quay lưng.
-
-Do đó body không được là tín hiệu duy nhất trong Global ID.
-
----
-
-## 14. Module Cross-Camera Global ReID / TFCS-PAR
-
-### 14.1 Mục tiêu
-
-Gán Global ID ổn định xuyên 4 camera.
-
-### 14.2 Input
-
-| Input | Từ module |
-|---|---|
-| `tracks.json` | tracking |
-| `keypoints.json` | pose |
-| `adl_events.json` | ADL |
-| `face_events.json` | face |
-| `camera_topology.yaml` | config |
-| `multicam_manifest.json` | config |
-
-### 14.3 Công thức score tổng
-
-```math
-S_{total}=w_fS_{face}+w_bS_{body}+w_pS_{pose}+w_hS_{height}+w_tS_{time}+w_cS_{camera}
-```
-
-Trong đó:
-
-| Thành phần | Ý nghĩa |
-|---|---|
-| \(S_{face}\) | cosine similarity ArcFace |
-| \(S_{body}\) | cosine similarity body feature |
-| \(S_{pose}\) | similarity gait/pose signature |
-| \(S_{height}\) | tương đồng chiều cao tương đối |
-| \(S_{time}\) | hợp lệ theo transition window |
-| \(S_{camera}\) | hợp lệ theo topology camera |
-
-### 14.4 Time-window gating
-
-```math
-G_{time}(i,j)=
-\begin{cases}
-1, & \Delta t_{ij}\in[T_{min}^{i\rightarrow j},T_{max}^{i\rightarrow j}]\\
-0, & otherwise
-\end{cases}
-```
-
-### 14.5 Camera topology gating
-
-```math
-G_{camera}(c_i,c_j)=
-\begin{cases}
-1, & (c_i,c_j)\in E_{topology}\\
-0, & otherwise
-\end{cases}
-```
-
-### 14.6 Height similarity
-
-```math
-S_{height}=1-\min\left(\frac{|h_a-h_b|}{\tau_h},1\right)
-```
-
-### 14.7 Pose/gait similarity
-
-```math
-S_{pose}=\frac{g_a\cdot g_b}{||g_a||||g_b||}
-```
-
-### 14.8 Quyết định Global ID
-
-```math
-ID =
-\begin{cases}
-GID_{old}, & S_{total} \geq \tau_{strong}\\
-GID_{old}^{soft}, & \tau_{weak}\leq S_{total}<\tau_{strong}\\
-UNK, & S_{total}<\tau_{weak}
-\end{cases}
-```
-
-Mặc định:
-
-```yaml
-strong_threshold: 0.65
-weak_threshold: 0.45
-confirm_frames: 3
-```
-
-### 14.9 State machine
-
-| State | Ý nghĩa |
-|---|---|
-| ACTIVE | đang thấy người |
-| PENDING_TRANSFER | vừa rời camera qua exit zone |
-| IN_BLIND_ZONE | đang trong vùng mù như thang máy |
-| IN_ROOM | vào phòng, có thể quay ra cùng camera |
-| CLOTHING_CHANGE_SUSPECTED | body thay đổi mạnh sau khi vào phòng |
-| DORMANT | mất lâu nhưng chưa đóng |
-| CLOSED | kết thúc track |
-
-### 14.10 Logic khi thay áo
-
-Khi state là `IN_ROOM` hoặc `CLOTHING_CHANGE_SUSPECTED`:
-
-```text
-giảm weight body appearance
-tăng weight time/topology/height/pose
-face nếu có thì dùng, không bắt buộc
-không tạo GID mới ngay nếu vẫn trong transition hợp lệ
-```
-
-### 14.11 Output JSON
-
-```json
-{
-  "frame_id": 120,
-  "timestamp_sec": 4.0,
-  "camera_id": "cam03",
-  "local_track_id": 2,
-  "global_id": "GID-001",
-  "state": "ACTIVE",
-  "match_status": "strong_match",
-  "score_total": 0.72,
-  "score_face": null,
-  "score_body": 0.51,
-  "score_pose": 0.68,
-  "score_height": 0.81,
-  "score_time": 1.0,
-  "score_topology": 1.0,
-  "topology_allowed": true,
-  "delta_time_sec": 42.0,
-  "failure_reason": "OK"
-}
-```
-
----
-
-# PART B — BENCHMARK & EVALUATION
-
----
-
-## 15. Benchmark cần có cho demo
-
-### 15.1 Benchmark runtime
-
-| Module | Metric bắt buộc |
-|---|---|
-| Detection | FPS, latency/frame, total detections |
-| Tracking | FPS, total tracks, fragmentation proxy |
-| Pose | FPS, pose instances, visible ratio |
-| ADL | events/sec, unknown rate, class distribution |
-| Face | face detect rate, face embedding count |
-| Global ReID | GID count, transfer count, conflict count |
-| End-to-end | total runtime, end-to-end FPS |
-
-### 15.2 Benchmark thật nếu có annotation
-
-| Module | Metric thật |
-|---|---|
-| Detection | Precision, Recall, F1, mAP@50 |
-| Tracking | IDF1, ID Switch, Fragmentation |
-| Pose | PCK, missing keypoint rate |
-| ADL | Accuracy, Macro-F1, confusion matrix |
-| Global ReID | Global ID Accuracy, Cross-camera IDF1, False Split, False Merge |
-
-### 15.3 Log terminal mẫu
-
-```text
 ============================================================
-CPose Pipeline Run
+CPose Pose Estimation | Run: 2026-05-01_15-30-22_baseline
 ============================================================
-Input folder : data-test/
-Videos       : 4
-People       : expected 3
-Device       : CPU i5
-Model        : YOLOv8n / YOLOv8n-pose
+Input        : data-test/
+Output       : dataset/runs/2026-05-01_15-30-22_baseline/03_pose
+Model        : models/weights/yolo11n-pose.pt
+Videos       : 2
+Mode         : module-only
+Comparison   : enabled, first 2 videos
 
-[1/4] cam01_2026-01-29_16-26-25.mp4
-Detection FPS : 12.4
-Tracking FPS  : 15.8
-Pose FPS      : 7.2
-ADL unknown   : 8.3%
-Global IDs    : 3
+[1/2] cam1_2026-01-29_16-26-25.mp4
+Frames=1820 | PoseInst=1712 | KP-Visible=0.84 | FPS=28.6 | Latency=34.9ms
 
-Saved:
-dataset/outputs/pipeline/2026-04-30_20-10-15/
-============================================================
+[2/2] cam2_2026-01-29_16-27-10.mp4
+Frames=1765 | PoseInst=1630 | KP-Visible=0.81 | FPS=27.9 | Latency=35.8ms
+
+-------------------- SUMMARY --------------------
+Total frames        : 3585
+Total pose instances: 3342
+Mean KP visibility  : 0.825
+Average FPS         : 28.2
+Metric type         : proxy
+Saved metrics       : dataset/runs/.../03_pose/pose_metrics.json
+Paper table         : dataset/runs/.../08_paper_report/table_pose_results.csv
+Comparison videos   : dataset/runs/.../06_comparison/
+=================================================
+```
+
+### Error and warning line formats
+
+```
+[ERROR] cam3_footage.mp4 | INVALID_VIDEO | reason=codec not supported
+[WARN]  model not found, fallback used: models/weights/yolov8n.pt
+```
+
+### `console_summary.txt`
+
+The complete terminal output of every run must be saved verbatim to `console_summary.txt` in the run root directory.
+
+---
+
+## 11. Video Comparison Rules
+
+### When to generate comparisons
+
+Only when `--make-comparison` is passed. Default is off.
+
+### Layout
+
+Every comparison video is side-by-side:
+- **Left half:** raw input frame
+- **Right half:** processed output frame (with overlays)
+- **Text overlay (bottom-left of each half, small font):**
+  - Left: `LEFT: Raw Input`
+  - Right: `RIGHT: CPose <Module Name>`
+
+### Output naming
+
+```
+<video_stem>_raw_vs_detection.mp4
+<video_stem>_raw_vs_tracking.mp4
+<video_stem>_raw_vs_pose.mp4
+<video_stem>_raw_vs_adl.mp4
+<video_stem>_raw_vs_reid.mp4
+```
+
+All comparison videos go to `06_comparison/`.
+
+### `--compare-count N`
+
+Only generate comparisons for the first N videos in `data-test/`. Default N = 2.
+
+### `--preview`
+
+Open an OpenCV `imshow` window for live playback. If no display is available (headless server), issue one warning line and continue. **Never crash on missing display.**
+
+### `preview_index.json`
+
+```json
+{
+  "run_id": "2026-05-01_15-30-22_baseline",
+  "comparisons": [
+    {
+      "video": "cam1_2026-01-29_16-26-25.mp4",
+      "raw_vs_detection": "06_comparison/cam1_raw_vs_detection.mp4",
+      "raw_vs_tracking": "06_comparison/cam1_raw_vs_tracking.mp4",
+      "raw_vs_pose": "06_comparison/cam1_raw_vs_pose.mp4",
+      "raw_vs_adl": "06_comparison/cam1_raw_vs_adl.mp4",
+      "raw_vs_reid": "06_comparison/cam1_raw_vs_reid.mp4"
+    }
+  ]
+}
 ```
 
 ---
 
-## 16. Paper-ready benchmark table template
+## 12. Error Taxonomy
 
-### 16.1 Dataset summary
+All modules must use the following error codes in `failure_reason` fields. Defined in `src/common/errors.py`.
 
-| Item | Value |
-|---|---:|
-| Cameras | 4 |
-| Subjects | 3 |
-| Total videos | TODO |
-| Total duration | TODO |
-| Resolution | TODO |
-| FPS | TODO |
-| ADL classes | 8 |
-| Blind-zone scenarios | elevator, room, door |
-| Clothing-change cases | TODO |
-| No-face cases | TODO |
-
-### 16.2 Module runtime results
-
-| Module | Model/Method | Device | FPS | Latency ms/frame | Output |
-|---|---|---|---:|---:|---|
-| Detection | YOLOv8n | i5 CPU | TODO | TODO | detections.json |
-| Tracking | ByteTrack | i5 CPU | TODO | TODO | tracks.json |
-| Pose | YOLOv8n-pose | i5 CPU | TODO | TODO | keypoints.json |
-| ADL | Rule-based | i5 CPU | TODO | TODO | adl_events.json |
-| Global ReID | TFCS-PAR | i5 CPU | TODO | TODO | reid_tracks.json |
-
-### 16.3 Global ID results
-
-| Scenario | Metric | Value |
-|---|---|---:|
-| cam01 → cam02 | Transfer Success Rate | TODO |
-| cam02 → cam03 | Transfer Success Rate | TODO |
-| cam03 → elevator → cam04 | Blind-zone Recovery Rate | TODO |
-| cam04 → room → cam04 | Room Re-entry Accuracy | TODO |
-| clothing change | ID Preservation | TODO |
-| all | ID Switch | TODO |
-| all | False Split Rate | TODO |
-| all | False Merge Rate | TODO |
-
----
-
-# PART C — DATASETS TO DOWNLOAD
-
----
-
-## 17. Dataset ưu tiên cho laptop
-
-### 17.1 Dataset tự thu của CPose
-
-Đây là quan trọng nhất cho demo và paper.
-
-| Bộ dữ liệu | Mục tiêu | Số lượng tối thiểu |
-|---|---|---:|
-| CPose-4Cam-3Person | test Global ID | 4 cam × 3 người |
-| CPose-ADL-Short | test ADL | 10–30 clip/class |
-| CPose-ClothingChange | test thay áo | 5–10 sequence |
-| CPose-NoFace | test quay lưng/mất mặt | 5–10 sequence |
-| CPose-Occclusion | test che khuất | 5–10 sequence |
-
-### 17.2 Dataset ngoài nên tải
-
-| Nhóm | Dataset | Dùng cho | Link |
-|---|---|---|---|
-| Pose | COCO Keypoints | pose benchmark | <https://cocodataset.org> |
-| Tracking | MOT17 | tracking benchmark | <https://motchallenge.net/data/MOT17> |
-| ReID | Market-1501 | body ReID | <https://zheng-lab.cecs.anu.edu.au/Project/project_reid.html> |
-| ReID | DukeMTMC-reID | body ReID | thường qua Kaggle/Mirror |
-| Occluded ReID | Occluded-Duke | occlusion ReID | paper/project page |
-| Face recognition | LFW | face verification | <http://vis-www.cs.umass.edu/lfw> |
-| Anti-spoof | CASIA-FASD | spoof/live | <http://www.cbsr.ia.ac.cn/english/FASDB_Agreement/Agreement.html> |
-| Anti-spoof | Replay-Attack | spoof/live | <https://www.idiap.ch/en/dataset/replayattack> |
-| ADL | Toyota Smarthome | ADL | <https://project.inria.fr/toyotasmarthome> |
-| Fall/ADL | UR Fall | fall detection | <http://fenix.ur.edu.pl/~mkepski/ds/uf.html> |
-
-### 17.3 Dataset không nên tải ngay cho demo i5
-
-| Dataset | Lý do chưa ưu tiên |
+| Code | Meaning |
 |---|---|
-| NTU RGB+D 120 full | rất lớn, không cần cho demo ngắn |
-| Human3.6M full | nặng, 3D pose research, không cần runtime |
-| CrowdHuman full | detection benchmark lớn, chưa cần |
-| CelebA-Spoof full | lớn, chỉ cần nếu làm anti-spoof riêng |
+| `OK` | No error |
+| `NO_PERSON_DETECTED` | No person found in frame |
+| `LOW_DETECTION_CONFIDENCE` | Detection below confidence threshold |
+| `TRACK_FRAGMENTED` | Track was broken and restarted |
+| `UNCONFIRMED_TRACK` | Track has not reached `min_hits` yet |
+| `SHORT_TRACK_WINDOW` | Track too short for ADL window |
+| `LOW_KEYPOINT_VISIBILITY` | Fewer than `min_visible_keypoints` keypoints visible |
+| `NO_FACE` | No face detected in person crop |
+| `BODY_OCCLUDED` | Person bounding box heavily occluded |
+| `TOPOLOGY_CONFLICT` | Camera transition not permitted by topology |
+| `TIME_WINDOW_CONFLICT` | Transition time outside allowed window |
+| `MULTI_CANDIDATE_CONFLICT` | Multiple Global ID candidates above threshold |
+| `MODEL_NOT_FOUND` | Model file missing; fallback attempted |
+| `INVALID_VIDEO` | Video file cannot be opened or read |
+| `INVALID_MANIFEST` | Manifest JSON is malformed |
+| `INVALID_TOPOLOGY` | Topology YAML is malformed or missing edges |
+| `MISSING_INPUT_JSON` | Required upstream JSON not found |
+| `GROUND_TRUTH_NOT_FOUND` | GT annotation file missing for evaluation |
 
 ---
 
-# PART D — REFERENCE NUMBERS
+## 13. Paper Report Output
+
+### Required files in `08_paper_report/`
+
+| File | Contents |
+|---|---|
+| `paper_metrics_summary.md` | Narrative summary with all key metrics |
+| `table_module_runtime.csv` | FPS and latency per module |
+| `table_detection_results.csv` | Detection metrics |
+| `table_tracking_results.csv` | Tracking metrics |
+| `table_pose_results.csv` | Pose estimation metrics |
+| `table_adl_results.csv` | ADL metrics |
+| `table_reid_results.csv` | Global ReID metrics |
+| `figure_list.md` | List of generated overlay and comparison videos |
+
+### `table_module_runtime.csv` format
+
+```csv
+module,total_frames,total_instances,fps,latency_ms,metric_type
+detection,3585,4201,31.2,32.1,proxy
+tracking,3585,3988,29.4,34.0,proxy
+pose,3585,3342,28.2,35.4,proxy
+adl,3585,3200,120.5,8.3,proxy
+global_reid,3585,14,300.0,3.2,proxy
+```
+
+### Rules for paper tables
+
+- Only summary numbers — no per-frame data.
+- Always include a `metric_type` column.
+- If a metric could not be computed, write `N/A` — never a fabricated number.
+- Tables must be directly paste-able into a LaTeX `tabular` or Markdown table without editing.
 
 ---
 
-## 18. Bảng số liệu từ nghiên cứu liên quan
+## 14. Coding Constraints
 
-### 18.1 Pose / ADL / Tracking
+### Always
 
-| Paper/Method | Dataset/Setup | Metric | Reported value |
+- Use `pathlib.Path` for all file and directory operations. Never use `os.path.join` with string concatenation.
+- Save JSON with `json.dumps(data, ensure_ascii=False, indent=2)` and explicit UTF-8 encoding.
+- Check if a module's input JSON exists before processing. Raise `MISSING_INPUT_JSON` if not.
+- Use relative paths anchored from the project root. Never hardcode absolute paths.
+- Load model paths from `model_registry.yaml`, not from function arguments or environment variables.
+- Attempt fallback models in order when the primary model is not found. Log `[WARN]` for each fallback attempt.
+- Wrap per-video processing in try/except. Log `[ERROR]` and continue — never crash the loop.
+
+### Never
+
+- Do not log per-frame data to the terminal.
+- Do not open a GUI window unless `--preview` is explicitly passed.
+- Do not import from `app/` in `src/`. They are separate packages.
+- Do not run model inference inside `metrics.py`, `schemas.py`, or `main.py`. All inference belongs in the backend/model wrapper.
+- Do not call `accuracy` any variable that is not `correct_predictions / total_predictions` against labelled ground truth.
+- Do not write output files directly to `dataset/outputs/` from new code. All new code writes to `dataset/runs/<run_id>/`.
+
+### Module isolation
+
+- `detection` imports from: `src.common` only
+- `tracking` imports from: `src.common`, reads `detections.json`
+- `pose_estimation` imports from: `src.common`, reads `tracks.json`
+- `adl_recognition` imports from: `src.common`, reads `keypoints.json`
+- `global_reid` imports from: `src.common`, reads `tracks.json`, `keypoints.json`, `adl_events.json`
+- `pipeline` imports from: all module `api.py` files
+- No module imports directly from another module's internals (only via `api.py`)
+
+---
+
+## 15. Review Constraints
+
+When reviewing or generating code for CPose, apply the following checks:
+
+### Metric checks
+
+- [ ] Is `metric_type` set on every metrics object?
+- [ ] Does any code compute `accuracy` without checking for ground truth first?
+- [ ] Are all `null` metrics omitted from paper tables rather than shown as zero?
+
+### Output path checks
+
+- [ ] Does any function hardcode an absolute path?
+- [ ] Does any function write to `dataset/outputs/` directly (it should use the run directory)?
+- [ ] Does any path construction use string concatenation instead of `pathlib`?
+
+### Module boundary checks
+
+- [ ] Does the detection module assign any `track_id`?
+- [ ] Does the tracking module create any `global_id`?
+- [ ] Does the pose module classify any ADL label?
+- [ ] Does the ADL module create any Global ID?
+- [ ] Does the global_reid module re-run detection/tracking/pose if JSON inputs exist?
+
+### Log checks
+
+- [ ] Does any module print per-frame output to the terminal without `--debug`?
+- [ ] Is every video processing loop wrapped in try/except with a single error log line?
+- [ ] Is the summary block printed at the end of each module run?
+
+### JSON checks
+
+- [ ] Is every JSON file written with `ensure_ascii=False, indent=2`?
+- [ ] Does every record contain a `failure_reason` field?
+- [ ] Does every metrics JSON contain `metric_type`, `run_id`, `module`, `input_videos`?
+
+---
+
+## 16. Roadmap
+
+### Phase 1 — Demo on i5 CPU (current)
+
+| Task | Target |
+|---|---|
+| YOLOv8n detection | Process 4 short videos |
+| ByteTrack | Stable tracks for 3 persons |
+| YOLOv8n-pose | Skeleton overlay working |
+| Rule-based ADL | standing/sitting/walking/unknown working |
+| TFCS-PAR | Global ID maintained across 4 cameras |
+| Proxy benchmark | FPS, latency, unknown rate in paper table |
+
+### Phase 2 — Ground-truth metrics for paper
+
+| Task | Target |
+|---|---|
+| Annotate 4 cameras × 3 persons | GT Global IDs |
+| Annotate ADL events | Macro-F1, Confusion Matrix |
+| Annotate a few detection clips | Detection Precision/Recall |
+| Evaluate Global ReID | ID Switch, False Split, False Merge |
+| Ablation study | Remove face/body/pose/topology one at a time |
+
+### Phase 3 — GPU-accelerated upgrade
+
+| Task | Target |
+|---|---|
+| RTMPose / RTMO | Higher pose accuracy + FPS |
+| BoT-SORT / Deep OC-SORT | More robust tracking |
+| CTR-GCN / BlockGCN | Learned ADL recognition |
+| KPR / Pose2ID | Occluded ReID |
+| MiniFASNet / CDCN | Anti-spoofing |
+
+---
+
+## 17. Reference Numbers
+
+### Pose/tracking benchmarks from literature
+
+| Method | Dataset | Metric | Value |
 |---|---|---|---:|
 | RTMPose-m | COCO | AP | 75.8 |
 | RTMPose-m | Intel i7 CPU | FPS | 90+ |
 | RTMPose-m | GTX 1660Ti | FPS | 430+ |
-| RTMPose-s | Snapdragon 865 | FPS | 70+ |
 | RTMO-l | COCO val2017 | AP | 74.8 |
 | RTMO-l | V100 GPU | FPS | 141 |
-| RTMO-l | CrowdPose | AP | 73.2 |
-| MotionBERT | NTU-60 XSub | Top-1 | 97.2% |
-| π-ViT | Toyota Smarthome CS | mCA | 72.9% |
-| π-ViT | NTU-60 | Top-1 | 94.0% |
 | ByteTrack | MOT17 | HOTA | 63.1 |
 | BoT-SORT | MOT17 | HOTA | 65.0 |
 | Pose-assisted MCPT | AI City 2023 | IDF1 | 86.76% |
+| MotionBERT | NTU-60 XSub | Top-1 | 97.2% |
+| π-ViT | Toyota Smarthome CS | mCA | 72.9% |
+| UniHCP | Market-1501 | ReID mAP | 90.3 |
 
-### 18.2 Human-centric unified models
-
-| Paper | Scale/Result | Ý nghĩa cho CPose |
-|---|---|---|
-| HumanBench | 37 datasets, 11,019,187 images | chứng minh human-centric pretraining đa nhiệm hữu ích |
-| UniHCP | 33 datasets, 5 tasks, 99.97% shared params | hướng dài hạn: unify pose/detect/ReID/attribute |
-| UniHCP | Market1501 ReID mAP 90.3 | mốc tham khảo ReID mạnh |
-| UniHCP | PA-100K mA 86.18 | mốc attribute recognition |
-| UniHCP | CrowdHuman JI 85.8 | mốc pedestrian detection |
+These numbers are from published papers and are used as baselines for comparison. Do not present them as CPose results.
 
 ---
 
-# PART E — GITHUB REPOS
+## 18. Pre-Demo Checklist
+
+Before any live demonstration:
+
+- [ ] At least 4 videos placed in `data-test/`
+- [ ] `multicam_manifest.json` timestamps match video filenames
+- [ ] `camera_topology.yaml` edges reflect actual camera layout
+- [ ] `models/weights/yolov8n.pt` downloaded
+- [ ] `models/weights/yolov8n-pose.pt` downloaded
+- [ ] Detection overlay renders correctly
+- [ ] Tracking overlay with stable IDs renders correctly
+- [ ] Pose skeleton overlay renders correctly
+- [ ] ADL labels appear on overlay
+- [ ] Global ID labels appear on reid overlay
+- [ ] `benchmark_summary.json` exists in run directory
+- [ ] Terminal output shows no per-frame lines
+- [ ] No metric is labelled "accuracy" without ground truth
+- [ ] Comparison videos exist in `06_comparison/`
+- [ ] `08_paper_report/table_module_runtime.csv` is populated
 
 ---
-
-## 19. Repo nên dùng
-
-| Module | Repo | Link |
-|---|---|---|
-| YOLO detection/pose | Ultralytics | <https://github.com/ultralytics/ultralytics> |
-| ByteTrack | FoundationVision | <https://github.com/FoundationVision/ByteTrack> |
-| BoT-SORT | NirAharon | <https://github.com/NirAharon/BoT-SORT> |
-| BoxMOT | mikel-brostrom | <https://github.com/mikel-brostrom/boxmot> |
-| InsightFace | deepinsight | <https://github.com/deepinsight/insightface> |
-| ArcFace | deepinsight | <https://github.com/deepinsight/insightface/tree/master/recognition/arcface_torch> |
-| MiniFASNet | Silent-Face-Anti-Spoofing | <https://github.com/minivision-ai/Silent-Face-Anti-Spoofing> |
-| RTMPose/RTMO | MMPose | <https://github.com/open-mmlab/mmpose> |
-| rtmlib | RTMPose inference | <https://github.com/Tau-J/rtmlib> |
-| CTR-GCN | Uason-Chen | <https://github.com/Uason-Chen/CTR-GCN> |
-| BlockGCN | ZhouYuxuanYX | <https://github.com/ZhouYuxuanYX/BlockGCN> |
-| SkateFormer | KAIST-VICLab | <https://github.com/KAIST-VICLab/SkateFormer> |
-| MotionBERT | Walter0807 | <https://github.com/Walter0807/MotionBERT> |
-| KPR ReID | VlSomers | <https://github.com/VlSomers/keypoint_promptable_reidentification> |
-| Pose2ID | yuanc3 | <https://github.com/yuanc3/Pose2ID> |
-
----
-
-# PART F — CLI COMMANDS
-
----
-
-## 20. Chạy từng module
-
-```bash
-python -m src.human_detection.main \
-  --input data-test/ \
-  --output data/outputs/1_detection \
-  --config configs/model_registry.demo_i5.yaml
-```
-
-```bash
-python -m src.human_tracking.main \
-  --input data-test/ \
-  --detections data/outputs/1_detection \
-  --output data/outputs/2_tracking \
-  --config configs/model_registry.demo_i5.yaml
-```
-
-```bash
-python -m src.pose_estimation.main \
-  --input data-test/ \
-  --tracks data/outputs/2_tracking \
-  --output data/outputs/3_pose \
-  --config configs/model_registry.demo_i5.yaml
-```
-
-```bash
-python -m src.adl_recognition.main \
-  --pose-dir data/outputs/3_pose \
-  --output data/outputs/4_adl \
-  --config configs/model_registry.demo_i5.yaml
-```
-
-```bash
-python -m src.face.main \
-  --input data-test/ \
-  --tracks data/outputs/2_tracking \
-  --output data/outputs/5_face \
-  --config configs/model_registry.demo_i5.yaml
-```
-
-```bash
-python -m src.global_reid.main \
-  --tracks data/outputs/2_tracking \
-  --pose data/outputs/3_pose \
-  --adl data/outputs/4_adl \
-  --face data/outputs/5_face \
-  --manifest configs/multicam_manifest.example.json \
-  --topology configs/camera_topology.example.yaml \
-  --output data/outputs/6_reid \
-  --config configs/model_registry.demo_i5.yaml
-```
-
-## 21. Chạy full pipeline
-
-```bash
-python -m src.pipeline.run_all \
-  --input data-test/ \
-  --output data/outputs \
-  --config configs/model_registry.demo_i5.yaml \
-  --manifest configs/multicam_manifest.example.json \
-  --topology configs/camera_topology.example.yaml
-```
-
-## 22. Chạy benchmark
-
-```bash
-python -m src.pipeline.benchmark_all \
-  --run-dir data/outputs/pipeline/<timestamp>
-```
-
-## 23. Chạy evaluation nếu có ground truth
-
-```bash
-python -m src.evaluation.main \
-  --outputs data/outputs/pipeline/<timestamp> \
-  --gt data/annotations \
-  --out data/outputs/pipeline/<timestamp>/evaluation
-```
-
----
-
-# PART G — ERROR TAXONOMY
-
----
-
-## 24. Failure reasons chuẩn
-
-| Code | Ý nghĩa |
-|---|---|
-| OK | không lỗi |
-| NO_PERSON_DETECTED | không phát hiện người |
-| LOW_DETECTION_CONFIDENCE | detection confidence thấp |
-| TRACK_FRAGMENTED | track bị đứt |
-| UNCONFIRMED_TRACK | track chưa đủ tin cậy |
-| SHORT_TRACK_WINDOW | chưa đủ window cho ADL |
-| LOW_KEYPOINT_VISIBILITY | thiếu keypoint |
-| NO_FACE | không thấy mặt |
-| FACE_SPOOF_RISK | nghi spoof |
-| BODY_OCCLUDED | body bị che |
-| TOPOLOGY_CONFLICT | chuyển camera không hợp topology |
-| TIME_WINDOW_CONFLICT | lệch transition window |
-| MULTI_CANDIDATE_CONFLICT | nhiều candidate giống nhau |
-| MODEL_NOT_FOUND | không thấy model |
-| INVALID_VIDEO | video lỗi |
-| INVALID_MANIFEST | manifest lỗi |
-| INVALID_TOPOLOGY | topology lỗi |
-| ANTI_SPOOF_DISABLED | chưa bật anti-spoof |
-
----
-
-# PART H — ROADMAP
-
----
-
-## 25. Roadmap demo trước, research sau
-
-### Phase 1 — Demo i5 ổn định
-
-| Việc | Mục tiêu |
-|---|---|
-| YOLOv8n detection | chạy được 4 short videos |
-| ByteTrack | track 3 người ổn định |
-| YOLOv8n-pose | có skeleton overlay |
-| Rule ADL | nhận standing/sitting/walking/unknown |
-| TFCS-PAR | giữ GID qua 4 camera |
-| Benchmark proxy | có FPS, latency, unknown rate |
-
-### Phase 2 — Có số liệu paper
-
-| Việc | Mục tiêu |
-|---|---|
-| Annotate 4 camera × 3 người | có GT Global ID |
-| Annotate ADL events | tính Macro-F1 |
-| Annotate bbox vài clip | tính detection F1 |
-| Evaluate Global ReID | tính ID switch, false split, false merge |
-| Ablation | bỏ face/body/pose/topology để so sánh |
-
-### Phase 3 — RTX/GPU nâng cấp
-
-| Việc | Mục tiêu |
-|---|---|
-| RTMPose/RTMO | tăng pose accuracy/FPS |
-| BoT-SORT/Deep OC-SORT | tracking robust hơn |
-| CTR-GCN/BlockGCN | ADL học sâu |
-| KPR/Pose2ID | occluded ReID |
-| MiniFASNet/CDCN | chống spoof thật |
-
----
-
-# PART I — REFERENCES
-
----
-
-## 26. Tài liệu tham khảo chính
-
-[1] Ultralytics YOLOv8 Documentation and Repository. <https://github.com/ultralytics/ultralytics>  
-
-[2] Y. Zhang et al., "ByteTrack: Multi-Object Tracking by Associating Every Detection Box", ECCV 2022. <https://github.com/FoundationVision/ByteTrack>  
-
-[3] J. Kim et al., "Addressing the Occlusion Problem in Multi-Camera People Tracking with Human Pose Estimation", CVPR Workshops 2023. Reported IDF1: 86.76%.  
-
-[4] J. Deng et al., "ArcFace: Additive Angular Margin Loss for Deep Face Recognition", CVPR 2019.  
-
-[5] M. Jiang et al., "RTMPose: Real-Time Multi-Person Pose Estimation based on MMPose", 2023.  
-
-[6] P. Lu et al., "RTMO: Towards High-Performance One-Stage Real-Time Multi-Person Pose Estimation", CVPR 2024.  
-
-[7] W. Zhu et al., "MotionBERT: A Unified Perspective on Learning Human Motion Representations", ICCV 2023.  
-
-[8] D. Reilly et al., "Just Add π! Pose Induced Video Transformers for Understanding Activities of Daily Living", CVPR 2024.  
-
-[9] S. Yan et al., "Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition", AAAI 2018.  
-
-[10] Y. Chen et al., "Channel-wise Topology Refinement Graph Convolution for Skeleton-Based Action Recognition", ICCV 2021.  
-
-[11] Y. Zhou et al., "BlockGCN: Redefining Topology Awareness for Skeleton-Based Action Recognition", CVPR 2024.  
-
-[12] V. Somers et al., "Keypoint Promptable Re-Identification", ECCV 2024. <https://github.com/VlSomers/keypoint_promptable_reidentification>  
-
-[13] C. Yuan et al., "From Poses to Identity: Training-Free Person Re-Identification via Feature Centralization", CVPR 2025. <https://github.com/yuanc3/Pose2ID>  
-
-[14] S. Tang et al., "HumanBench: Towards General Human-centric Perception with Projector Assisted Pretraining", CVPR 2023.  
-
-[15] Y. Ci et al., "UniHCP: A Unified Model for Human-Centric Perceptions", CVPR 2023.  
-
-[16] L. Zhou et al., "Human Pose-based Estimation, Tracking and Action Recognition with Deep Learning: A Survey", 2023.  
-
----
-
-## 27. Checklist trước khi demo
-
-- [ ] 4 video đặt trong `data-test/`
-- [ ] Manifest đúng timestamp
-- [ ] Topology đúng thứ tự camera
-- [ ] `yolov8n.pt` và `yolov8n-pose.pt` tải sẵn
-- [ ] Chạy được detection overlay
-- [ ] Chạy được tracking overlay
-- [ ] Chạy được pose overlay
-- [ ] Chạy được ADL overlay
-- [ ] Chạy được Global ID overlay
-- [ ] Có `benchmark_summary.json`
-- [ ] Không báo accuracy nếu chưa có ground truth
-- [ ] Có video final cho từng camera
-- [ ] Có log terminal rõ ràng
-
----
-
-## 28. Kết luận thiết kế
-
-Với cấu hình hiện tại, CPose nên được trình bày là:
-
-> Một hệ thống giám sát đa camera chạy bằng terminal, dùng YOLOv8n/YOLOv8n-pose để phát hiện người và ước lượng tư thế, ByteTrack để duy trì local track, rule-based skeleton ADL để nhận diện hành vi nhẹ, ArcFace làm tín hiệu nhận dạng mặt phụ trợ, và TFCS-PAR để hợp nhất Global ID xuyên camera dựa trên face, body, pose, height, time và camera topology.
-
-Điểm nghiên cứu không nằm ở việc thay YOLO bằng model mới hơn, mà nằm ở:
-
-- xử lý time-first;
-- giữ Global ID xuyên camera;
-- xử lý blind-zone/room/clothing-change;
-- có benchmark và failure reason rõ ràng;
-- phân biệt proxy metrics và ground-truth metrics.

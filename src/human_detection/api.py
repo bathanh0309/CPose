@@ -7,14 +7,14 @@ import cv2
 from src.common.console import print_header, print_metric_table, print_saved, print_video_progress
 from src.common.metrics import Timer, save_json
 from src.common.paths import ensure_dir, resolve_path
-from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video
+from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video, show_frame_preview
 from src.common.visualization import draw_bbox
 from src.human_detection.config import resolve_detection_model
 from src.human_detection.detector import PersonDetector
 from src.human_detection.metrics import build_detection_metrics
 
 
-def process_video(video_path: str | Path, output_dir: str | Path, model: str | Path | None = None, conf: float = 0.5) -> dict:
+def process_video(video_path: str | Path, output_dir: str | Path, model: str | Path | None = None, conf: float = 0.5, preview: bool = True) -> dict:
     video_path = resolve_path(video_path)
     video_output_dir = ensure_dir(resolve_path(output_dir) / video_path.stem)
     overlay_path = video_output_dir / "detection_overlay.mp4"
@@ -50,11 +50,13 @@ def process_video(video_path: str | Path, output_dir: str | Path, model: str | P
                 "failure_reason": "OK",
             })
             writer.write(frame)
+            if preview:
+                show_frame_preview(f"CPose Detection | {video_path.stem}", frame)
             frame_id += 1
     finally:
         capture.release()
         writer.release()
-        cv2.destroyAllWindows()
+        cv2.destroyWindow(f"CPose Detection | {video_path.stem}")
 
     elapsed = timer.elapsed()
     metrics = build_detection_metrics(
@@ -83,7 +85,7 @@ def process_video(video_path: str | Path, output_dir: str | Path, model: str | P
     return metrics
 
 
-def process_folder(input_dir: str | Path, output_dir: str | Path, model: str | Path | None = None, conf: float = 0.5) -> list[dict]:
+def process_folder(input_dir: str | Path, output_dir: str | Path, model: str | Path | None = None, conf: float = 0.5, preview: bool = True) -> list[dict]:
     videos = list_video_files(input_dir)
     output_dir = ensure_dir(output_dir)
     print_header("CPose Person Detection Module")
@@ -100,7 +102,7 @@ def process_folder(input_dir: str | Path, output_dir: str | Path, model: str | P
     for index, video in enumerate(videos, 1):
         print_video_progress(index, len(videos), video)
         try:
-            results.append(process_video(video, output_dir, model, conf))
+            results.append(process_video(video, output_dir, model, conf, preview))
         except Exception as exc:
             print(f"ERROR processing {video.name}: {exc}")
     print_header("SUMMARY")

@@ -7,7 +7,7 @@ import cv2
 from src.common.console import print_header, print_metric_table, print_saved, print_video_progress
 from src.common.metrics import Timer, load_json, save_json
 from src.common.paths import ensure_dir, resolve_path
-from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video
+from src.common.video_io import create_video_writer, get_video_info, list_video_files, open_video, show_frame_preview
 from src.common.visualization import draw_bbox, draw_skeleton
 from src.human_tracking.tracker import iou
 from src.pose_estimation.config import resolve_pose_model
@@ -65,6 +65,7 @@ def process_video(
     min_visible_keypoints: int = 8,
     keypoint_conf: float = 0.30,
     run_on_confirmed_tracks_only: bool = True,
+    preview: bool = True,
 ) -> dict:
     video_path = resolve_path(video_path)
     video_output_dir = ensure_dir(resolve_path(output_dir) / video_path.stem)
@@ -101,11 +102,13 @@ def process_video(
                 "failure_reason": "OK",
             })
             writer.write(frame)
+            if preview:
+                show_frame_preview(f"CPose Pose | {video_path.stem}", frame)
             frame_id += 1
     finally:
         capture.release()
         writer.release()
-        cv2.destroyAllWindows()
+        cv2.destroyWindow(f"CPose Pose | {video_path.stem}")
     metrics = build_pose_metrics(records, timer.elapsed(), str(overlay_path), str(json_path))
     metrics.update({
         "metric_type": "proxy",
@@ -133,6 +136,7 @@ def process_folder(
     min_visible_keypoints: int = 8,
     keypoint_conf: float = 0.30,
     run_on_confirmed_tracks_only: bool = True,
+    preview: bool = True,
 ) -> list[dict]:
     videos = list_video_files(input_dir)
     output_dir = ensure_dir(output_dir)
@@ -151,15 +155,9 @@ def process_folder(
         print_video_progress(index, len(videos), video)
         try:
             results.append(process_video(
-                video,
-                output_dir,
-                model,
-                conf,
-                track_dir,
-                track_iou_threshold,
-                min_visible_keypoints,
-                keypoint_conf,
-                run_on_confirmed_tracks_only,
+                video, output_dir, model, conf, track_dir,
+                track_iou_threshold, min_visible_keypoints,
+                keypoint_conf, run_on_confirmed_tracks_only, preview,
             ))
         except Exception as exc:
             print(f"ERROR processing {video.name}: {exc}")

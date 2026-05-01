@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src import ANNOTATIONS_DIR, OUTPUT_DIR, print_module_console
+
 
 def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
@@ -129,8 +131,11 @@ def benchmark(run_dir: str | Path) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aggregate CPose benchmark metrics")
-    parser.add_argument("--run-dir", required=True)
+    parser.add_argument("--run-dir", default=str(OUTPUT_DIR))
+    parser.add_argument("--labels", default=str(ANNOTATIONS_DIR), help="Train/val label root for metric context")
     args = parser.parse_args()
+    setattr(args, "output", args.run_dir)
+    print_module_console("pipeline", args)
     benchmark(args.run_dir)
 
 

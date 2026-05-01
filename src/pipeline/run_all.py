@@ -13,6 +13,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from src import ANNOTATIONS_DIR, DATA_TEST_DIR, DEFAULT_CONFIG, OUTPUT_DIR, print_module_console
 from src.common.errors import ErrorCode
 from src.common.manifest import resolve_videos_from_manifest
 from src.common.metrics import save_json
@@ -226,13 +227,14 @@ def run_pipeline(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run CPose TFCS-PAR terminal pipeline")
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input", default=str(DATA_TEST_DIR))
+    parser.add_argument("--output", default=str(OUTPUT_DIR))
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--topology", default=None)
-    parser.add_argument("--config", default=None)
-    parser.add_argument("--gt", default=None)
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--gt", default=str(ANNOTATIONS_DIR), help="Train/val annotation root")
     args = parser.parse_args()
+    print_module_console("pipeline", args)
     run_pipeline(args.input, args.output, args.manifest, args.topology, args.config, args.gt)
 
 

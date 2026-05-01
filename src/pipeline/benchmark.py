@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from src import ANNOTATIONS_DIR, print_module_console
 from src.common.console import print_header, print_metric_table
 from src.common.metrics import load_json, save_csv, save_json
 from src.common.paths import OUTPUT_DIR, ensure_dir, resolve_path
@@ -89,10 +90,11 @@ def benchmark(output_dir: str | Path) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aggregate CPose module metrics")
     parser.add_argument("--output", default=str(OUTPUT_DIR))
+    parser.add_argument("--labels", default=str(ANNOTATIONS_DIR), help="Train/val label root for metric context")
     args = parser.parse_args()
+    print_module_console("pipeline", args)
     benchmark(args.output)
 
 
 if __name__ == "__main__":
     main()
-

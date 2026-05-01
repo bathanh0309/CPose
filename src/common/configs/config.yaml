@@ -1,0 +1,181 @@
+project:
+  name: CPose
+  dashboard_url: http://localhost:5000
+
+server:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+  socket_async_mode: "eventlet"
+  cors_origins: "*"
+
+logging:
+  level: "INFO"
+  to_file: false
+  file_path: "logs/cpose.log"
+
+models:
+  detector_model_path: models/yolo11n.pt
+  pose_model_path: models/yolo11n-pose.pt
+
+phase1:
+  model: models/yolo11n.pt
+  conf_threshold: 0.35
+  pre_buffer_sec: 3
+  post_buffer_sec: 3
+  inference_every: 3
+  min_clip_duration: 2.0
+  storage_limit_gb: 10
+  person_conf_threshold: 0.65
+  trigger_min_consecutive: 3
+  pre_roll_seconds: 3
+  post_roll_seconds: 5
+  rearm_cooldown_seconds: 5
+  min_clip_seconds: 3.0
+  max_clip_seconds: 300.0
+  min_box_area_ratio: 0.0015
+  reconnect_delay_seconds: 5
+  jpeg_quality: 75
+  person_class_id: 0
+  snapshot_fps: 10.0
+  snapshot_active_ttl_s: 10.0
+  rtsp_transport: tcp
+  ffmpeg_capture_options: ""
+
+phase2:
+  model: models/yolo11n.pt
+  person_class_id: 0
+  conf_threshold: 0.50
+  progress_every: 3
+  frame_skip: 15
+
+phase3:
+  model: models/yolo11n-pose.pt
+  person_class_id: 0
+  conf_threshold: 0.45
+  keypoint_conf_min: 0.30
+  window_size: 30
+  progress_every: 10
+  save_overlay: true
+  adl_classes:
+    - standing
+    - sitting
+    - walking
+    - lying_down
+    - falling
+    - reaching
+    - bending
+    - unknown
+  thresholds:
+    knee_bend_angle: 150
+    hip_angle_lying: 160
+    shoulder_raise: 45
+    velocity_walk: 8.0
+
+pose_utils:
+  knee_bend_angle: 150
+  shoulder_raise: 45
+  velocity_walk: 8.0
+  min_visible_keypoints: 8
+  falling_torso_angle: 68
+  falling_velocity_multiplier: 1.1
+  lying_aspect_ratio: 1.15
+  bending_velocity_multiplier: 0.6
+  confidence_unknown: 0.2
+  confidence_falling: 0.88
+  confidence_lying_down: 0.84
+  confidence_sitting: 0.82
+  confidence_bending: 0.78
+  confidence_reaching: 0.76
+  confidence_walking: 0.79
+  confidence_standing: 0.75
+
+adl:
+  torso_angle_laying: 35
+  aspect_ratio_laying: 0.9
+  knee_angle_sitting: 140
+  movement_threshold_ratio: 0.025
+  movement_walking_multiplier: 1.2
+  keypoint_conf: 0.25
+  hand_raise_frames: 10
+  posture_voting_frames: 3
+  position_history_maxlen: 30
+  posture_history_maxlen: 10
+  event_history_maxlen: 5
+  default_knee_angle: 180
+  assumed_fps: 30
+
+global_id:
+  strong_threshold: 0.65
+  weak_threshold: 0.45
+  confirm_frames: 3
+  top_k_candidates: 20
+  use_hungarian: true
+  max_unk_per_video: 10
+  iou_resurrection_threshold: 0.3
+  quality_update_threshold: 0.7
+  transition_windows:
+    # CLAUDE.md §14: time-window hints for cross-camera Re-ID gating
+    cam01->cam02: [0, 60]
+    cam02->cam03: [0, 60]      # was incorrectly cam02->cam02
+    cam03->cam02: [10, 120]    # return path
+    cam03->cam04: [20, 180]    # elevator blind zone
+    cam04->cam03: [20, 180]    # elevator return
+    cam04->cam04: [5, 300]     # room_upstairs hold (CLAUDE.md §13.4)
+
+reid:
+  threshold: 0.65
+  max_features: 100
+  confirm_frames: 3
+  min_crop_height: 30
+  min_crop_width: 15
+  top_k_similarity: 5
+  pending_track_ttl_seconds: 10.0
+  confirmed_track_ttl_seconds: 60.0
+
+tracker:
+  max_age: 30
+  n_init: 3
+  max_iou_distance: 0.7
+  max_cosine_distance: 0.4
+  half: true
+
+detectors:
+  yolo_path: models/yolo11n.pt
+  face_data_path: data/face_db
+  face_min_size: 50
+  face_similarity_threshold: 0.4
+  face_det_width: 640
+  face_det_height: 640
+  body_conf_threshold: 0.5
+  person_class_id: 0
+
+persistence:
+  embedding_dim: 512
+  initial_memmap_size: 10000
+  expand_step: 1000
+  ema_alpha: 0.3
+
+vector_db:
+  search_top_k: 20
+  medium_dataset_threshold: 1000
+  large_dataset_threshold: 10000
+  hnsw_m: 32
+  hnsw_ef_construction: 200
+  hnsw_ef_search: 64
+  ivf_nlist: 100
+  ivf_nprobe: 10
+
+storage:
+  prune_target_ratio: 0.8
+
+stream_probe:
+  timeout_ms: 8000
+  common_resolutions:
+    - [3840, 2160, "4K UHD"]
+    - [2560, 1440, "QHD 1440p"]
+    - [1920, 1080, "Full HD 1080p"]
+    - [1280, 720, "HD 720p"]
+    - [960, 540, "qHD 540p"]
+    - [640, 480, "VGA 480p"]
+    - [320, 240, "QVGA 240p"]

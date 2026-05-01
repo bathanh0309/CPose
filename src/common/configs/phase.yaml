@@ -1,0 +1,23 @@
+phase:
+  model: models/yolo11n.pt
+  conf_threshold: 0.35
+  pre_buffer_sec: 3
+  post_buffer_sec: 3
+  inference_every: 5
+  min_clip_duration: 2.0
+  storage_limit_gb: 10
+  person_conf_threshold: 0.65
+  trigger_min_consecutive: 3
+  pre_roll_seconds: 3
+  post_roll_seconds: 5
+  rearm_cooldown_seconds: 5
+  min_clip_seconds: 3.0
+  max_clip_seconds: 300.0
+  min_box_area_ratio: 0.0015
+  reconnect_delay_seconds: 5
+  jpeg_quality: 75
+  person_class_id: 0
+  snapshot_fps: 6.0
+  snapshot_active_ttl_s: 10.0
+  rtsp_transport: tcp
+  ffmpeg_capture_options: ""

@@ -1,0 +1,5 @@
+# Keep dataset directory structure without committing data files.
+*
+!*/
+!/.gitignore
+!.gitkeep

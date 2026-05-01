@@ -69,14 +69,30 @@ def benchmark(run_dir: str | Path) -> dict[str, Any]:
         "reid": [_load_json(path, {}) for path in run_path.rglob("reid_metrics.json")],
     }
     evaluation = _load_json(run_path / "evaluation" / "evaluation_summary.json", {})
-    videos = {path.parent.name for name in ("detection_metrics.json", "tracking_metrics.json", "pose_metrics.json", "adl_metrics.json", "reid_metrics.json") for path in run_path.rglob(name)}
+    pipeline_runtime = _load_json(run_path / "pipeline_runtime.json", {})
+    videos = {
+        Path(str(row.get("input_video"))).stem
+        for rows in metrics.values()
+        for row in rows
+        if row.get("input_video")
+    }
     adl_distribution: Counter[str] = Counter()
     for row in metrics["adl"]:
         adl_distribution.update(row.get("class_distribution", {}))
     end_frames = sum(int(row.get("processed_frames", row.get("total_frames", 0))) for row in metrics["detection"])
     elapsed_values = [float(row.get("elapsed_sec", 0.0)) for rows in metrics.values() for row in rows if row.get("elapsed_sec") is not None]
-    total_elapsed = sum(elapsed_values) if elapsed_values else None
+    offline_elapsed = sum(elapsed_values) if elapsed_values else None
+    wall_elapsed = pipeline_runtime.get("pipeline_wall_clock_runtime_sec")
     metric_types = [row.get("metric_type") for rows in metrics.values() for row in rows] + [evaluation.get("metric_type")]
+    input_fps_values = [float(row.get("video_fps", row.get("input_fps", 0.0))) for rows in metrics.values() for row in rows if row.get("video_fps") or row.get("input_fps")]
+    avg_input_fps = _mean(input_fps_values)
+    fps_wall = (end_frames / float(wall_elapsed)) if end_frames and wall_elapsed else None
+    failure_counter: Counter[str] = Counter()
+    for rows in metrics.values():
+        for row in rows:
+            failure_counter.update(row.get("failure_reason_distribution", {}))
+            if row.get("failure_reason"):
+                failure_counter.update([row["failure_reason"]])
     summary: dict[str, Any] = {
         "run_timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
         "total_videos": len(videos) if videos else None,
@@ -86,8 +102,11 @@ def benchmark(run_dir: str | Path) -> dict[str, Any]:
         "pose_fps": _mean([float(row["fps_processing"]) for row in metrics["pose"] if row.get("fps_processing") is not None]),
         "adl_fps_equivalent": _mean([float(row["fps_equivalent"]) for row in metrics["adl"] if row.get("fps_equivalent") is not None]),
         "reid_fps_equivalent": _mean([float(row["fps_processing"]) for row in metrics["reid"] if row.get("fps_processing") is not None]),
-        "end_to_end_runtime_sec": total_elapsed,
-        "end_to_end_fps": (end_frames / total_elapsed) if end_frames and total_elapsed else None,
+        "offline_module_sum_runtime_sec": offline_elapsed,
+        "pipeline_wall_clock_runtime_sec": wall_elapsed,
+        "end_to_end_fps_offline": (end_frames / offline_elapsed) if end_frames and offline_elapsed else None,
+        "end_to_end_fps_wall_clock": fps_wall,
+        "realtime_capable": bool(fps_wall is not None and avg_input_fps is not None and fps_wall >= avg_input_fps) if avg_input_fps else None,
         "average_latency_per_frame_ms": None,
         "total_detections": sum(int(row.get("total_person_detections", 0)) for row in metrics["detection"]) or None,
         "total_tracks": sum(int(row.get("total_tracks", 0)) for row in metrics["tracking"]) or None,
@@ -96,6 +115,7 @@ def benchmark(run_dir: str | Path) -> dict[str, Any]:
         "unknown_rate": evaluation.get("modules", {}).get("adl", {}).get("unknown_rate"),
         "global_id_count": evaluation.get("modules", {}).get("reid", {}).get("global_id_count"),
         "proxy_or_gt_metric_type": "ground_truth" if "ground_truth" in metric_types else "proxy",
+        "failure_reason_distribution": dict(failure_counter),
         "failure_reason": "OK",
     }
     summary.update(_system_info())

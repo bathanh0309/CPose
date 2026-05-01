@@ -58,8 +58,13 @@ def get_video_meta(video_path: str | Path) -> VideoInfo:
     return get_video_info(video_path)
 
 
-def read_video_frames(video_path: str | Path) -> list[np.ndarray]:
+def read_video_frames_to_memory(video_path: str | Path) -> list[np.ndarray]:
     return [frame for frame, _timestamp_sec, _frame_id in iter_video_frames(video_path)]
+
+
+def read_video_frames(video_path: str | Path) -> list[np.ndarray]:
+    print("[WARN] read_video_frames loads full video into memory. Prefer iter_video_frames().")
+    return read_video_frames_to_memory(video_path)
 
 
 def create_video_writer(output_path: str | Path, fps: float, width: int, height: int) -> cv2.VideoWriter:

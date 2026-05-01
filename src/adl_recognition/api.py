@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 
 from src.adl_recognition.adl_rules import classify_adl, history_item
+from src.adl_recognition.config import ADLConfig, adl_config_from_dict
 from src.adl_recognition.metrics import build_adl_metrics
 from src.common.console import print_header, print_metric_table, print_saved
 from src.common.metrics import Timer, load_json, save_json
@@ -33,7 +34,26 @@ def _video_for(stem: str, video_dir: str | Path) -> Path | None:
     return None
 
 
-def process_pose_file(pose_json: str | Path, output_dir: str | Path, video_dir: str | Path, window_size: int = 30) -> dict:
+def _majority_vote(labels: deque[str]) -> str:
+    if not labels:
+        return "unknown"
+    counts: dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], label_order(item[0])))[0][0]
+
+
+def label_order(label: str) -> int:
+    return 1 if label == "unknown" else 0
+
+
+def process_pose_file(
+    pose_json: str | Path,
+    output_dir: str | Path,
+    video_dir: str | Path,
+    window_size: int = 30,
+    config: ADLConfig | dict | None = None,
+) -> dict:
     pose_json = resolve_path(pose_json)
     video_stem = pose_json.parent.name
     video_output_dir = ensure_dir(resolve_path(output_dir) / video_stem)
@@ -41,7 +61,9 @@ def process_pose_file(pose_json: str | Path, output_dir: str | Path, video_dir: 
     metric_path = video_output_dir / "adl_metrics.json"
     overlay_path = video_output_dir / "adl_overlay.mp4"
     pose_records = load_json(pose_json, [])
-    histories: dict[int, deque] = defaultdict(lambda: deque(maxlen=window_size))
+    adl_config = config if isinstance(config, ADLConfig) else adl_config_from_dict(config, window_size=window_size)
+    histories: dict[int, deque] = defaultdict(lambda: deque(maxlen=adl_config.window_size))
+    label_histories: dict[int, deque[str]] = defaultdict(lambda: deque(maxlen=adl_config.smoothing_frames))
     events: list[dict] = []
     timer = Timer()
 
@@ -51,20 +73,21 @@ def process_pose_file(pose_json: str | Path, output_dir: str | Path, video_dir: 
             if track_id is None:
                 track_id = -1
             track_id = int(track_id)
-            if not bool(person.get("is_confirmed", True)):
-                label, confidence, failure_reason = "unknown", None, "UNCONFIRMED_TRACK"
-            else:
-                label, confidence = classify_adl(person, histories[track_id])
-                failure_reason = "OK"
-                histories[track_id].appendleft(history_item(person))
+            raw_label, confidence, failure_reason = classify_adl(person, histories[track_id], adl_config)
+            histories[track_id].appendleft(history_item(person))
+            label_histories[track_id].append(raw_label)
+            smoothed_label = _majority_vote(label_histories[track_id])
             events.append({
                 "frame_id": int(record["frame_id"]),
                 "timestamp_sec": float(record.get("timestamp_sec", 0.0)),
                 "camera_id": record.get("camera_id", video_stem.split("_")[0]),
                 "track_id": track_id,
-                "adl_label": label,
+                "raw_label": raw_label,
+                "smoothed_label": smoothed_label,
+                "adl_label": smoothed_label,
                 "confidence": confidence,
-                "window_size": window_size,
+                "window_size": adl_config.window_size,
+                "visible_keypoint_ratio": person.get("visible_keypoint_ratio"),
                 "failure_reason": failure_reason,
             })
 
@@ -99,7 +122,7 @@ def process_pose_file(pose_json: str | Path, output_dir: str | Path, video_dir: 
     metrics = build_adl_metrics(events, timer.elapsed(), str(events_path), str(saved_overlay) if saved_overlay else None)
     metrics.update({
         "metric_type": "proxy",
-        "model_info": {"method": "rule_based", "window_size": window_size},
+        "model_info": {"method": "rule_based", "window_size": adl_config.window_size, "smoothing_frames": adl_config.smoothing_frames},
         "input_video": str(video_path) if video_path else None,
         "camera_id": video_stem.split("_")[0],
         "start_time": None,
@@ -113,7 +136,13 @@ def process_pose_file(pose_json: str | Path, output_dir: str | Path, video_dir: 
     return metrics
 
 
-def process_folder(pose_dir: str | Path, video_dir: str | Path, output_dir: str | Path, window_size: int = 30) -> list[dict]:
+def process_folder(
+    pose_dir: str | Path,
+    video_dir: str | Path,
+    output_dir: str | Path,
+    window_size: int = 30,
+    config: ADLConfig | dict | None = None,
+) -> list[dict]:
     files = _pose_files(pose_dir)
     output_dir = ensure_dir(output_dir)
     print_header("CPose ADL Recognition Module")
@@ -131,7 +160,7 @@ def process_folder(pose_dir: str | Path, video_dir: str | Path, output_dir: str 
     for index, pose_file in enumerate(files, 1):
         print(f"\n[{index}/{len(files)}] Processing {pose_file.parent.name}")
         try:
-            results.append(process_pose_file(pose_file, output_dir, video_dir, window_size))
+            results.append(process_pose_file(pose_file, output_dir, video_dir, window_size, config))
         except Exception as exc:
             print(f"ERROR processing {pose_file}: {exc}")
     print_header("SUMMARY")

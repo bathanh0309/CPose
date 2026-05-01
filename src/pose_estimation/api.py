@@ -22,12 +22,18 @@ def _track_json_for(video_path: Path, track_dir: str | Path | None) -> Path | No
     return candidate if candidate.exists() else None
 
 
-def _assign_track_ids(persons: list[dict], tracks: list[dict]) -> None:
+def _assign_track_ids(
+    persons: list[dict],
+    tracks: list[dict],
+    threshold: float = 0.3,
+    run_on_confirmed_tracks_only: bool = True,
+) -> None:
     used: set[int] = set()
+    eligible_tracks = [track for track in tracks if bool(track.get("is_confirmed", True))] if run_on_confirmed_tracks_only else tracks
     for person in persons:
         best_track = None
         best_score = 0.0
-        for track in tracks:
+        for track in eligible_tracks:
             track_id = int(track["track_id"])
             if track_id in used:
                 continue
@@ -35,13 +41,17 @@ def _assign_track_ids(persons: list[dict], tracks: list[dict]) -> None:
             if score > best_score:
                 best_score = score
                 best_track = track
-        if best_track and best_score >= 0.2:
+        if best_track and best_score >= threshold:
             person["track_id"] = int(best_track["track_id"])
             person["is_confirmed"] = bool(best_track.get("is_confirmed", True))
-            person["failure_reason"] = best_track.get("failure_reason", "OK")
+            person["pose_track_iou"] = best_score
+            if person.get("failure_reason") != "LOW_KEYPOINT_VISIBILITY":
+                person["failure_reason"] = best_track.get("failure_reason", "OK")
             used.add(int(best_track["track_id"]))
         else:
+            person["track_id"] = None
             person["is_confirmed"] = False
+            person["pose_track_iou"] = None
             person["failure_reason"] = "NO_MATCHED_TRACK"
 
 
@@ -51,13 +61,17 @@ def process_video(
     model: str | Path | None = None,
     conf: float = 0.5,
     track_dir: str | Path | None = None,
+    track_iou_threshold: float = 0.3,
+    min_visible_keypoints: int = 8,
+    keypoint_conf: float = 0.30,
+    run_on_confirmed_tracks_only: bool = True,
 ) -> dict:
     video_path = resolve_path(video_path)
     video_output_dir = ensure_dir(resolve_path(output_dir) / video_path.stem)
     overlay_path = video_output_dir / "pose_overlay.mp4"
     json_path = video_output_dir / "keypoints.json"
     metric_path = video_output_dir / "pose_metrics.json"
-    pose_model = PoseModel(resolve_pose_model(model), conf)
+    pose_model = PoseModel(resolve_pose_model(model), conf, keypoint_conf=keypoint_conf, min_visible_keypoints=min_visible_keypoints)
     info = get_video_info(video_path)
     capture = open_video(video_path)
     writer = create_video_writer(overlay_path, info.fps, info.width, info.height)
@@ -73,7 +87,7 @@ def process_video(
                 break
             persons = pose_model.estimate(frame)
             tracks = track_records[frame_id]["tracks"] if frame_id < len(track_records) else []
-            _assign_track_ids(persons, tracks)
+            _assign_track_ids(persons, tracks, track_iou_threshold, run_on_confirmed_tracks_only)
             for person in persons:
                 # Module 3 (Pose): do NOT render Global IDs — that is ReID's job (module 5).
                 # track_id here is a local-clip tracker ID stored in JSON for downstream use only.
@@ -84,6 +98,7 @@ def process_video(
                 "timestamp_sec": frame_id / info.fps if info.fps > 0 else 0.0,
                 "camera_id": video_path.stem.split("_")[0],
                 "persons": persons,
+                "failure_reason": "OK",
             })
             writer.write(frame)
             frame_id += 1
@@ -94,7 +109,7 @@ def process_video(
     metrics = build_pose_metrics(records, timer.elapsed(), str(overlay_path), str(json_path))
     metrics.update({
         "metric_type": "proxy",
-        "model_info": {"model": str(resolve_pose_model(model)), "confidence": conf},
+        "model_info": {"model": str(resolve_pose_model(model)), "confidence": conf, "keypoint_conf": keypoint_conf, "track_iou_threshold": track_iou_threshold},
         "input_video": str(video_path),
         "camera_id": video_path.stem.split("_")[0],
         "start_time": None,
@@ -114,6 +129,10 @@ def process_folder(
     model: str | Path | None = None,
     conf: float = 0.5,
     track_dir: str | Path | None = None,
+    track_iou_threshold: float = 0.3,
+    min_visible_keypoints: int = 8,
+    keypoint_conf: float = 0.30,
+    run_on_confirmed_tracks_only: bool = True,
 ) -> list[dict]:
     videos = list_video_files(input_dir)
     output_dir = ensure_dir(output_dir)
@@ -131,7 +150,17 @@ def process_folder(
     for index, video in enumerate(videos, 1):
         print_video_progress(index, len(videos), video)
         try:
-            results.append(process_video(video, output_dir, model, conf, track_dir))
+            results.append(process_video(
+                video,
+                output_dir,
+                model,
+                conf,
+                track_dir,
+                track_iou_threshold,
+                min_visible_keypoints,
+                keypoint_conf,
+                run_on_confirmed_tracks_only,
+            ))
         except Exception as exc:
             print(f"ERROR processing {video.name}: {exc}")
     print_header("SUMMARY")

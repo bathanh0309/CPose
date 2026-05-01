@@ -2,8 +2,21 @@ cameras:
   cam1:
     role: entrance
     location: entrance
-    exit_zones: []
-    entry_zones: []
+    entry_zones:
+      - name: from_cam2
+        polygon: []
+    exit_zones:
+      - name: to_cam2
+        polygon: []
+  cam2:
+    role: corridor
+    location: corridor
+    entry_zones:
+      - name: from_cam1
+        polygon: []
+    exit_zones:
+      - name: to_cam1
+        polygon: []
 
 transitions:
   - from: cam1
@@ -12,4 +25,11 @@ transitions:
     max_sec: 60
     from_zone: to_cam2
     to_zone: from_cam1
+    confidence: 1.0
+  - from: cam2
+    to: cam1
+    min_sec: 0
+    max_sec: 60
+    from_zone: to_cam1
+    to_zone: from_cam2
     confidence: 1.0

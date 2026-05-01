@@ -37,13 +37,13 @@ def draw_skeleton(frame: np.ndarray, keypoints: list[dict], min_conf: float = 0.
         cv2.circle(frame, point, 3, (0, 255, 255), -1)
 
 
-def draw_adl_label(frame: np.ndarray, bbox: Iterable[float], track_id: int, label: str, confidence: float) -> None:
+def draw_adl_label(frame: np.ndarray, bbox: Iterable[float], track_id: int, label: str, confidence: float | None) -> None:
     """ADL label (module 4). Shows ADL activity only - NO Global ID (that is ReID's job)."""
     x1, y1, x2, y2 = [int(v) for v in bbox]
     draw_bbox(frame, (x1, y1, x2, y2), "", (80, 180, 255))
     cv2.putText(
         frame,
-        f"{label} {confidence:.2f}",
+        f"{label} {confidence:.2f}" if confidence is not None else f"{label}",
         (x1, max(24, y1 - 8)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,

@@ -1,3 +1,6 @@
-"""src.modules.adl_recognition — shim forwarding to src.adl_recognition."""
-from src.adl_recognition import *  # noqa: F401, F403
-from src.adl_recognition.api import process_folder, process_pose_file  # noqa: F401
+"""CPose Module 4: ADL recognition."""
+from __future__ import annotations
+
+from src.modules.adl_recognition.api import process_folder, process_pose_file, run_adl_recognition
+
+__all__ = ["process_folder", "process_pose_file", "run_adl_recognition"]

@@ -1,15 +1,17 @@
 @echo off
 REM ============================================================
-REM  CPose — Module 1: Person Detection
-REM  CLAUDE.md §6 CLI convenience script
+REM  CPose - Module 1: Person Detection
 REM ============================================================
 setlocal
+pushd "%~dp0" >nul
 
-set INPUT=data-test
-set OUTPUT=dataset\outputs\1_detection
-set MODEL=
-set CONF=0.5
-set CONFIG=configs\model_registry.demo_i5.yaml
+set "PYTHON=.venv\Scripts\python.exe"
+if not exist "%PYTHON%" set "PYTHON=py"
+
+set "INPUT=data-test"
+set "OUTPUT=dataset\outputs\1_detection"
+set "CONF=0.5"
+set "CONFIG=configs\model_registry.demo_i5.yaml"
 
 echo ============================================================
 echo  CPose Person Detection
@@ -18,17 +20,20 @@ echo  Output : %OUTPUT%
 echo  Config : %CONFIG%
 echo ============================================================
 
-.venv\Scripts\python.exe -m src.human_detection.main ^
+"%PYTHON%" -m src.modules.detection.main ^
   --input "%INPUT%" ^
   --output "%OUTPUT%" ^
   --conf %CONF% ^
   --config "%CONFIG%"
 
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Detection failed with exit code %ERRORLEVEL%
-    exit /b %ERRORLEVEL%
+set EXITCODE=%ERRORLEVEL%
+if %EXITCODE% neq 0 (
+    echo [ERROR] Detection failed with exit code %EXITCODE%
+    popd
+    exit /b %EXITCODE%
 )
 
 echo.
 echo Detection complete. Results in: %OUTPUT%
+popd
 endlocal

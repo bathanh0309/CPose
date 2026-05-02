@@ -9,6 +9,7 @@ from src.common.errors import ErrorCode, as_reason
 from src.common.paths import PROJECT_ROOT, ensure_dir, resolve_path
 from src.common.persistence import PersistenceManager
 from src.common.schemas import FrameRecord, to_dict
+from src.common.video_io import list_video_files
 from src.common.visualization import draw_bbox, draw_global_id, draw_skeleton
 
 
@@ -42,6 +43,24 @@ def test_as_reason_preserves_known_codes_and_falls_back_for_unknown() -> None:
     assert as_reason("unexpected") == "STEP_FAILED"
 
 
+def test_list_video_files_orders_by_earliest_filename_timestamp(tmp_path: Path) -> None:
+    filenames = [
+        "cam2_2026-01-29_16-26-40.mp4",
+        "cam1_2026-01-29_16-26-25.mp4",
+        "cam4_2026-01-28_15-59-10.mp4",
+    ]
+    for filename in filenames:
+        (tmp_path / filename).write_bytes(b"")
+
+    result = [path.name for path in list_video_files(tmp_path)]
+
+    assert result == [
+        "cam4_2026-01-28_15-59-10.mp4",
+        "cam1_2026-01-29_16-26-25.mp4",
+        "cam2_2026-01-29_16-26-40.mp4",
+    ]
+
+
 def test_visualization_draw_helpers_modify_frame() -> None:
     frame = np.zeros((120, 160, 3), dtype=np.uint8)
 
@@ -56,6 +75,20 @@ def test_visualization_draw_helpers_modify_frame() -> None:
     draw_global_id(frame, [60, 20, 110, 90], 1, adl_label="standing")
 
     assert int(frame.sum()) > 0
+
+
+def test_draw_skeleton_ignores_invalid_origin_keypoints() -> None:
+    frame = np.zeros((120, 160, 3), dtype=np.uint8)
+
+    draw_skeleton(
+        frame,
+        [
+            {"id": 5, "x": 0, "y": 0, "confidence": 0.99},
+            {"id": 7, "x": 80, "y": 80, "confidence": 0.99},
+        ],
+    )
+
+    assert int(frame[:8, :8].sum()) == 0
 
 
 def test_persistence_manager_round_trip(tmp_path: Path) -> None:

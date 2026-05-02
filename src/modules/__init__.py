@@ -1,7 +1,5 @@
-"""src/modules — shim package.
+"""Canonical CPose module namespace.
 
-CLAUDE.md specifies both ``python -m src.modules.<module>.main`` and
-``python -m src.<module>.main``.  The actual module code lives under
-``src/<module>/``.  This package makes the ``src.modules.*`` import path work
-by re-exporting each sub-package.
+New code should import module APIs from ``src.modules.<module>.api``. The
+legacy top-level packages remain available as compatibility implementations.
 """

@@ -134,10 +134,14 @@ def topology_score(
     topology: CameraTopology,
     from_camera: str,
     to_camera: str,
-    delta_time_sec: float,
+    delta_time_sec: float | None = None,
     exit_zone: str | None = None,
     entry_zone: str | None = None,
+    *,
+    delta_sec: float | None = None,
 ) -> dict[str, Any]:
+    if delta_time_sec is None:
+        delta_time_sec = 0.0 if delta_sec is None else delta_sec
     if from_camera == to_camera:
         return {
             "allowed": True,

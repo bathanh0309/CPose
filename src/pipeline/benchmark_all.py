@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
 import argparse
 import csv
 import json
@@ -70,7 +66,9 @@ def benchmark(run_dir: str | Path) -> dict[str, Any]:
         "adl": [_load_json(path, {}) for path in run_path.rglob("adl_metrics.json")],
         "reid": [_load_json(path, {}) for path in run_path.rglob("reid_metrics.json")],
     }
-    evaluation = _load_json(run_path / "evaluation" / "evaluation_summary.json", {})
+    evaluation = _load_json(run_path / "07_evaluation" / "evaluation_summary.json", {})
+    if not evaluation:
+        evaluation = _load_json(run_path / "evaluation" / "evaluation_summary.json", {})
     pipeline_runtime = _load_json(run_path / "pipeline_runtime.json", {})
     videos = {
         Path(str(row.get("input_video"))).stem
@@ -121,11 +119,40 @@ def benchmark(run_dir: str | Path) -> dict[str, Any]:
         "failure_reason": "OK",
     }
     summary.update(_system_info())
+    module_configs = {}
+    for mod in ["detection", "tracking", "pose", "adl", "reid"]:
+        if metrics[mod]:
+            module_configs[mod] = metrics[mod][0].get("model_info", {})
+    summary["module_configs"] = module_configs
+    summary["test_dataset_size"] = len(videos) if videos else 0
+    summary["test_dataset_videos"] = sorted(list(videos))
+
     _save_json(run_path / "benchmark_summary.json", summary)
     _save_csv(run_path / "benchmark_summary.csv", summary)
     print("[INFO] CPose Benchmark Summary")
-    for key, value in summary.items():
-        print(f"{key}: {value}")
+    
+    print("\n--- Dataset / Test Data Info ---")
+    print(f"Test Videos Count : {summary['test_dataset_size']}")
+    print(f"Test Videos List  : {', '.join(summary['test_dataset_videos'])}")
+    print(f"Total Frames      : {summary['total_frames']}")
+    
+    print("\n--- Module Configurations ---")
+    for mod, config in module_configs.items():
+        print(f"{mod.upper()}: {config}")
+        
+    print("\n--- Core Metrics ---")
+    for key in [
+        "detection_fps", "tracking_fps", "pose_fps", "adl_fps_equivalent", "reid_fps_equivalent",
+        "offline_module_sum_runtime_sec", "pipeline_wall_clock_runtime_sec", 
+        "end_to_end_fps_offline", "end_to_end_fps_wall_clock"
+    ]:
+        if summary.get(key) is not None:
+            val = summary[key]
+            if isinstance(val, float):
+                print(f"{key}: {val:.2f}")
+            else:
+                print(f"{key}: {val}")
+    
     return summary
 
 

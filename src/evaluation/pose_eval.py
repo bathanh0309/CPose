@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from src.evaluation.metrics import base_result, detect_gt_available, load_json, mean, metric_files
+from src.evaluation.detection_eval import base_result, detect_gt_available, load_json, mean, metric_files
 
 
 def evaluate(run_dir: Path, gt_dir: Path) -> dict[str, Any]:

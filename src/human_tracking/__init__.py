@@ -1,2 +1,0 @@
-"""Person tracking module."""
-

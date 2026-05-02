@@ -33,6 +33,22 @@ class TestResolveVideosNoManifest:
         assert hasattr(item, "camera_id")
         assert isinstance(item.path, Path)
 
+    def test_orders_by_earliest_filename_timestamp(self, tmp_path: Path) -> None:
+        for filename in [
+            "cam2_2026-01-29_16-26-40.mp4",
+            "cam1_2026-01-29_16-26-25.mp4",
+            "cam4_2026-01-28_15-59-10.mp4",
+        ]:
+            (tmp_path / filename).write_bytes(b"")
+
+        result = resolve_videos_from_manifest(tmp_path, None)
+
+        assert [item.video for item in result] == [
+            "cam4_2026-01-28_15-59-10.mp4",
+            "cam1_2026-01-29_16-26-25.mp4",
+            "cam2_2026-01-29_16-26-40.mp4",
+        ]
+
 
 class TestResolveVideosWithManifest:
     """With a manifest JSON — timestamps and camera IDs must be honoured."""

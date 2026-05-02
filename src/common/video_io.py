@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -11,6 +14,10 @@ from src.common.paths import resolve_path
 
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}
+_FILENAME_TIMESTAMP_RE = re.compile(
+    r"(?P<camera>cam\d+|[^_\-]+)[_\-](?P<date>\d{4}[_\-]\d{2}[_\-]\d{2})[_\-](?P<time>\d{2}[_\-]\d{2}[_\-]\d{2})",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -23,14 +30,70 @@ class VideoInfo:
     duration_sec: float
 
 
+def datetime_sort_value(value: datetime | None) -> float:
+    if value is None:
+        return float("inf")
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc).timestamp()
+    return value.astimezone(timezone.utc).timestamp()
+
+
+def camera_id_from_video_name(video_path: str | Path) -> str:
+    path = Path(video_path)
+    match = _FILENAME_TIMESTAMP_RE.search(path.stem)
+    if match:
+        return match.group("camera")
+    return path.stem.split("_")[0].split("-")[0] or path.stem
+
+
+def parse_video_start_time(video_path: str | Path) -> datetime | None:
+    match = _FILENAME_TIMESTAMP_RE.search(Path(video_path).stem)
+    if not match:
+        return None
+    raw = f"{match.group('date')}_{match.group('time')}".replace("-", "_")
+    try:
+        return datetime.strptime(raw, "%Y_%m_%d_%H_%M_%S")
+    except ValueError:
+        return None
+
+
+def _file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("inf")
+
+
+def video_sort_key(video_path: str | Path) -> tuple[int, float, str, str]:
+    path = Path(video_path)
+    start_time = parse_video_start_time(path)
+    if start_time is not None:
+        return (
+            0,
+            datetime_sort_value(start_time),
+            camera_id_from_video_name(path).lower(),
+            path.name.lower(),
+        )
+    resolved = resolve_path(path)
+    return (
+        1,
+        _file_mtime(resolved),
+        camera_id_from_video_name(path).lower(),
+        path.name.lower(),
+    )
+
+
 def list_video_files(input_dir: str | Path) -> list[Path]:
     directory = resolve_path(input_dir)
     if not directory.exists():
         return []
-    return sorted(
+    videos = [
         path for path in directory.iterdir()
         if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
-    )
+    ]
+    if any(parse_video_start_time(path) is None for path in videos):
+        print("[WARN] Some video filenames have no parseable timestamp; using modified time fallback after timestamped videos.")
+    return sorted(videos, key=video_sort_key)
 
 
 def open_video(video_path: str | Path) -> cv2.VideoCapture:
@@ -92,42 +155,65 @@ def iter_video_frames(video_path: str | Path) -> Iterator[tuple[np.ndarray, floa
         capture.release()
 
 
-_PREVIEW_AVAILABLE: bool | None = None  # None = not yet checked
+_PREVIEW_AVAILABLE: bool | None = None
+_PREVIEW_DISABLED_WINDOWS: set[str] = set()
+_PREVIEW_LAST_SHOW: dict[str, float] = {}
 
 
-def show_frame_preview(window_name: str, frame: np.ndarray) -> bool:
-    """Show *frame* in an OpenCV window during processing.
+def show_frame_preview(window_name: str, frame: np.ndarray, fps: float | None = None) -> bool:
+    """Show a preview frame at source-video speed.
 
-    Returns:
-        True  — user pressed ``q`` or ``Esc``: caller should stop showing
-                (processing continues normally, MP4 still saved).
-        False — window is alive, keep going.
-
-    Behaviour:
-        - First call tests whether a display is available.  If not, one
-          ``[WARN]`` line is printed and the function becomes a no-op for
-          the rest of the run (CLAUDE.md §11).
-        - Never raises; never crashes the pipeline.
+    Returns True when the user presses Q/Esc or closes the preview window.
+    Callers should then stop previewing while continuing to save output video.
     """
     global _PREVIEW_AVAILABLE
-    if _PREVIEW_AVAILABLE is False:
-        return False
+    if _PREVIEW_AVAILABLE is False or window_name in _PREVIEW_DISABLED_WINDOWS:
+        return True
     try:
+        target_interval = 1.0 / fps if fps and fps > 0 else 1.0 / 30.0
+        last_show = _PREVIEW_LAST_SHOW.get(window_name)
+        delay_ms = 1
+        if last_show is not None:
+            remaining = target_interval - (time.perf_counter() - last_show)
+            if remaining > 0:
+                delay_ms = max(1, int(round(remaining * 1000)))
+
         cv2.imshow(window_name, frame)
-        # waitKey(16) ≈ 60 fps cap; also pumps the Win32/X11 event queue
-        # so Q and Esc actually register.  waitKey(1) is too short on Windows.
-        key = cv2.waitKey(16) & 0xFF
+        key = cv2.waitKey(delay_ms) & 0xFF
+        _PREVIEW_LAST_SHOW[window_name] = time.perf_counter()
         if _PREVIEW_AVAILABLE is None:
-            _PREVIEW_AVAILABLE = True  # first imshow succeeded
-        return key in (ord('q'), ord('Q'), 27)  # 27 = Esc
+            _PREVIEW_AVAILABLE = True
+        if key in (ord("q"), ord("Q"), 27):
+            _PREVIEW_AVAILABLE = False
+            _PREVIEW_DISABLED_WINDOWS.add(window_name)
+            _PREVIEW_LAST_SHOW.pop(window_name, None)
+            try:
+                cv2.destroyWindow(window_name)
+            except cv2.error:
+                pass
+            return True
+        try:
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                _PREVIEW_AVAILABLE = False
+                _PREVIEW_DISABLED_WINDOWS.add(window_name)
+                _PREVIEW_LAST_SHOW.pop(window_name, None)
+                return True
+        except cv2.error:
+            _PREVIEW_AVAILABLE = False
+            _PREVIEW_DISABLED_WINDOWS.add(window_name)
+            _PREVIEW_LAST_SHOW.pop(window_name, None)
+            return True
+        return False
     except cv2.error:
         if _PREVIEW_AVAILABLE is None:
-            print("[WARN] No display available — live preview disabled. MP4 will still be saved.")
+            print("[WARN] No display available - live preview disabled. MP4 will still be saved.")
             _PREVIEW_AVAILABLE = False
         return False
 
 
 def reset_preview_state() -> None:
-    """Call once per module run (before the first video) to re-evaluate display availability."""
+    """Call once per module run to re-evaluate display availability."""
     global _PREVIEW_AVAILABLE
     _PREVIEW_AVAILABLE = None
+    _PREVIEW_DISABLED_WINDOWS.clear()
+    _PREVIEW_LAST_SHOW.clear()

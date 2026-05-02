@@ -1,3 +1,6 @@
-"""src.modules.tracking — shim forwarding to src.human_tracking."""
-from src.human_tracking import *  # noqa: F401, F403
-from src.human_tracking.api import process_folder, process_video  # noqa: F401
+"""CPose Module 2: local tracking."""
+from __future__ import annotations
+
+from src.modules.tracking.api import process_folder, process_video, run_tracking
+
+__all__ = ["process_folder", "process_video", "run_tracking"]

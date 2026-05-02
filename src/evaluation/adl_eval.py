@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from src.evaluation.metrics import base_result, detect_gt_available, load_json, metric_files
+from src.evaluation.detection_eval import base_result, detect_gt_available, load_json, metric_files
 
 
 def _f1(tp: int, fp: int, fn: int) -> float | None:

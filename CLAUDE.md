@@ -94,11 +94,9 @@ CPose/
 │       └── <run_id>/
 │
 ├── models/
-│   ├── weights/                     ← .pt / .onnx model files
-│   ├── exports/
-│   │   ├── onnx/
-│   │   └── tensorrt/
-│   └── README.md
+│   ├── yolo/                     ← .pt / .onnx model files
+│   ├── reid/
+│   └── face/
 │
 ├── src/
 │   ├── __init__.py
@@ -170,6 +168,7 @@ CPose/
 │   ├── pipeline/
 │   │   ├── orchestrator.py          ← coordinates all modules
 │   │   ├── run_all.py               ← full pipeline CLI entrypoint
+│   │   ├── live_pipeline.py          ← live combined demo overlay
 │   │   ├── stage_registry.py        ← module order + enable/disable
 │   │   └── benchmark_all.py
 │   │
@@ -502,6 +501,25 @@ Stage 7: Evaluation       → 07_evaluation/  (only if --gt provided)
 Stage 8: Paper Report     → 08_paper_report/
 ```
 
+### Input video processing order
+
+All modules that enumerate files from `data-test/` must process videos in chronological order, earliest first. The canonical order is parsed from filenames in this format:
+
+```
+<camera_id>_YYYY-MM-DD_HH-MM-SS.<ext>
+```
+
+Example: `cam2_2026-01-28_15-57-54.mp4` must be processed before `cam1_2026-01-29_16-26-25.mp4`, even though `cam1` sorts earlier alphabetically.
+
+Rules:
+
+- Never rely on filesystem enumeration order or alphabetical filename order for `data-test/`.
+- Prefer manifest `start_time` when a manifest is provided; otherwise parse the timestamp embedded in the video filename.
+- Sort ascending by timestamp, then by `camera_id`, then by filename as deterministic tie-breakers.
+- The resolved chronological order must be reused consistently by detection, tracking, pose, ADL, Global ReID, comparison generation, metrics `input_videos`, and `run_manifest.json`.
+- `--compare-count N` selects the first N videos after chronological sorting, not the first N alphabetically.
+- If a filename has no parseable timestamp, log one warning and place it after timestamped videos using filesystem modified time as fallback.
+
 ### Error handling
 
 - If a single video fails in any stage, log one error line and continue with the next video.
@@ -621,6 +639,19 @@ python -m src.modules.global_reid.main \
 ```
 
 ### Full pipeline
+
+`run_06_pipeline.bat` is the live demo path. It must show one combined overlay per frame with Detection + Tracking + Pose + ADL + ReID at the same time.
+
+```bash
+python -m src.pipeline.live_pipeline \
+  --input data-test \
+  --output dataset/runs \
+  --models configs/model_registry.demo_i5.yaml \
+  --topology configs/camera_topology.yaml \
+  --run-id live_combined
+```
+
+The offline research pipeline remains available for saved stage-by-stage outputs:
 
 ```bash
 python -m src.pipeline.run_all \

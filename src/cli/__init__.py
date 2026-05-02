@@ -1,0 +1,1 @@
+"""Thin CPose CLI entrypoints."""

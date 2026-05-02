@@ -10,7 +10,7 @@ from typing import Any
 
 from src import ANNOTATIONS_DIR, OUTPUT_DIR, print_module_console
 from src.evaluation import adl_eval, detection_eval, pose_eval, reid_eval, tracking_eval
-from src.evaluation.metrics import save_csv, save_json
+from src.common.json_io import save_csv, save_json
 
 
 def evaluate_all(run_dir: str | Path, gt_dir: str | Path, output_dir: str | Path) -> dict[str, Any]:

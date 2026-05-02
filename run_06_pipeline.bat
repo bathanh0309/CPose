@@ -1,44 +1,45 @@
 @echo off
 REM ============================================================
-REM  CPose — Live Pipeline (Detection + Tracking + Pose + ADL)
-REM  Unified frame-by-frame: shows ONE window with all overlays.
-REM  Press Q or Esc in the preview window to stop.
-REM  Ctrl+C in this terminal also stops cleanly.
-REM  CLAUDE.md §6 CLI convenience script
+REM  CPose - Live Combined Pipeline
+REM  Shows Detection + Tracking + Pose + ADL + ReID on every frame.
 REM ============================================================
 setlocal
+pushd "%~dp0" >nul
 
-set INPUT=data-test
-set OUTPUT=dataset\outputs\live
-set DET_CONF=0.5
-set POSE_CONF=0.45
-set KEYPOINT_CONF=0.30
-set ADL_WINDOW=30
+set "PYTHON=.venv\Scripts\python.exe"
+if not exist "%PYTHON%" set "PYTHON=py"
+
+set "INPUT=data-test"
+set "OUTPUT=dataset\runs"
+set "MODELS=configs\model_registry.demo_i5.yaml"
+set "TOPOLOGY=configs\camera_topology.yaml"
+set "RUN_ID=live_combined"
 
 echo ============================================================
-echo  CPose Live Pipeline
-echo  Input      : %INPUT%
-echo  Output     : %OUTPUT%
-echo  Det conf   : %DET_CONF%
-echo  Pose conf  : %POSE_CONF%
-echo  ADL window : %ADL_WINDOW% frames
-echo  Controls   : Q / Esc  = close preview window
-echo               Ctrl+C   = stop everything
+echo  CPose Live Combined Pipeline
+echo  Input    : %INPUT%
+echo  Output   : %OUTPUT%
+echo  Models   : %MODELS%
+echo  Topology : %TOPOLOGY%
+echo  Run ID   : %RUN_ID%
+echo  Overlay  : Detection + Tracking + Pose + ADL + ReID
 echo ============================================================
 
-.venv\Scripts\python.exe -m src.pipeline.live_pipeline ^
+"%PYTHON%" -m src.pipeline.live_pipeline ^
   --input "%INPUT%" ^
   --output "%OUTPUT%" ^
-  --det-conf %DET_CONF% ^
-  --pose-conf %POSE_CONF% ^
-  --keypoint-conf %KEYPOINT_CONF% ^
-  --adl-window %ADL_WINDOW%
+  --models "%MODELS%" ^
+  --topology "%TOPOLOGY%" ^
+  --run-id "%RUN_ID%"
 
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Live pipeline failed with exit code %ERRORLEVEL%
-    exit /b %ERRORLEVEL%
+set EXITCODE=%ERRORLEVEL%
+if %EXITCODE% neq 0 (
+    echo [ERROR] Live combined pipeline failed with exit code %EXITCODE%
+    popd
+    exit /b %EXITCODE%
 )
 
 echo.
-echo Live pipeline complete. Results in: %OUTPUT%
+echo Live combined pipeline complete. Results in: %OUTPUT%
+popd
 endlocal

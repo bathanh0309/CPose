@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from src.common.video_io import list_video_files
-
-
-_TIMESTAMP_RE = re.compile(
-    r"(?P<camera>cam\d+|[^_\-]+)[_\-](?P<date>\d{4}[_\-]\d{2}[_\-]\d{2})[_\-](?P<time>\d{2}[_\-]\d{2}[_\-]\d{2})",
-    re.IGNORECASE,
+from src.common.video_io import (
+    camera_id_from_video_name,
+    datetime_sort_value,
+    list_video_files,
+    parse_video_start_time,
 )
 
 
@@ -84,17 +82,8 @@ def load_multicam_manifest(path: str | Path | None) -> list[VideoManifestItem]:
 
 
 def parse_video_timestamp_from_filename(video_path: Path) -> tuple[str, datetime | None]:
-    match = _TIMESTAMP_RE.search(video_path.stem)
-    camera_id = video_path.stem.split("_")[0].split("-")[0] or video_path.stem
-    if not match:
-        print(f"[WARN] Could not parse timestamp from {video_path.name}; using camera_id={camera_id}.")
-        return camera_id, None
-    camera_id = match.group("camera")
-    raw = f"{match.group('date')}_{match.group('time')}".replace("-", "_")
-    try:
-        parsed = datetime.strptime(raw, "%Y_%m_%d_%H_%M_%S")
-    except ValueError:
-        parsed = None
+    camera_id = camera_id_from_video_name(video_path)
+    parsed = parse_video_start_time(video_path)
     return camera_id, parsed
 
 
@@ -108,12 +97,13 @@ def resolve_videos_from_manifest(input_dir: Path, manifest_path: Path | None) ->
             path = candidate if candidate.is_absolute() else input_dir / candidate
             if not path.exists():
                 print(f"[WARN] Manifest video not found: {path}")
+            start_time = _parse_datetime(item.start_time) or parse_video_start_time(path)
             resolved.append(ResolvedVideoItem(
                 path=path,
                 video=item.video,
                 stem=Path(item.video).stem,
                 camera_id=item.camera_id,
-                start_time=_parse_datetime(item.start_time),
+                start_time=start_time,
                 fps=item.fps,
                 location=item.location,
                 timezone=item.timezone,
@@ -134,8 +124,21 @@ def resolve_videos_from_manifest(input_dir: Path, manifest_path: Path | None) ->
     return sort_video_items(resolved)
 
 
+def _resolved_item_sort_key(item: ResolvedVideoItem) -> tuple[int, float, str, str]:
+    start_time = item.start_time or parse_video_start_time(item.path)
+    return (
+        0 if start_time is not None else 1,
+        datetime_sort_value(start_time),
+        item.camera_id.lower(),
+        item.stem.lower(),
+    )
+
+
 def sort_video_items(items: list[ResolvedVideoItem]) -> list[ResolvedVideoItem]:
-    return sorted(items, key=lambda item: (item.start_time or datetime.max, item.camera_id, item.stem))
+    return sorted(
+        items,
+        key=_resolved_item_sort_key,
+    )
 
 
 def get_item_by_stem(items: list[ResolvedVideoItem], stem: str) -> ResolvedVideoItem | None:

@@ -1,3 +1,6 @@
-"""src.modules.detection — shim forwarding to src.human_detection."""
-from src.human_detection import *  # noqa: F401, F403
-from src.human_detection.api import process_folder, process_video  # noqa: F401
+"""CPose Module 1: person detection."""
+from __future__ import annotations
+
+from src.modules.detection.api import process_folder, process_video, run_detection
+
+__all__ = ["process_folder", "process_video", "run_detection"]

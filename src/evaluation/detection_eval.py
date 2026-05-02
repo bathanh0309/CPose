@@ -3,7 +3,56 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from src.evaluation.metrics import base_result, bbox_iou, detect_gt_available, gt_file_for, load_json, mean, metric_files, prediction_files
+from src.common.json_io import load_json
+
+
+GT_DIR_MAP = {
+    "detection": "detection_gt",
+    "tracking": "tracking_gt",
+    "pose": "pose_gt",
+    "adl": "adl_gt",
+    "global_id": "global_id_gt",
+}
+
+
+def mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def metric_files(run_dir: Path, filename: str) -> list[Path]:
+    return sorted(run_dir.rglob(filename))
+
+
+def prediction_files(run_dir: Path, filename: str) -> list[Path]:
+    return sorted(run_dir.rglob(filename))
+
+
+def detect_gt_available(gt_dir: Path, module: str) -> bool:
+    root = gt_dir / GT_DIR_MAP.get(module, module)
+    return root.exists() and any(root.glob("*.json"))
+
+
+def gt_file_for(gt_dir: Path, module: str, stem: str) -> Path | None:
+    root = gt_dir / GT_DIR_MAP.get(module, module)
+    candidate = root / f"{stem}.json"
+    return candidate if candidate.exists() else None
+
+
+def base_result(module: str, has_gt: bool) -> dict[str, Any]:
+    return {"module": module, "metric_type": "ground_truth" if has_gt else "proxy", "failure_reason": "OK" if has_gt else "EVALUATION_SKIPPED_NO_GT"}
+
+
+def bbox_iou(box_a: list[float], box_b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = [float(v) for v in box_a]
+    bx1, by1, bx2, by2 = [float(v) for v in box_b]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    denom = area_a + area_b - inter
+    return inter / denom if denom > 0 else 0.0
 
 
 def evaluate_detection(pred_json: Path, gt_json: Path | None, iou_threshold: float = 0.5) -> dict[str, Any]:

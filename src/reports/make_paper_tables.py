@@ -159,14 +159,18 @@ def _build_tracking_table(run_dir: Path) -> list[dict[str, Any]]:
     rows = []
     for r in records:
         rows.append({
-            "camera": r.get("camera_id", "N/A"),
+            "video": Path(r.get("input_video", "N/A")).stem if r.get("input_video") else "N/A",
+            "camera_id": r.get("camera_id", "N/A"),
             "total_frames": r.get("total_frames", "N/A"),
             "total_tracks": r.get("total_tracks", "N/A"),
-            "mean_track_age": _fmt(r.get("mean_track_age")),
+            "confirmed_tracks": r.get("confirmed_tracks", r.get("confirmed_track_count", "N/A")),
             "confirmed_track_ratio": _fmt(r.get("confirmed_track_ratio")),
-            "fragment_proxy": r.get("fragment_proxy", "N/A"),
+            "mean_track_age": _fmt(r.get("mean_track_age")),
+            "mean_track_quality": _fmt(r.get("mean_track_quality", r.get("avg_track_quality"))),
+            "mean_speed_px_per_sec": _fmt(r.get("mean_speed_px_per_sec")),
+            "fragment_proxy": _fmt(r.get("fragment_proxy", r.get("proxy_track_fragmentation"))),
             "fps": _fmt(r.get("fps_processing")),
-            "latency_ms": _fmt(r.get("avg_latency_ms_per_frame")),
+            "latency_ms_per_frame": _fmt(r.get("avg_latency_ms_per_frame")),
             "idf1": r.get("idf1", "N/A"),
             "id_switches": r.get("id_switches", "N/A"),
             "hota": r.get("hota", "N/A"),
@@ -305,18 +309,42 @@ def _write_paper_summary(report_dir: Path, run_dir: Path, runtime_rows: list[dic
 
 
 def _write_figure_list(report_dir: Path, run_dir: Path) -> None:
-    lines = ["# Figure List\n"]
-    for pattern, label in [
-        ("**/detection_overlay.mp4", "Detection Overlay"),
-        ("**/tracking_overlay.mp4", "Tracking Overlay"),
-        ("**/pose_overlay.mp4", "Pose Overlay"),
-        ("**/adl_overlay.mp4", "ADL Overlay"),
-        ("**/reid_overlay.mp4", "ReID Overlay"),
-        ("**/*_raw_vs_*.mp4", "Comparison"),
-    ]:
-        for p in sorted(run_dir.rglob(pattern)):
-            rel = p.relative_to(run_dir)
-            lines.append(f"- **{label}**: `{rel}`")
+    lines = ["# Figure Candidates for Paper\n"]
+    
+    sections = [
+        ("## Detection", [
+            ("**/detection_overlay.mp4", "Detection Overlay"),
+            ("**/6_comparison/*_raw_vs_detection.mp4", "Raw vs Detection Comparison"),
+        ]),
+        ("## Tracking", [
+            ("**/tracking_overlay.mp4", "Tracking Overlay"),
+            ("**/trajectory_overlay.mp4", "Trajectory Overlay (bottom_center motion trails)"),
+            ("**/trajectory_snapshot.png", "Trajectory Snapshot (full trajectory map for paper figure)"),
+            ("**/6_comparison/*_raw_vs_tracking.mp4", "Raw vs Tracking Comparison"),
+            ("**/6_comparison/*_raw_vs_trajectory.mp4", "Raw vs Trajectory Comparison"),
+        ]),
+        ("## Pose", [
+            ("**/pose_overlay.mp4", "Pose Overlay"),
+        ]),
+        ("## ADL Recognition", [
+            ("**/adl_overlay.mp4", "ADL Overlay"),
+        ]),
+        ("## Global ReID", [
+            ("**/reid_overlay.mp4", "ReID Overlay"),
+        ]),
+    ]
+    
+    for section_title, patterns in sections:
+        section_lines = []
+        for pattern, label in patterns:
+            for p in sorted(run_dir.rglob(pattern)):
+                rel = p.relative_to(run_dir)
+                section_lines.append(f"- **{label}**: `{rel}`")
+        if section_lines:
+            lines.append(section_title)
+            lines.extend(section_lines)
+            lines.append("")
+    
     (report_dir / "figure_list.md").write_text("\n".join(lines), encoding="utf-8")
 
 

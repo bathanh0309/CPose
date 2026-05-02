@@ -90,6 +90,10 @@ def process_video(
             ok, frame = capture.read()
             if not ok:
                 break
+            
+            if not pose_records:
+                cv2.putText(frame, "NO POSE DATA (JSON MISSING/CORRUPT)", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                
             persons = pose_records[frame_id].get("persons", []) if frame_id < len(pose_records) else []
             for person in persons:
                 track_id = int(person.get("track_id") if person.get("track_id") is not None else -1)
@@ -120,7 +124,7 @@ def process_video(
     })
     save_json(events_path, events)
     save_json(metric_path, metrics)
-    print(f"Frames: {len(pose_records)} | ADL events: {metrics['total_adl_events']} | FPS-eq: {metrics['fps_equivalent']:.2f}")
+    print(f"Frames: {frame_id} | ADL events: {metrics['total_adl_events']} | FPS-eq: {metrics['fps_equivalent']:.2f}")
     print_saved(saved_overlay, events_path, metric_path)
     return metrics
 

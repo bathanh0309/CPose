@@ -18,11 +18,24 @@ def main() -> None:
     parser.add_argument("--detection-dir", "--detections", dest="detection_dir", default=str(OUTPUT_DIR / "01_detection"))
     parser.add_argument("--config", default=None)
     parser.add_argument("--labels", default=str(ANNOTATIONS_DIR), help="Train/val label root for metric context")
+    parser.add_argument("--make-comparison", action="store_true", help="Generate raw-vs-processed comparison videos")
+    parser.add_argument("--compare-count", type=int, default=2, help="Number of videos to compare (default: 2)")
+    parser.add_argument("--comparison-dir", default=None, help="Output dir for comparison videos")
     args = parser.parse_args()
     print_module_console("human_tracking", args)
     if args.config:
         print(f"[WARN] --config is accepted for CLI compatibility; module uses local defaults: {args.config}")
-    process_folder(args.input, args.output, args.model, args.tracker, args.conf, args.detection_dir)
+    process_folder(
+        args.input,
+        args.output,
+        args.model,
+        args.tracker,
+        args.conf,
+        args.detection_dir,
+        make_comparison=args.make_comparison,
+        compare_count=args.compare_count,
+        comparison_dir=args.comparison_dir,
+    )
 
 
 if __name__ == "__main__":

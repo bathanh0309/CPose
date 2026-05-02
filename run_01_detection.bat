@@ -12,19 +12,25 @@ set "INPUT=data-test"
 set "OUTPUT=dataset\outputs\1_detection"
 set "CONF=0.5"
 set "CONFIG=configs\model_registry.demo_i5.yaml"
+set "COMPARISON_DIR=dataset\outputs\6_comparison"
 
 echo ============================================================
 echo  CPose Person Detection
-echo  Input  : %INPUT%
-echo  Output : %OUTPUT%
-echo  Config : %CONFIG%
+echo  Input      : %INPUT%
+echo  Output     : %OUTPUT%
+echo  Crops      : %OUTPUT%\*/crops\
+echo  Comparison : %COMPARISON_DIR%
+echo  Config     : %CONFIG%
 echo ============================================================
 
 "%PYTHON%" -m src.modules.detection.main ^
   --input "%INPUT%" ^
   --output "%OUTPUT%" ^
   --conf %CONF% ^
-  --config "%CONFIG%"
+  --config "%CONFIG%" ^
+  --make-comparison ^
+  --compare-count 2 ^
+  --comparison-dir "%COMPARISON_DIR%"
 
 set EXITCODE=%ERRORLEVEL%
 if %EXITCODE% neq 0 (

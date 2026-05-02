@@ -3,22 +3,22 @@
   "description": "Example multi-camera manifest. Each entry maps a video file to a camera ID and an ISO-8601 start timestamp.",
   "videos": [
     {
-      "path": "data-test/cam1_2026-01-29_16-26-25.mp4",
+      "path": "cam1_2026-01-29_16-26-25.mp4",
       "camera_id": "cam1",
       "start_time": "2026-01-29T16:26:25+07:00"
     },
     {
-      "path": "data-test/cam2_2026-01-29_16-27-10.mp4",
+      "path": "cam2_2026-01-29_16-27-10.mp4",
       "camera_id": "cam2",
       "start_time": "2026-01-29T16:27:10+07:00"
     },
     {
-      "path": "data-test/cam3_2026-01-29_16-28-00.mp4",
+      "path": "cam3_2026-01-29_16-28-00.mp4",
       "camera_id": "cam3",
       "start_time": "2026-01-29T16:28:00+07:00"
     },
     {
-      "path": "data-test/cam4_2026-01-29_16-29-05.mp4",
+      "path": "cam4_2026-01-29_16-29-05.mp4",
       "camera_id": "cam4",
       "start_time": "2026-01-29T16:29:05+07:00"
     }

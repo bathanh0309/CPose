@@ -91,36 +91,42 @@ def resolve_videos_from_manifest(input_dir: Path, manifest_path: Path | None) ->
     input_dir = Path(input_dir)
     manifest_items = load_multicam_manifest(manifest_path)
     resolved: list[ResolvedVideoItem] = []
+    manifest_stems: dict[str, VideoManifestItem] = {}
+    
+    # Index manifest by stem
     if manifest_items:
         for item in manifest_items:
             candidate = Path(item.video)
             path = candidate if candidate.is_absolute() else input_dir / candidate
             if not path.exists():
                 print(f"[WARN] Manifest video not found: {path}")
-            start_time = _parse_datetime(item.start_time) or parse_video_start_time(path)
-            resolved.append(ResolvedVideoItem(
-                path=path,
-                video=item.video,
-                stem=Path(item.video).stem,
-                camera_id=item.camera_id,
-                start_time=start_time,
-                fps=item.fps,
-                location=item.location,
-                timezone=item.timezone,
-            ))
-    else:
-        for video in list_video_files(input_dir):
+            manifest_stems[Path(item.video).stem] = item
+    
+    # Always iterate all video files in input_dir as primary source
+    for video in list_video_files(input_dir):
+        stem = video.stem
+        manifest_item = manifest_stems.get(stem)
+        if manifest_item:
+            start_time = _parse_datetime(manifest_item.start_time) or parse_video_start_time(video)
+            camera_id = manifest_item.camera_id
+            fps = manifest_item.fps
+            location = manifest_item.location
+            timezone = manifest_item.timezone
+        else:
             camera_id, start_time = parse_video_timestamp_from_filename(video)
-            resolved.append(ResolvedVideoItem(
-                path=video,
-                video=video.name,
-                stem=video.stem,
-                camera_id=camera_id,
-                start_time=start_time,
-                fps=None,
-                location=None,
-                timezone=None,
-            ))
+            fps = None
+            location = None
+            timezone = None
+        resolved.append(ResolvedVideoItem(
+            path=video,
+            video=video.name,
+            stem=stem,
+            camera_id=camera_id,
+            start_time=start_time,
+            fps=fps,
+            location=location,
+            timezone=timezone,
+        ))
     return sort_video_items(resolved)
 
 

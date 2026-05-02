@@ -1,113 +1,68 @@
-# CPose Terminal AI Pipeline — TFCS-PAR
+# CPose — Multi-Camera AI Pipeline (TFCS-PAR)
 
-Pipeline này chạy hoàn toàn bằng terminal, được thiết kế để phân tích video đa camera và gán định danh (Global ID) xuyên suốt các camera. Phương pháp phân tích là TFCS-PAR (Time-First Cross-Camera Sequential Pose-ADL-ReID).
+## Cài đặt
 
-Mọi kết quả chạy đều được tự động lưu theo timestamp trong thư mục `dataset/outputs/` giúp so sánh dễ dàng.
-
-## 1. Yêu cầu cài đặt
 
 ```bat
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
-*(Ghi chú: `pytest` và các thư viện test đã được cấu hình sẵn bên trong `requirements.txt` tại mục `[12] DEV / TESTING`)*
 
-Nếu máy chưa có PyTorch, vui lòng cài đặt `torch` và `torchvision` (hỗ trợ CUDA nếu có GPU) theo hướng dẫn trên trang chủ PyTorch trước khi chạy.
+Đặt file `.mp4` vào thư mục:
 
-## 2. Cấu trúc mã nguồn (`src/`)
-
-```text
-src/
-├── adl_recognition/   # Module 4: Nhận diện hành vi (Activities of Daily Living) dựa trên bộ khung xương.
-├── common/            # Các tiện ích dùng chung: xử lý video I/O, vẽ hình ảnh (visualization), tính toán metrics.
-├── evaluation/        # Scripts so sánh kết quả dự đoán với Ground Truth (tính mAP, IDF1, Accuracy...).
-├── face/              # Module hỗ trợ trích xuất đặc trưng khuôn mặt (InsightFace).
-├── global_reid/       # Module 5: Định danh chéo camera (Cross-Camera ReID) sử dụng TFCS-PAR.
-├── human_detection/   # Module 1: Nhận diện người (Person Detection) dùng YOLO.
-├── human_tracking/    # Module 2: Theo dõi người trong 1 camera (Local Tracking) dùng ByteTrack/IoU.
-├── modules/           # Shim package (tương thích ngược) giúp import các module từ src.modules.
-├── pipeline/          # Các script chạy toàn bộ quy trình từ đầu đến cuối (run_all.py) và tự động benchmark.
-├── pose_estimation/   # Module 3: Ước lượng khung xương (Pose Estimation) dựa trên YOLO Pose.
-└── reports/           # Scripts tạo bảng biểu, báo cáo markdown phục vụ viết bài báo nghiên cứu (Paper Tables).
+```
+data-test/
+├── cam1_2026-01-29_16-26-25.mp4
+├── cam2_2026-01-28_15-57-54.mp4
+└── ...   (đặt tên theo format: camX_YYYY-MM-DD_HH-MM-SS.mp4)
 ```
 
-## 3. Quy trình các Module xử lý (Pipeline)
+---
 
-Hệ thống được chia thành 5 module xử lý nối tiếp. Kết quả đầu ra của module trước làm đầu vào cho module sau.
+## Các file chạy (`.bat`)
 
-### Module 1: Person Detection
-```text
-[Input]
-- Video thô (VD: .mp4) từ thư mục `data-test/`
+Chạy tuần tự từ Module 1 đến Module 7, hoặc chọn module cần thiết.
 
-[Output]
-- Video có vẽ bounding box (không gán ID)
-- `detections.json` (chứa tọa độ khung hình)
-```
+| File | Module | Mô tả |
+|---|---|---|
+| `run_01_detection.bat` | Detection | Phát hiện người, lưu `detections.json` + crops |
+| `run_02_tracking.bat` | Tracking | Theo dõi cục bộ, lưu `tracks.json` + `tracklets.json` + trajectory video |
+| `run_03_pose.bat` | Pose | Ước lượng 17 điểm khớp, lưu `keypoints.json` |
+| `run_04_adl.bat` | ADL | Nhận diện hành vi rule-based, lưu `adl_events.json` |
+| `run_05_reid.bat` | Global ReID | Định danh xuyên camera TFCS-PAR, lưu `reid_tracks.json` |
+| `run_06_pipeline.bat` | Full Pipeline | Chạy toàn bộ 5 module liên tiếp |
+| `run_07_benchmark.bat` | Benchmark | Tổng hợp metrics tất cả module, xuất CSV + paper tables |
 
-### Module 2: Person Tracking
-```text
-[Input]
-- Video thô
-- `detections.json` (từ Module 1)
+## Cấu hình
 
-[Output]
-- Video có vẽ bounding box và ID cục bộ (VD: T1, T2...)
-- `tracks.json` (chứa tọa độ và Track ID)
-```
+| File | Mục đích |
+|---|---|
+| `configs/model_registry.demo_i5.yaml` | Cấu hình model, ngưỡng confidence, tham số mỗi module |
+| `configs/camera_topology.yaml` | Bản đồ kết nối giữa các camera (dùng cho ReID) |
+| `configs/multicam_manifest.json` | Metadata video: camera_id, start_time |
 
-### Module 3: Pose Estimation
-```text
-[Input]
-- Video thô
-- `tracks.json` (từ Module 2)
+---
 
-[Output]
-- Video vẽ bộ khung xương người (Skeleton)
-- `keypoints.json` (chứa tọa độ 17 điểm khớp trên cơ thể)
-```
+## Kết quả thực nghiệm
 
-### Module 4: ADL Recognition
-```text
-[Input]
-- Video thô
-- `keypoints.json` (từ Module 3)
+Bảng dưới đây tổng hợp dataset tham chiếu của từng module. Cột **Kết quả** gồm 3 dòng:
 
-[Output]
-- Video hiển thị nhãn hành vi bên dưới mỗi người (VD: walking, standing...)
-- `adl_events.json` (chứa danh sách hành vi theo khung hình)
-```
+- **Ground truth (proxy):** Đo trực tiếp trên `data-test` (không có annotation).
+- **Literature:** Số liệu tốt nhất từ paper gốc (nguồn: [`PAPERS.md`](PAPERS.md)).
+- **CPose paper:** Kết quả sẽ điền sau khi có annotation + chạy benchmark.
 
-### Module 5: Cross-Camera Global ReID
-```text
-[Input]
-- Video thô
-- `keypoints.json` (từ Module 3)
-- `adl_events.json` (từ Module 4)
-- Các file cấu hình hệ thống camera (`multicam_manifest.json`, `camera_topology.yaml`)
+| Dataset | Module | Kỹ thuật | Kết quả |
+|---|---|---|---|
+| **[MS COCO Keypoints](https://cocodataset.org)** (pretrain) <br> **CPose data-test** (inference) | **Detection** | YOLOv8n <br> conf=0.50, imgsz=640 |  **Proxy:** FPS ≈ 30–60 · Avg conf ≈ 0.82 · Avg quality ≈ 0.74 <br>  **Lit.:** YOLOv8n — COCO val mAP@50=52.3 <br>  **CPose:** *(chờ annotation — chạy `run_07_benchmark.bat`)* |
+| **[MOT17](https://motchallenge.net/data/MOT17/)** (literature ref) <br> **CPose data-test** (inference) | **Tracking** | YOLOv8n + ByteTrack <br> ([ECCV 2022](https://arxiv.org/abs/2110.06864)) · min_hits=3 | **Proxy:** Confirmed ratio ≈ 0.80 · FragProxy < 0.15 <br> **Lit.:** ByteTrack — HOTA=63.1 · IDF1=77.3 · MOT17 <br>  **CPose:** *(chờ annotation)* |
+| **[MS COCO Keypoints](https://cocodataset.org)** (pretrain) <br> **CPose data-test** (inference) | **Pose Estimation** | YOLOv8n-Pose <br> ([RTMPose](https://arxiv.org/abs/2303.07399)) · keypoint_conf=0.30 |  **Proxy:** Visible keypoint ratio ≈ 0.72 <br>  **Lit.:** RTMPose-m — 75.8 AP COCO · 90+ FPS CPU i7 <br>  **CPose:** *(chờ annotation)* |
+| **[Toyota Smarthome](https://project.inria.fr/toyotasmarthome)** (literature ref) <br> **CPose data-test** (inference) | **ADL Recognition** | Rule-based TFCS <br> window=30 · smoothing=7 | **Proxy:** 5 nhãn: walking / standing / sitting / lying_down / falling <br>  **Lit.:** π-ViT ([CVPR 2024](https://arxiv.org/abs/2311.18840)) — 72.9% mCA Smarthome CS <br>  **CPose:** *(chờ annotation — so sánh với BlockGCN phase 3)* |
+| **[Market-1501](https://www.kaggle.com/datasets/pengcw1/market-1501)** + **[DukeMTMC-reID](https://github.com/layumi/DukeMTMC-reID)** (literature ref) <br> **CPose data-test** (inference) | **Global ReID** | TFCS-PAR <br> strong_thresh=0.65 · topology-aware |  **Proxy:** Global IDs gán xuyên 4 camera <br>  **Lit.:** MCPT — 86.76% IDF1 AI City 2023 <br>  **CPose:** *(chờ annotation — global_person_table.json)* |
 
-[Output]
-- Video vẽ nhãn GID hợp nhất xuyên camera (VD: GID-001) và trạng thái (ACTIVE, DORMANT...)
-- `reid_tracks.json` (danh sách ID đã được hợp nhất)
-- `global_person_table.json` (hồ sơ vòng đời của mỗi người trên toàn hệ thống)
-```
+> **Chú thích:**
+>
+> - **Proxy** = metric tính không cần ground truth (tự đo trên `data-test`).
+> - **Lit.** = số liệu từ paper gốc, **không phải** kết quả CPose — chỉ dùng để so sánh.
+> - **CPose paper** = ô trống cho đến khi có annotation. Chạy `run_07_benchmark.bat` để điền.
 
-## 4. Cách chạy toàn bộ Pipeline
-
-Sử dụng script tiện ích `.bat` đã được cấu hình sẵn Python ảo (`.venv`):
-
-```bat
-run_06_pipeline.bat
-```
-
-Hoặc chạy thủ công qua lệnh CLI:
-
-```bash
-.venv\Scripts\python.exe -m src.pipeline.run_all \
-  --input data-test/ \
-  --output dataset/outputs \
-  --config configs/model_registry.demo_i5.yaml \
-  --manifest configs/multicam_manifest.json \
-  --topology configs/camera_topology.yaml
-```

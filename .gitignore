@@ -59,6 +59,4 @@ resources.txt
 
 node_modules/
 
-# Keep test data videos and assets tracked.
-!data-test/
-!data-test/**
+

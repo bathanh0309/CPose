@@ -12,8 +12,6 @@ dataset/**/*
 !dataset/**/.gitkeep
 !dataset/.gitignore
 
-data-test/
-!data-test/.gitkeep
 
 # Large generated media and model artifacts
 *.mp4
@@ -24,8 +22,6 @@ data-test/
 *.webm
 *.gif
 
-*.pth
-*.pt
 *.onnx
 *.tflite
 *.ckpt
@@ -46,8 +42,6 @@ data-test/
 *.tar
 *.gz
 
-
-docs/**/*.pdf
 
 scripts/
 

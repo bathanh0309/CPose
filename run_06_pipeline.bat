@@ -30,7 +30,8 @@ echo ============================================================
   --output "%OUTPUT%" ^
   --models "%MODELS%" ^
   --topology "%TOPOLOGY%" ^
-  --run-id "%RUN_ID%"
+  --run-id "%RUN_ID%" ^
+  --preview
 
 set EXITCODE=%ERRORLEVEL%
 if %EXITCODE% neq 0 (

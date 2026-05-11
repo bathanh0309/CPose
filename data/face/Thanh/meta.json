@@ -1,0 +1,13 @@
+{
+  "person_id": "Thanh",
+  "created_at": "2026-01-27T14:38:09.819024",
+  "num_embeddings": 12,
+  "poses": {
+    "front": 4,
+    "right": 4,
+    "left": 4
+  },
+  "password_hash": "eaf89db7108470dc3f6b23ea90618264b3e8f8b6145371667c4055e9c5ce9f52",
+  "gender": "Male",
+  "age_group": "Adult"
+}

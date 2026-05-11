@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.common.topology import CameraTopology, load_camera_topology, topology_score
+from src.topology import CameraTopology, load_camera_topology, topology_score
 
 
 _EXAMPLE_YAML = """\

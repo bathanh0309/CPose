@@ -27,7 +27,8 @@ echo ============================================================
   --output "%OUTPUT%" ^
   --track-dir "%TRACK_DIR%" ^
   --conf %CONF% ^
-  --config "%CONFIG%"
+  --config "%CONFIG%" ^
+  --preview
 
 set EXITCODE=%ERRORLEVEL%
 if %EXITCODE% neq 0 (

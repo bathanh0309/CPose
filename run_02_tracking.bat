@@ -32,6 +32,7 @@ echo ============================================================
   --detection-dir "%DETECTION_DIR%" ^
   --conf %CONF% ^
   --config "%CONFIG%" ^
+  --preview ^
   --make-comparison ^
   --compare-count 2 ^
   --comparison-dir "%COMPARISON_DIR%"

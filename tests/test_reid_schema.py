@@ -24,7 +24,7 @@ VALID_STATES = {
     "CLOSED",
 }
 
-VALID_MATCH_STATUSES = {"strong_match", "weak_match", "new_gid", "UNK"}
+VALID_MATCH_STATUSES = {"strong_match", "soft_match", "pending_vote", "ambiguous", "new_id", "no_candidate", "weak_match", "new_gid", "UNK"}
 
 STRONG_THRESHOLD = 0.65  # CLAUDE.md §3.5
 WEAK_THRESHOLD = 0.45    # CLAUDE.md §3.5
@@ -359,7 +359,7 @@ class TestReidScoreFusion:
 
     def test_weights_sum_to_one(self) -> None:
         """All weight sets from fusion_score.py must sum to 1.0."""
-        from src.modules.global_reid.fusion_score import DEFAULT_WEIGHTS
+        from models.global_reid.fusion_score import DEFAULT_WEIGHTS
         for mode, weights in DEFAULT_WEIGHTS.items():
             total = sum(weights.values())
             assert abs(total - 1.0) < 1e-9, (
@@ -368,9 +368,25 @@ class TestReidScoreFusion:
 
     def test_weighted_fusion_no_usable_signals_returns_none(self) -> None:
         """If all signals are None, fusion must return None, not a fabricated value."""
-        from src.modules.global_reid.fusion_score import weighted_fusion, DEFAULT_WEIGHTS
+        from models.global_reid.fusion_score import weighted_fusion, DEFAULT_WEIGHTS
         result = weighted_fusion({}, DEFAULT_WEIGHTS["normal"])
         assert result is None, "weighted_fusion with no signals must return None"
+
+    def test_fusion_with_missing_face_normalizes_correctly(self) -> None:
+        """Missing face score must not pull the fused score outside bounds."""
+        from models.global_reid.fusion_score import DEFAULT_WEIGHTS, weighted_fusion
+
+        scores = {
+            "face": None,
+            "body": 0.8,
+            "pose": 0.6,
+            "height": 0.7,
+            "time": 1.0,
+            "topology": 1.0,
+        }
+        result = weighted_fusion(scores, DEFAULT_WEIGHTS["normal"])
+        assert result is not None
+        assert 0.0 <= result <= 1.0
 
 
 class TestGlobalPersonTableSchema:
@@ -463,18 +479,18 @@ class TestReidModuleBoundaries:
 
     def test_state_machine_active_to_pending(self) -> None:
         """ACTIVE → PENDING_TRANSFER when person leaves field of view."""
-        from src.modules.global_reid.state_machine import next_missing_state, ACTIVE, PENDING_TRANSFER
+        from models.global_reid.state_machine import next_missing_state, ACTIVE, PENDING_TRANSFER
         result = next_missing_state(ACTIVE, missing_sec=2.0, max_candidate_age_sec=30.0)
         assert result == PENDING_TRANSFER
 
     def test_state_machine_any_to_dormant_when_too_old(self) -> None:
         """Any state → DORMANT when missing longer than max_candidate_age_sec."""
-        from src.modules.global_reid.state_machine import next_missing_state, IN_BLIND_ZONE, DORMANT
+        from models.global_reid.state_machine import next_missing_state, IN_BLIND_ZONE, DORMANT
         result = next_missing_state(IN_BLIND_ZONE, missing_sec=60.0, max_candidate_age_sec=30.0)
         assert result == DORMANT
 
     def test_state_machine_closed_stays_closed(self) -> None:
         """Once CLOSED a track must never transition to another state."""
-        from src.modules.global_reid.state_machine import next_missing_state, CLOSED
+        from models.global_reid.state_machine import next_missing_state, CLOSED
         result = next_missing_state(CLOSED, missing_sec=1000.0, max_candidate_age_sec=30.0)
         assert result == CLOSED

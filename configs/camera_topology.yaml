@@ -14,8 +14,34 @@ cameras:
     entry_zones:
       - name: from_cam1
         polygon: []
+      - name: from_cam3
+        polygon: []
     exit_zones:
       - name: to_cam1
+        polygon: []
+      - name: to_cam3
+        polygon: []
+  cam3:
+    role: room
+    location: room_a
+    entry_zones:
+      - name: from_cam2
+        polygon: []
+      - name: from_cam4
+        polygon: []
+    exit_zones:
+      - name: to_cam2
+        polygon: []
+      - name: to_cam4
+        polygon: []
+  cam4:
+    role: elevator
+    location: elevator
+    entry_zones:
+      - name: from_cam3
+        polygon: []
+    exit_zones:
+      - name: to_cam3
         polygon: []
 
 transitions:
@@ -33,3 +59,31 @@ transitions:
     from_zone: to_cam1
     to_zone: from_cam2
     confidence: 1.0
+  - from: cam2
+    to: cam3
+    min_sec: 0
+    max_sec: 60
+    from_zone: to_cam3
+    to_zone: from_cam2
+    confidence: 1.0
+  - from: cam3
+    to: cam2
+    min_sec: 10
+    max_sec: 120
+    from_zone: to_cam2
+    to_zone: from_cam3
+    confidence: 1.0
+  - from: cam3
+    to: cam4
+    min_sec: 20
+    max_sec: 180
+    from_zone: to_cam4
+    to_zone: from_cam3
+    confidence: 0.8
+  - from: cam4
+    to: cam3
+    min_sec: 20
+    max_sec: 180
+    from_zone: to_cam3
+    to_zone: from_cam4
+    confidence: 0.8

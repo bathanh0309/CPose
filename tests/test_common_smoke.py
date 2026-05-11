@@ -6,11 +6,11 @@ from pathlib import Path
 import numpy as np
 
 from src.common.errors import ErrorCode, as_reason
-from src.common.paths import PROJECT_ROOT, ensure_dir, resolve_path
+from src.paths import PROJECT_ROOT, ensure_dir, resolve_path
 from src.common.persistence import PersistenceManager
-from src.common.schemas import FrameRecord, to_dict
-from src.common.video_io import list_video_files
-from src.common.visualization import draw_bbox, draw_global_id, draw_skeleton
+from src.schemas import FrameRecord, to_dict
+from src.video_io import list_video_files
+from src.visualization import draw_bbox, draw_global_id, draw_skeleton
 
 
 def test_resolve_path_anchors_relative_paths_to_project_root(tmp_path: Path) -> None:

@@ -1,0 +1,8 @@
+{
+  "person_id": "Huy",
+  "created_at": "2026-01-30T00:28:18.818957",
+  "num_embeddings": 8,
+  "source": "./video/Huy1.mp4",
+  "gender": "Male",
+  "age_group": "Adult"
+}

@@ -28,7 +28,8 @@ echo ============================================================
   --video-dir "%VIDEO_DIR%" ^
   --output "%OUTPUT%" ^
   --window-size %WINDOW% ^
-  --config "%CONFIG%"
+  --config "%CONFIG%" ^
+  --preview
 
 set EXITCODE=%ERRORLEVEL%
 if %EXITCODE% neq 0 (

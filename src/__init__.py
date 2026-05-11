@@ -17,7 +17,7 @@ DATA_TEST_DIR = PROJECT_ROOT / "data-test"
 DATASET_DIR = PROJECT_ROOT / "dataset"
 ANNOTATIONS_DIR = DATASET_DIR / "annotations"
 OUTPUT_DIR = DATASET_DIR / "outputs"
-DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "model_registry.demo_i5.yaml"
+DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "profiles" / "dev.yaml"
 
 
 @dataclass(frozen=True, slots=True)

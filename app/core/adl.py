@@ -14,7 +14,7 @@ class ADLConfig:
     """ADL runtime config.
 
     Thresholds that govern real classification live entirely in
-    `pose_utils.py` / `app/config.yaml [pose_utils]` section.
+    `pose_utils.py` / `configs/unified_config.yaml [pose_utils]` section.
     The constants below are kept only for legacy TrackState helpers
     (movement detection, posture voting UI), NOT for ADL inference.
     """

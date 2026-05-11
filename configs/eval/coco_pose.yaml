@@ -1,0 +1,7 @@
+# COCO val2017 pose evaluation config for Ultralytics YOLO pose.
+path: dataset/coco
+train: val2017
+val: val2017
+kpt_shape: [17, 3]
+names:
+  0: person

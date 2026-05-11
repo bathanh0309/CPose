@@ -1,33 +1,15 @@
 @echo off
-setlocal enabledelayedexpansion
-
+setlocal
 cd /d %~dp0
-
-echo === Git push-only script for bathanh0309/CPose ===
-
-git --version >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] Git is not installed or not in PATH.
-  pause
-  exit /b 1
-)
-
-git rev-parse --is-inside-work-tree >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] This folder is not a Git repository.
-  echo Run this file inside your CPose project folder.
-  pause
-  exit /b 1
-)
-
+git --version >nul 2>&1 || (echo [ERROR] Git not found. & exit /b 1)
+git rev-parse --is-inside-work-tree >nul 2>&1 || (echo [ERROR] Not a git repo. & exit /b 1)
 git config user.name "bathanh0309"
 git config user.email "bathanh1234asd@gmail.com"
 git config core.autocrlf false
-
-git remote get-url origin >nul 2>&1
-if errorlevel 1 (
-  git remote add origin https://github.com/bathanh0309/CPose.git
-) else (
+git remote get-url origin >nul 2>&1 || git remote add origin https://github.com/bathanh0309/CPose.git
+git add .
+git commit -m "[auto] quick push"
+git push origin HEAD
   git remote set-url origin https://github.com/bathanh0309/CPose.git
 )
 

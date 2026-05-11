@@ -1,33 +1,22 @@
 @echo off
-REM ============================================================
-REM  CPose - Live Combined Pipeline
-REM  Shows Detection + Tracking + Pose + ADL + ReID on every frame.
-REM ============================================================
+REM CPose - Live Combined Pipeline
 setlocal
 pushd "%~dp0" >nul
-
 set "PYTHON=.venv\Scripts\python.exe"
 if not exist "%PYTHON%" set "PYTHON=py"
-
 set "INPUT=data-test"
 set "OUTPUT=dataset\runs"
-set "MODELS=configs\model_registry.demo_i5.yaml"
-set "TOPOLOGY=configs\camera_topology.yaml"
+set "MODELS=configs\profiles\dev.yaml"
+set "TOPOLOGY=configs\camera\topology.yaml"
 set "RUN_ID=live_combined"
-
-echo ============================================================
-echo  CPose Live Combined Pipeline
-echo  Input    : %INPUT%
-echo  Output   : %OUTPUT%
-echo  Models   : %MODELS%
-echo  Topology : %TOPOLOGY%
-echo  Run ID   : %RUN_ID%
-echo  Overlay  : Detection + Tracking + Pose + ADL + ReID
-echo ============================================================
-
+echo [CPose] Live Pipeline - Input: %INPUT%, Output: %OUTPUT%, Run ID: %RUN_ID%
 "%PYTHON%" -m src.pipeline.live_pipeline ^
   --input "%INPUT%" ^
   --output "%OUTPUT%" ^
+  --models "%MODELS%" ^
+  --topology "%TOPOLOGY%" ^
+  --run-id %RUN_ID%
+popd
   --models "%MODELS%" ^
   --topology "%TOPOLOGY%" ^
   --run-id "%RUN_ID%" ^

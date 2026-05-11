@@ -1,4 +1,4 @@
-"""Load runtime defaults from app/config.yaml."""
+"""Load runtime defaults from configs/unified_config.yaml."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import yaml
 logger = logging.getLogger("[RuntimeConfig]")
 
 _BASE_DIR = Path(__file__).resolve().parents[2]
-_DEFAULT_CONFIG_FILE = _BASE_DIR / "app" / "config.yaml"
+_DEFAULT_CONFIG_FILE = _BASE_DIR / "configs" / "unified_config.yaml"
 _CONFIG_ENV_VAR = "CPOSE_RUNTIME_CONFIG"
 
 

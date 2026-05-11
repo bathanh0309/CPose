@@ -4,20 +4,25 @@ from pathlib import Path
 import os
 import argparse
 
+from src.config import (
+    FACE_GALLERY_DIR,
+    HOMOGRAPHY_PATH,
+    LIVENESS_MODEL as CONFIG_LIVENESS_MODEL,
+    PERSON_DETECTOR_MODEL,
+    RTSP_CAM1,
+    RTSP_CAM2,
+)
 
-# camera url
-RTSP_CAM2 = "rtsp://admin:L291E54A@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
-RTSP_CAM1 = "rtsp://admin:L2D2E11E@192.168.1.100:554/cam/realmonitor?channel=1&subtype=1"
 
 VID1_SRC = ""
 VID2_SRC = ""
 
 # paths
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = BASE_DIR / "data"
-CONF_DIR = BASE_DIR / "config"
-MODEL_DIR = BASE_DIR / "models"
-WEIGHT_DIR = BASE_DIR / "_weights"
+DATA_DIR = BASE_DIR.parent / "data"
+CONF_DIR = BASE_DIR.parent / "configs"
+MODEL_DIR = BASE_DIR.parent / "models"
+WEIGHT_DIR = MODEL_DIR
 
 # data / face = registered, unknonw images, test videos
 
@@ -30,8 +35,8 @@ UNKNOWN_DIR = DATA_DIR / "unknown"
 # models = models neural blocks code + weights
 # weights path
 
-LIVENESS_MODEL = WEIGHT_DIR / "best_model_quantized.onnx"
-YOLO_PATH = WEIGHT_DIR / "yolov8n.pt"
+LIVENESS_MODEL = CONFIG_LIVENESS_MODEL
+YOLO_PATH = PERSON_DETECTOR_MODEL
 FACE_ANALYSIS_PATH = ""
 TRACKER_PATH = ""
 

@@ -1,33 +1,19 @@
 @echo off
-REM ============================================================
-REM  CPose - Run tests by module
-REM
-REM  Usage:
-REM    run_tests.bat              all tests
-REM    run_tests.bat detection    Module 1 schema tests
-REM    run_tests.bat tracking     Module 2 schema tests
-REM    run_tests.bat pose         Module 3 schema tests
-REM    run_tests.bat adl          Module 4 schema tests
-REM    run_tests.bat reid         Module 5 schema tests
-REM    run_tests.bat topology     camera topology tests
-REM    run_tests.bat manifest     manifest tests
-REM    run_tests.bat smoke        shared smoke tests
-REM ============================================================
+REM CPose - Run tests by module
+REM Usage: run_tests.bat [module]
 setlocal
 pushd "%~dp0" >nul
-
-set "PYTHON=%~dp0.venv\Scripts\python.exe"
-if exist "%PYTHON%" goto python_ready
-
-where py >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    set "PYTHON=py"
-    goto python_ready
+set "PYTHON=.venv\Scripts\python.exe"
+if not exist "%PYTHON%" set "PYTHON=py"
+set "MODULE=%~1"
+if "%MODULE%"=="" (
+    echo [CPose] Run all tests
+    "%PYTHON%" -m pytest tests/ -v
+) else (
+    echo [CPose] Run tests for module: %MODULE%
+    "%PYTHON%" -m pytest tests/test_%MODULE%.py -v
 )
-
-where python >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    set "PYTHON=python"
+popd
     goto python_ready
 )
 

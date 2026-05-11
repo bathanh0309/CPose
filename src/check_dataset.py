@@ -30,7 +30,7 @@ def check_dataset(data_dir: Path, manifest_path: Path | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check CPose dataset and optional multicam manifest")
     parser.add_argument("--data-dir", default="data-test")
-    parser.add_argument("--manifest", default="configs/multicam_manifest.json")
+    parser.add_argument("--manifest", default="configs/camera/multicam_manifest.json")
     args = parser.parse_args()
     manifest = Path(args.manifest) if args.manifest else None
     check_dataset(Path(args.data_dir), manifest)

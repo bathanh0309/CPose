@@ -1,0 +1,11 @@
+profile: dev
+
+runtime:
+  device: cpu
+  demo_mode: true
+  target_fps: 15
+  process_every_n_frames: 2
+  max_people_per_frame: 3
+
+face:
+  enabled: false

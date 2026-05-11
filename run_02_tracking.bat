@@ -1,33 +1,23 @@
 @echo off
-REM ============================================================
-REM  CPose - Module 2: Human Tracking
-REM  Reads detections from run_01 output.
-REM ============================================================
+REM CPose - Module 2: Human Tracking
 setlocal
 pushd "%~dp0" >nul
-
 set "PYTHON=.venv\Scripts\python.exe"
 if not exist "%PYTHON%" set "PYTHON=py"
-
 set "INPUT=data-test"
 set "OUTPUT=dataset\outputs\2_tracking"
 set "DETECTION_DIR=dataset\outputs\1_detection"
 set "CONF=0.5"
-set "CONFIG=configs\model_registry.demo_i5.yaml"
+set "CONFIG=configs\profiles\dev.yaml"
 set "COMPARISON_DIR=dataset\outputs\6_comparison"
-
-echo ============================================================
-echo  CPose Human Tracking
-echo  Input        : %INPUT%
-echo  Detection dir: %DETECTION_DIR%
-echo  Output       : %OUTPUT%
-echo  Trajectory   : %OUTPUT%\*/trajectory_overlay.mp4
-echo  Tracklets    : %OUTPUT%\*/tracklets.json
-echo  Comparison   : %COMPARISON_DIR%
-echo ============================================================
-
+echo [CPose] Human Tracking - Input: %INPUT%, Detection: %DETECTION_DIR%, Output: %OUTPUT%
 "%PYTHON%" -m src.modules.tracking.main ^
   --input "%INPUT%" ^
+  --output "%OUTPUT%" ^
+  --detection-dir "%DETECTION_DIR%" ^
+  --conf %CONF% ^
+  --config "%CONFIG%"
+popd
   --output "%OUTPUT%" ^
   --detection-dir "%DETECTION_DIR%" ^
   --conf %CONF% ^

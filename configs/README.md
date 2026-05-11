@@ -1,12 +1,28 @@
 # CPose Configs
 
-The current CLI pipeline uses only these files by default:
+Config is loaded from one base tree plus one profile override. Runtime secrets stay in `.env` and are not committed.
 
-| File | Used by | Purpose |
-|---|---|---|
-| `model_registry.demo_i5.yaml` | Modules 1-6 | Model paths, thresholds, and light runtime defaults for local demos |
-| `camera_topology.yaml` | Module 5 and live pipeline | Allowed camera transitions for cross-camera ReID |
-| `multicam_manifest.json` | Module 5 | Optional camera ID and start-time metadata for each video |
+```text
+configs/
+  base/                 default values shared by every environment
+  camera/               topology and manifest without credentials
+  profiles/             environment or hardware overrides
+  phase.yaml            current run phase settings
+  unified_config.yaml   app-level source of truth for the Flask app
+  .env.example          credential template
+```
 
-Other YAML files in this folder are legacy/reference configs kept for older app code.
-Do not edit them for the normal `run_01_*.bat` to `run_07_*.bat` workflow unless that older code is being used.
+## Runtime Profiles
+
+Use `src.config.load_config(profile="dev")` or pass one of these files to CLI `--config` / `--models`:
+
+| Profile | Purpose |
+|---|---|
+| `profiles/dev.yaml` | Local laptop/dev defaults |
+| `profiles/edge.yaml` | CPU/edge constrained defaults |
+| `profiles/benchmark.yaml` | Full metrics and comparison output |
+
+## Public vs Private
+
+Commit `configs/.env.example`, never commit `.env` or `configs/_private.yaml`.
+RTSP URLs and credentials should be provided through environment variables such as `RTSP_CAM1` and `RTSP_CAM2`.

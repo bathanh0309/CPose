@@ -38,9 +38,21 @@ Chạy tuần tự từ Module 1 đến Module 7, hoặc chọn module cần thi
 
 | File | Mục đích |
 |---|---|
-| `configs/model_registry.demo_i5.yaml` | Cấu hình model, ngưỡng confidence, tham số mỗi module |
-| `configs/camera_topology.yaml` | Bản đồ kết nối giữa các camera (dùng cho ReID) |
-| `configs/multicam_manifest.json` | Metadata video: camera_id, start_time |
+| `configs/profiles/dev.yaml` | Profile dev, override tren nen `configs/base/*.yaml` |
+| `configs/camera/topology.yaml` | Ban do ket noi giua cac camera (dung cho ReID) |
+| `configs/camera/multicam_manifest.json` | Metadata video: camera_id, start_time |
+| `configs/unified_config.yaml` | Cau hinh app-level duy nhat thay cho `config.yaml` / `cpose_default.yaml` |
+
+---
+
+## Dataset benchmark
+
+Tai COCO val2017 va Market-1501 theo huong dan trong [`docs/DATASETS.md`](docs/DATASETS.md). Hai script chinh:
+
+```bat
+bash scripts/download_coco.sh
+bash scripts/download_market1501.sh
+```
 
 ---
 
@@ -65,4 +77,3 @@ Bảng dưới đây tổng hợp dataset tham chiếu của từng module. Cộ
 > - **Proxy** = metric tính không cần ground truth (tự đo trên `data-test`).
 > - **Lit.** = số liệu từ paper gốc, **không phải** kết quả CPose — chỉ dùng để so sánh.
 > - **CPose paper** = ô trống cho đến khi có annotation. Chạy `run_07_benchmark.bat` để điền.
-

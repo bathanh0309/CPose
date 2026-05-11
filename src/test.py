@@ -3,8 +3,8 @@ import numpy as np
 import threading
 
 from src.setting import *
-from models.face_detect.face_detect import FaceRecognition
-from models.human_detect.human_detect import PersonDetector
+from src.core.detector import FaceRecognition
+from src.core.detector import SimplePersonDetector as PersonDetector
 
 # ===== LOAD =====
 H = np.load("homography.npy")

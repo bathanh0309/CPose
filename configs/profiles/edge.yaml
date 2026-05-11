@@ -1,0 +1,36 @@
+# Edge profile for CPU-only demos on Intel i5 / Raspberry Pi 4 class hardware.
+profile: edge
+
+runtime:
+  device: cpu
+  target_fps: 10
+  process_every_n_frames: 3
+  max_people_per_frame: 4
+  imgsz: 416
+
+human_detection:
+  model: models/human_detect/yolov8n.pt
+  conf: 0.50
+  imgsz: 416
+
+human_tracking:
+  min_hits: 2
+  max_age: 20
+
+pose_estimation:
+  model: models/pose_estimation/yolov8n-pose.pt
+  conf: 0.45
+  keypoint_conf: 0.30
+  imgsz: 416
+
+adl_recognition:
+  window_size: 15
+  smoothing_frames: 5
+
+face:
+  enabled: false
+
+global_reid:
+  strong_threshold: 0.60
+  weak_threshold: 0.40
+  max_candidate_age_sec: 180

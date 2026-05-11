@@ -1,5 +1,5 @@
-from models.tracking.tracking import Tracker
-from models.human_detect.human_detect import PersonDetector
+from src.core.detector import SimplePersonDetector as PersonDetector
+from src.core.tracker import Tracker
 
 class Cam2Pipeline:
     def __init__(self):

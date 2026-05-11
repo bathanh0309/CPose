@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+.env
+.env.local
+.env.*.local
+configs/_private.yaml
+
 venv/
 .venv/
 ENV/

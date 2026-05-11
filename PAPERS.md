@@ -1,11 +1,4 @@
-# PAPERS.md — Literature Review for CPose
-
-> **Project:** CPose — TFCS-PAR Multi-Camera Human Activity Pipeline  
-> **Maintainer:** Nguyễn Bá Thành  
-> **Scope:** All papers used for research, implementation, and citation in CPose paper.  
-> **Coverage:** 2018–2026, organized by module relevance.
-
----
+# PAPERS.md
 
 ## Table of Contents
 

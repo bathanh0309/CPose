@@ -28,6 +28,7 @@ echo ============================================================
   --output "%OUTPUT%" ^
   --conf %CONF% ^
   --config "%CONFIG%" ^
+  --preview ^
   --make-comparison ^
   --compare-count 2 ^
   --comparison-dir "%COMPARISON_DIR%"

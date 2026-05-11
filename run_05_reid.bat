@@ -34,7 +34,8 @@ echo ============================================================
   --adl-dir "%ADL_DIR%" ^
   --manifest "%MANIFEST%" ^
   --topology "%TOPOLOGY%" ^
-  --config "%CONFIG%"
+  --config "%CONFIG%" ^
+  --preview
 
 set EXITCODE=%ERRORLEVEL%
 if %EXITCODE% neq 0 (

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.common.manifest import resolve_videos_from_manifest, ResolvedVideoItem
+from src.manifest import resolve_videos_from_manifest, ResolvedVideoItem
 
 
 class TestResolveVideosNoManifest:

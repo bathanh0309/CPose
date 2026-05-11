@@ -1,0 +1,4 @@
+Cam1: rtsp://admin:L24966FB@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1
+Cam2: rtsp://admin:L291E54A@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1
+Cam3: rtsp://admin:L2D2E11E@192.168.1.100:554/cam/realmonitor?channel=1&subtype=1
+Cam4:

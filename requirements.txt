@@ -1,240 +1,156 @@
 # =============================================================================
 # Capstone Project — requirements.txt
-# Hỗ trợ: Windows 10/11 (x64) | macOS 13+ (Intel + Apple Silicon) | Linux x64
-# Embedded: Jetson Orin/Xavier (L4T), Raspberry Pi 5 (arm64) — xem NOTE cuối
-# Python: 3.10 hoặc 3.11 (khuyến nghị 3.11)
+# Python: 3.11 (khuyến nghị 3.11.9)
+# =============================================================================
+# TRƯỚC KHI CHẠY FILE NÀY, cài thủ công theo thứ tự:
+#
+# 1. pip install numpy==1.26.4
+#
+# 2. Cài PyTorch theo nền tảng:
+#    CUDA 12.1:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#    CPU only:   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#    macOS MPS:  pip install torch torchvision
+#
+# 3. Cài torchreid từ GitHub:
+#    pip install git+https://github.com/KaiyangZhou/deep-person-reid.git
+#    (Nếu lỗi trên Windows: clone thủ công rồi pip install -e .)
+#
+# 4. pip install -r requirements.txt
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# [1] DEEP LEARNING CORE — PyTorch
-# -----------------------------------------------------------------------------
-# KHÔNG pin ở đây. Cài riêng theo nền tảng (xem hướng dẫn bên dưới).
-# Windows / Linux CUDA 12.1 :  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-# Windows / Linux CPU-only  :  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-# macOS (Intel + Apple Silicon): pip install torch torchvision   (wheel mặc định đã hỗ trợ MPS)
-# Jetson (L4T)               :  cài wheel JetPack từ https://forums.developer.nvidia.com/
-# torch>=2.1.0
-# torchvision>=0.16.0
 
 # -----------------------------------------------------------------------------
-# [2] COMPUTER VISION — Detection & Pose
+# [1] COMPUTER VISION — Detection & Pose
 # -----------------------------------------------------------------------------
-ultralytics==8.3.55          # YOLOv8 / YOLO11 / RTDETR — detector + pose estimator
-opencv-python==4.10.0.84     # OpenCV chính (dùng khi không cần GUI headless)
-# opencv-python-headless==4.10.0.84  # ← thay thế dòng trên nếu server không có display (embedded/server)
+ultralytics==8.3.55
+opencv-python==4.10.0.84
+pycocotools==2.0.8
+# opencv-python-headless==4.10.0.84  # dùng thay thế nếu server/embedded không có display
+
 
 # -----------------------------------------------------------------------------
-# [3] FACE RECOGNITION
+# [2] FACE RECOGNITION
 # -----------------------------------------------------------------------------
-insightface==0.7.3           # ArcFace model, face detection, embedding 512-d
-onnxruntime==1.19.2          # Backend ONNX cho InsightFace (CPU)
-# onnxruntime-gpu==1.19.2    # ← thay thế nếu có GPU CUDA (không dùng cả hai cùng lúc)
+insightface==0.7.3
+onnxruntime==1.19.2
+# onnxruntime-gpu==1.19.2  # thay thế nếu có GPU CUDA (không dùng cả hai)
+
 
 # -----------------------------------------------------------------------------
-# [4] VECTOR DATABASE — FAISS
+# [3] VECTOR DATABASE
 # -----------------------------------------------------------------------------
-faiss-cpu==1.9.0             # FAISS CPU backend (mọi nền tảng)
-# faiss-gpu==1.7.4           # ← thay thế nếu CUDA, chỉ Linux, không hỗ trợ macOS/Windows
+faiss-cpu==1.9.0
+# faiss-gpu==1.7.4  # thay thế nếu CUDA, chỉ Linux
+
 
 # -----------------------------------------------------------------------------
-# [5] WEB FRAMEWORK — Flask Product
+# [4] WEB FRAMEWORK — Flask
 # -----------------------------------------------------------------------------
-flask==3.1.0                 # Web framework chính của product
-flask-socketio==5.4.1        # Socket.IO server cho real-time events
-flask-cors==5.0.0            # CORS header cho API cross-origin
-python-socketio==5.11.4      # Socket.IO core library (bắt buộc cùng flask-socketio)
-eventlet==0.37.0             # Async worker cho Flask-SocketIO (production)
-# gevent==24.2.1             # Thay thế eventlet nếu bị lỗi trên macOS ARM
+flask==3.1.0
+flask-socketio==5.4.1
+flask-cors==5.0.0
+python-socketio==5.11.4
+eventlet==0.37.0
+# gevent==24.2.1  # thay thế eventlet nếu lỗi trên macOS ARM
+
 
 # -----------------------------------------------------------------------------
-# [6] WEB FRAMEWORK — FastAPI Research
+# [5] WEB FRAMEWORK — FastAPI
 # -----------------------------------------------------------------------------
-fastapi==0.115.5             # FastAPI research server
-uvicorn[standard]==0.32.1    # ASGI server (bao gồm websockets, uvloop)
-websockets==13.1             # WebSocket support cho FastAPI WS endpoint
-httpx==0.28.1                # HTTP client async (dùng trong fastapi_client.py)
-pydantic==2.10.3             # Data validation, schema cho FastAPI + shared/contracts
+fastapi[standard]==0.115.5
+uvicorn[standard]==0.32.1
+websockets==13.1
+httpx==0.28.1
+pydantic==2.10.3
+
 
 # -----------------------------------------------------------------------------
-# [7] DATA & NUMERICAL
+# [6] DATA & NUMERICAL
 # -----------------------------------------------------------------------------
-numpy==1.26.4                # Array operations (pin 1.x để tương thích ultralytics)
-scipy==1.14.1                # Tính toán khoa học (distance metrics, signal)
-pandas==2.2.3                # Đọc/ghi CSV label, tổng hợp metrics
+numpy==1.26.4
+scipy==1.14.1
+pandas==2.2.3
+
 
 # -----------------------------------------------------------------------------
-# [8] VIDEO I/O & STREAMING
+# [7] VIDEO I/O & IMAGE
 # -----------------------------------------------------------------------------
-av==13.1.0                   # PyAV — đọc RTSP/container chuẩn (thay thế cv2.VideoCapture khi cần codec nâng cao)
-imageio==2.36.1              # Đọc ảnh nhiều định dạng (dùng trong tools/)
-Pillow==11.0.0               # Image processing, vẽ text overlay
+av==13.1.0
+imageio==2.36.1
+Pillow==11.0.0
+
 
 # -----------------------------------------------------------------------------
-# [9] CONFIGURATION & UTILITIES
+# [8] CONFIGURATION & UTILITIES
 # -----------------------------------------------------------------------------
-pyyaml==6.0.2                # Đọc config.yaml, research.yaml, model_registry.yaml
-python-dotenv==1.0.1         # Load biến môi trường từ .env (dev local)
-rich==13.9.4                 # Pretty print log, progress bar trong CLI
-click==8.1.8                 # CLI argument parser (dùng trong tools/ và scripts/)
-tqdm==4.67.1                 # Progress bar cho vòng lặp dài (experiment runner)
+pyyaml==6.0.2
+python-dotenv==1.0.1
+rich==13.9.4
+click==8.1.8
+tqdm==4.67.1
+omegaconf==2.3.0
+gdown==6.0.0
+
 
 # -----------------------------------------------------------------------------
-# [10] TRACKING (Local person tracker)
+# [9] TRACKING
 # -----------------------------------------------------------------------------
-filterpy==1.4.5              # Kalman filter cho local tracker (tracking.py)
-lap==0.5.12                  # Linear assignment problem — Hungarian matching (IoU tracker)
-# NOTE: lap có thể cần C++ build tools trên Windows (xem hướng dẫn cài bên dưới)
+filterpy==1.4.5
+lapjv
+# lap==0.5.12  # thay thế lapjv nếu đã có MSVC build tools trên Windows
+
 
 # -----------------------------------------------------------------------------
-# [11] LOGGING & MONITORING
+# [10] LOGGING
 # -----------------------------------------------------------------------------
-loguru==0.7.3                # Logging nâng cao, rotation, structured log
+loguru==0.7.3
+
 
 # -----------------------------------------------------------------------------
-# [12] DEV / TESTING (không cần trên production/embedded)
+# [11] DEEP SORT (body tracking alternative)
 # -----------------------------------------------------------------------------
-pytest==8.3.4                # Test runner
-pytest-asyncio==0.24.0       # Test async FastAPI endpoints
-httpx==0.28.1                # Test HTTP client (đã khai báo trên, bỏ qua nếu trùng)
+deep-sort-realtime==1.3.2
 
-# =============================================================================
-# GHI CHÚ NỀN TẢNG (đọc trước khi cài)
-# =============================================================================
-#
-# ── WINDOWS 10/11 (x64) ──────────────────────────────────────────────────────
-#  1. Cài Visual C++ Build Tools (cho lap, insightface build wheel)
-#     https://visualstudio.microsoft.com/visual-cpp-build-tools/
-#  2. Cài CUDA Toolkit 12.1 nếu có NVIDIA GPU
-#     https://developer.nvidia.com/cuda-12-1-0-download-archive
-#  3. Thứ tự cài:
-#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-#     pip install -r requirements.txt
-#     pip install onnxruntime-gpu  (thay onnxruntime nếu muốn GPU inference)
-#
-# ── MACOS 13+ INTEL ──────────────────────────────────────────────────────────
-#  1. pip install torch torchvision   (wheel CPU+MPS)
-#  2. pip install -r requirements.txt
-#  NOTE: faiss-cpu wheel hoạt động tốt. insightface cần Xcode CLT:
-#        xcode-select --install
-#
-# ── MACOS 14+ APPLE SILICON (M1/M2/M3/M4) ───────────────────────────────────
-#  1. Dùng miniforge/conda (arm64) thay vì Homebrew Python:
-#     https://github.com/conda-forge/miniforge
-#  2. conda create -n cpose python=3.11 && conda activate cpose
-#  3. pip install torch torchvision   (MPS backend tự động)
-#  4. pip install -r requirements.txt
-#  NOTE: eventlet có thể lỗi trên M-series → thay bằng gevent:
-#        pip install gevent  và sửa app_factory.py: socketio = SocketIO(app, async_mode='gevent')
-#  NOTE: lap wheel arm64 chưa có PyPI → build từ source hoặc dùng lapjv:
-#        pip install lapjv   và sửa import tương ứng trong tracking.py
-#
-# ── LINUX x64 (Ubuntu 20.04 / 22.04) ────────────────────────────────────────
-#  1. apt install -y libgl1 libglib2.0-0   (dependency của OpenCV)
-#  2. pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-#  3. pip install -r requirements.txt
-#  4. Nếu server headless: thay opencv-python → opencv-python-headless
-#
-# ── EMBEDDED: NVIDIA JETSON ORIN / XAVIER (JetPack 5.x, L4T arm64) ──────────
-#  - PyTorch: KHÔNG dùng PyPI. Tải wheel từ NVIDIA Developer:
-#    https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048
-#  - OpenCV: build từ source với CUDA hoặc dùng gói JetPack:
-#    sudo apt install python3-opencv
-#  - FAISS: build từ source (faiss-cpu PyPI KHÔNG có arm64 wheel)
-#    git clone https://github.com/facebookresearch/faiss && cmake ... -DFAISS_ENABLE_GPU=ON
-#  - Các gói còn lại trong requirements.txt cài bình thường qua pip
-#  - Khuyến nghị dùng opencv-python-headless, bỏ phần [DEV/TESTING]
-#
-# ── EMBEDDED: RASPBERRY PI 5 (arm64, Python 3.11) ────────────────────────────
-#  - PyTorch CPU: pip install torch torchvision (wheel arm64 có từ PyTorch 2.1)
-#  - FAISS: build từ source (không có arm64 wheel trên PyPI)
-#  - insightface: có thể lỗi build → dùng yunet_sface.py thay arcface
-#  - Bỏ: faiss-gpu, onnxruntime-gpu, eventlet (dùng threading mode)
-#  - Flask-SocketIO threading mode: SocketIO(app, async_mode='threading')
-#  - Hiệu năng: chỉ nên chạy cpose.pipeline.multicam_recorder (Phase 1)
-#    Pose + ReID nên offload lên server mạnh hơn
-#
-# =============================================================================
+
 # -----------------------------------------------------------------------------
-# [13] FRONT DOOR COPY MERGE
+# [12] ONNX EXPORT & INFERENCE
 # -----------------------------------------------------------------------------
-# Source-only dependencies imported from `Front_door - Copy`.
-# Duplicate packages with different root pins are intentionally not repeated here:
-# imageio, onnxruntime, opencv-python, pandas, pillow, pydantic, pyyaml, scipy,
-# tqdm, ultralytics.
-albucore==0.0.24
-albumentations==2.0.8
-annotated-types==0.7.0
-antlr4-python3-runtime==4.9.3
-asttokens==3.0.1
+onnx==1.21.0
+
+
+# -----------------------------------------------------------------------------
+# [13] UTILITIES
+# -----------------------------------------------------------------------------
+requests==2.33.1
+psutil==7.2.2
+packaging==26.1
+python-dateutil==2.9.0.post0
+six==1.17.0
 certifi==2026.2.25
 charset-normalizer==3.4.7
-colorama==0.4.6
-comm==0.2.3
-contourpy==1.3.3
-cycler==0.12.1
-Cython==3.2.4
-debugpy==1.8.20
-decorator==5.2.1
-deep-sort-realtime==1.3.2
-easydict==1.13
-executing==2.2.1
-filelock==3.29.0
-flatbuffers==25.12.19
-fonttools==4.62.1
-fsspec==2026.3.0
 idna==3.11
-ipykernel==7.2.0
-ipython==9.12.0
-ipython_pygments_lexers==1.1.1
-jedi==0.19.2
-Jinja2==3.1.6
-joblib==1.5.3
-jupyter_client==8.8.0
-jupyter_core==5.9.1
-kiwisolver==1.5.0
-lazy-loader==0.5
-MarkupSafe==3.0.3
-matplotlib==3.10.8
-matplotlib-inline==0.2.1
-ml_dtypes==0.5.4
-mpmath==1.3.0
-nest-asyncio==1.6.0
-networkx==3.6.1
-omegaconf==2.3.0
-onnx==1.21.0
-packaging==26.1
-parso==0.8.6
-platformdirs==4.9.6
-polars==1.40.0
-polars-runtime-32==1.40.0
-prettytable==3.17.0
-prompt_toolkit==3.0.52
-protobuf==7.34.1
-psutil==7.2.2
-pure_eval==0.2.3
-pydantic_core==2.46.2
-Pygments==2.20.0
-pyparsing==3.3.2
-python-dateutil==2.9.0.post0
-pyzmq==27.1.0
-requests==2.33.1
-scikit-image==0.26.0
-scikit-learn==1.8.0
-setuptools==81.0.0
-simsimd==6.5.16
-six==1.17.0
-stack-data==0.6.3
-stringzilla==4.6.0
-sympy==1.14.0
-threadpoolctl==3.6.0
-tifffile==2026.4.11
-torch==2.11.0
-torchvision==0.26.0
-tornado==6.5.5
-traitlets==5.14.3
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-tzdata==2026.1
-ultralytics-thop==2.0.18
 urllib3==2.6.3
-wcwidth==0.6.0
+sympy==1.14.0
+networkx==3.6.1
+filelock==3.29.0
+fsspec==2026.3.0
+typing_extensions==4.15.0
+
+
+# =============================================================================
+# requirements-dev.txt — KHÔNG cài trên production/embedded
+# Tạo file riêng: requirements-dev.txt rồi: pip install -r requirements-dev.txt
+# =============================================================================
+# pytest==8.3.4
+# pytest-asyncio==0.24.0
+# tensorboard==2.20.0
+# matplotlib==3.10.8
+# scikit-learn==1.8.0
+# scikit-image==0.26.0
+# ipykernel==7.2.0
+# ipython==9.12.0
+# jupyter_client==8.8.0
+# jupyter_core==5.9.1
+# polars==1.40.0
+# prettytable==3.17.0
+# albumentations==2.0.8

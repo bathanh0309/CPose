@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 # 1. Define Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIGS_DIR = Path(__file__).resolve().parent
+CONFIGS_DIR = BASE_DIR / "configs"
 DATA_DIR = BASE_DIR / "data"
 CONFIG_DIR = DATA_DIR / "config"
 RAW_VIDEOS_DIR = DATA_DIR / "raw_videos"
@@ -19,9 +19,9 @@ STATIC_DIR = BASE_DIR / "static"
 # ==== NEW: model & config paths / defaults ====
 # Paths to model weights used by Phase 1/2/3 and pose config file.
 # Defaults point at the checked-in `models/product` weights.
-MODEL_PHASE1 = MODELS_DIR / "product" / "yolov8n.pt"
-MODEL_PHASE2 = MODELS_DIR / "product" / "yolo11n.pt"
-MODEL_PHASE3 = MODELS_DIR / "product" / "yolov8n-pose.pt"
+MODEL_PHASE1 = MODELS_DIR / "human_detect" / "yolov8n.pt"
+MODEL_PHASE2 = MODELS_DIR / "human_detect" / "yolov8n.pt"
+MODEL_PHASE3 = MODELS_DIR / "pose_estimation" / "yolov8n-pose.pt"
 
 # Pose config: prefer a dedicated pose config in data/config, fall back to unified config elsewhere.
 POSE_CONFIG_FILE = CONFIG_DIR / "pose_config.yaml"
@@ -38,7 +38,7 @@ for runtime_dir in [CONFIG_DIR, RAW_VIDEOS_DIR, OUTPUT_DIR, OUTPUT_POSE_DIR, MOD
 
 # 3. Config Setup
 RESOURCES_FILE = CONFIG_DIR / "resources.txt"
-UNIFIED_CONFIG_FILE = Path(__file__).resolve().parent / "config.yaml"
+UNIFIED_CONFIG_FILE = CONFIGS_DIR / "unified_config.yaml"
 APP_CONFIG_ENV_VAR = "CPOSE_APP_CONFIG"
 DASHBOARD_URL_ENV_VAR = "CPOSE_DASHBOARD_URL"
 CORS_ORIGINS_ENV_VAR = "CPOSE_CORS_ORIGINS"

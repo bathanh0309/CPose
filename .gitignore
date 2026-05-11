@@ -47,9 +47,6 @@ dataset/**/*
 *.tar
 *.gz
 
-
-scripts/
-
 .vscode/
 .idea/
 .DS_Store

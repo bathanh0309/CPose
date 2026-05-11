@@ -1,33 +1,14 @@
 @echo off
-setlocal enabledelayedexpansion
-
+setlocal
 cd /d "%~dp0"
-
-echo === Git push script for MrPhu/MultiCam_Surveillance_App ===
-
 set "TARGET_REPO_URL=https://github.com/MrPhu/MultiCam_Surveillance_App.git"
 set "TARGET_BRANCH=feat/research-ADL"
-rem Only source and config files are included here; generated media stays out of the push.
-set "CODE_ONLY_INDEX=%TEMP%\cp_code_only_%RANDOM%_%RANDOM%.idx"
-set "CODE_ONLY_PATHS=.gitignore CLAUDE.md README.md main.py package.json package-lock.json requirements.txt app research scripts static deploy"
-set "SNAPSHOT_MESSAGE=feat: code-only sync snapshot"
-
-git --version >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] Git is not installed or not in PATH.
-  pause
-  exit /b 1
-)
-
-git rev-parse --is-inside-work-tree >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] This folder is not a Git repository.
-  echo Run this file inside your MultiCam_Surveillance_App project folder.
-  pause
-  exit /b 1
-)
-
-git remote get-url origin >nul 2>&1
+git --version >nul 2>&1 || (echo [ERROR] Git not found. & exit /b 1)
+git rev-parse --is-inside-work-tree >nul 2>&1 || (echo [ERROR] Not a git repo. & exit /b 1)
+git remote get-url origin >nul 2>&1 || git remote add origin %TARGET_REPO_URL%
+git add .
+git commit -m "[auto] quick push"
+git push origin HEAD:%TARGET_BRANCH%
 if errorlevel 1 (
   git remote add origin %TARGET_REPO_URL%
 ) else (

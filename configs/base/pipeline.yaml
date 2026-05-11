@@ -1,0 +1,27 @@
+project:
+  name: CPose
+  task: multi_camera_human_monitoring
+  output_root: dataset/runs
+
+input:
+  default_video_dir: data-test
+  video_exts: [".mp4", ".avi", ".mov", ".mkv"]
+
+runtime:
+  device: cpu
+  demo_mode: true
+  target_fps: 15
+  target_resolution: 640
+  process_every_n_frames: 2
+  max_people_per_frame: 3
+  buffer_size: 8
+  thread_count: 2
+
+output:
+  save_overlay: true
+  save_json: true
+  save_metrics: true
+  make_comparison: false
+  compare_count: 2
+  preview: false
+  debug: false

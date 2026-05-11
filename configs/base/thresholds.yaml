@@ -1,0 +1,54 @@
+human_detection:
+  imgsz: 640
+  conf: 0.50
+  iou: 0.50
+  class_id: 0
+
+human_tracking:
+  conf: 0.50
+  min_hits: 3
+  max_age: 30
+  min_track_quality: 0.45
+
+pose_estimation:
+  imgsz: 640
+  conf: 0.45
+  keypoint_conf: 0.30
+  track_iou_threshold: 0.30
+  run_on_confirmed_tracks_only: true
+
+face:
+  run_every_n_frames: 10
+  min_face_size: 40
+  cosine_threshold: 0.45
+  anti_spoofing_enabled: false
+  anti_spoof_score: 0.50
+  spoof_threshold: 0.50
+
+global_reid:
+  strong_threshold: 0.65
+  weak_threshold: 0.45
+  ambiguous_margin: 0.05
+  confirm_frames: 3
+  max_candidate_age_sec: 300
+  weights:
+    normal:
+      face: 0.30
+      body: 0.20
+      pose: 0.15
+      height: 0.10
+      time: 0.15
+      topology: 0.10
+    no_face:
+      body: 0.30
+      pose: 0.20
+      height: 0.15
+      time: 0.20
+      topology: 0.15
+    clothing_change_suspected:
+      face: 0.35
+      body: 0.05
+      pose: 0.20
+      height: 0.15
+      time: 0.15
+      topology: 0.10

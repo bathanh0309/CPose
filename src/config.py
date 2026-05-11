@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -8,10 +10,41 @@ from typing import Any
 import yaml
 
 from src.common.errors import ErrorCode
-from src.paths import resolve_path
+from src.paths import (
+    ANNOTATIONS_DIR,
+    DATA_DIR,
+    MODELS_DIR,
+    MULTICAM_DIR,
+    OUTPUT_DIR,
+    PROJECT_ROOT,
+    ensure_dir,
+    resolve_path,
+)
 
 
-DEFAULT_RESEARCH_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "config.yaml"
+RTSP_CAM1 = os.getenv("RTSP_CAM1", "")
+RTSP_CAM2 = os.getenv("RTSP_CAM2", "")
+FACE_GALLERY_DIR = PROJECT_ROOT / "data" / "face"
+LIVENESS_MODEL = MODELS_DIR / "face_antispoof" / "best_model_quantized.onnx"
+PERSON_DETECTOR_MODEL = MODELS_DIR / "human_detect" / "yolov8n.pt"
+POSE_MODEL = MODELS_DIR / "pose_estimation" / "yolov8n-pose.pt"
+HOMOGRAPHY_PATH = MODELS_DIR / "camera" / "homography.npy"
+
+
+CONFIG_DIR = PROJECT_ROOT / "configs"
+BASE_CONFIG_DIR = CONFIG_DIR / "base"
+CAMERA_CONFIG_DIR = CONFIG_DIR / "camera"
+PROFILE_CONFIG_DIR = CONFIG_DIR / "profiles"
+DEFAULT_PROFILE = os.getenv("CPOSE_PROFILE", "dev")
+DEFAULT_MODEL_REGISTRY = PROFILE_CONFIG_DIR / f"{DEFAULT_PROFILE}.yaml"
+DEFAULT_RESEARCH_CONFIG = CONFIG_DIR / "unified_config.yaml"
+BASE_CONFIG_LOAD_ORDER = (
+    "models.yaml",
+    "thresholds.yaml",
+    "pipeline.yaml",
+    "adl.yaml",
+    "logging.yaml",
+)
 
 SECTION_ALIASES = {
     "human_detection": "detector",
@@ -49,6 +82,63 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _load_json(path: str | Path) -> dict[str, Any]:
+    config_path = resolve_path(path)
+    if not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return data if isinstance(data, dict) else {}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _profile_name(profile: str | Path | None) -> str:
+    if profile is None:
+        return DEFAULT_PROFILE
+    profile_path = Path(str(profile))
+    return profile_path.stem if profile_path.suffix in {".yaml", ".yml"} else str(profile)
+
+
+def load_config(profile: str | Path | None = None) -> dict[str, Any]:
+    """Load base config, camera metadata, phase, then apply a profile override."""
+
+    cfg: dict[str, Any] = {}
+    for filename in BASE_CONFIG_LOAD_ORDER:
+        cfg = _deep_merge(cfg, load_yaml(BASE_CONFIG_DIR / filename))
+
+    topology = load_yaml(CAMERA_CONFIG_DIR / "topology.yaml")
+    if topology:
+        cfg["cameras"] = topology
+        cfg["camera_topology"] = topology
+
+    manifest = _load_json(CAMERA_CONFIG_DIR / "multicam_manifest.json")
+    if manifest:
+        cfg["multicam_manifest"] = manifest
+
+    profile_name = _profile_name(profile)
+    profile_file = PROFILE_CONFIG_DIR / f"{profile_name}.yaml"
+    if profile_file.exists():
+        cfg = _deep_merge(cfg, load_yaml(profile_file))
+    elif profile_name and profile_name != "base":
+        print(f"[WARN] Config profile not found: {profile_file}")
+
+    phase = load_yaml(CONFIG_DIR / "phase.yaml")
+    if phase:
+        cfg["phase"] = phase
+
+    return cfg
+
+
 @lru_cache(maxsize=1)
 def load_research_config() -> dict[str, Any]:
     return load_yaml(DEFAULT_RESEARCH_CONFIG)
@@ -61,15 +151,18 @@ def get_research_section(section: str) -> dict[str, Any]:
 
 def load_model_registry(path: str | Path | None) -> dict[str, Any]:
     if path is None:
-        print(f"[WARN] Model registry not found: {path}")
-        return {}
+        return load_config(DEFAULT_PROFILE)
     registry_path = resolve_path(path)
+    if registry_path.parent == PROFILE_CONFIG_DIR:
+        return load_config(registry_path.stem)
     if not registry_path.exists():
+        profile_file = PROFILE_CONFIG_DIR / f"{_profile_name(path)}.yaml"
+        if profile_file.exists():
+            return load_config(profile_file.stem)
         print(f"[WARN] Model registry not found: {registry_path}")
         return {}
     try:
-        with registry_path.open("r", encoding="utf-8") as handle:
-            return yaml.safe_load(handle) or {}
+        return load_yaml(registry_path)
     except Exception as exc:
         print(f"[WARN] Could not load model registry {registry_path}: {exc}")
         return {}

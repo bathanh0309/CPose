@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT = PROJECT_ROOT
 DATA_DIR = PROJECT_ROOT / "dataset"
 DATA = DATA_DIR

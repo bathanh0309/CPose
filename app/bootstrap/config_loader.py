@@ -7,7 +7,7 @@ from app.utils.config_schema import AppConfig
 logger = logging.getLogger("[ConfigLoader]")
 
 def load_config(config_path: Path | str) -> AppConfig:
-    """Read config.yaml and validate schema via Pydantic."""
+    """Read the app config YAML and validate schema via Pydantic."""
     path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found at {path}")

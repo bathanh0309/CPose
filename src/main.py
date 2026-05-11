@@ -1,9 +1,8 @@
-from models.camera.camera_worker import CameraWorker
 from src.cam1_pipeline import Cam1Pipeline
 from src.cam2_pipeline import Cam2Pipeline
-from src.matcher import MultiCameraMatcher
 from src.global_state import GlobalState
-from models.camera.video_src import VideoSource
+from src.reid.matcher import MultiCameraMatcher
+from src.utils.camera import CameraWorker, VideoSource
 
 from src.setting import *
 import cv2

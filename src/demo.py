@@ -3,9 +3,9 @@ import numpy as np
 import threading
 
 from src.setting import *
-from models.face_detect.face_detect import FaceRecognition  # bạn đang dùng
+from src.core.detector import FaceRecognition  # bạn đang dùng
 # giả định bạn có person detector
-from models.human_detect.human_detect import PersonDetector
+from src.core.detector import SimplePersonDetector as PersonDetector
 
 # ===== INIT =====
 face_model = FaceRecognition()   # có bbox + embedding

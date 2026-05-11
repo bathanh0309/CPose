@@ -1,12 +1,9 @@
 import cv2
 from collections import defaultdict, Counter
 
-from models.face_detect.face_detect import FaceRecognition
-from models.tracking.tracking import Tracker
-
-from models.face_antispoof import (
-    load_model, infer, process_with_logits, crop
-)
+from src.core.detector import FaceRecognition
+from src.core.face_recognizer import crop, infer, load_model, process_with_logits
+from src.core.tracker import Tracker
 
 from src.setting import *
 

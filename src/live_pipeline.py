@@ -19,18 +19,17 @@ from src.config import get_section, load_model_registry, resolve_model_path
 from src.common.json_io import save_json
 from src.manifest import parse_video_timestamp_from_filename
 from src.paths import ensure_dir, resolve_path
-from src.timer import Timer
-from src.topology import load_camera_topology
-from src.video_io import create_video_writer, get_video_info, list_video_files, open_video, show_frame_preview
-from src.visualization import draw_skeleton
-from models.adl_recognition.rule_based_adl import classify_adl, history_item
-from models.adl_recognition.schemas import ADLConfig, adl_config_from_dict
+from src.utils.timer import Timer
+from src.utils.topology import load_camera_topology
+from src.utils.video_io import create_video_writer, get_video_info, list_video_files, open_video, show_frame_preview
+from src.utils.visualization import draw_skeleton
 from models.adl_recognition.smoothing import majority_vote
-from models.human_detect.detector import PersonDetector, resolve_detection_model
-from models.global_reid.global_id_manager import GlobalPersonTable
 from models.pose_estimation.api import _assign_track_ids
-from models.pose_estimation.pose_model import PoseModel, resolve_pose_model
-from models.tracking.tracker import SimpleIoUTracker
+from src.core.adl_classifier import ADLConfig, adl_config_from_dict, classify_adl, history_item
+from src.core.detector import PersonDetector, resolve_detection_model
+from src.core.pose_estimator import PoseEstimator as PoseModel, resolve_pose_model
+from src.core.tracker import SimpleIoUTracker
+from src.reid.global_id_manager import GlobalPersonTable
 
 
 _STOP_REQUESTED = False
@@ -327,9 +326,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run CPose combined per-frame live pipeline")
     parser.add_argument("--input", default=str(DATA_TEST_DIR))
     parser.add_argument("--output", default=str(OUTPUT_DIR / "live"))
-    parser.add_argument("--models", default="configs/model_registry.demo_i5.yaml")
+    parser.add_argument("--models", default="configs/profiles/dev.yaml")
     parser.add_argument("--config", default=None, help="Accepted for batch compatibility; use --models for model registry.")
-    parser.add_argument("--topology", default="configs/camera_topology.yaml")
+    parser.add_argument("--topology", default="configs/camera/topology.yaml")
     parser.add_argument("--run-id", default="live_combined")
     parser.add_argument("--det-conf", type=float, default=None)
     parser.add_argument("--pose-conf", type=float, default=None)

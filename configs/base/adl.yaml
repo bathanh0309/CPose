@@ -1,0 +1,10 @@
+adl_recognition:
+  method: rule_based
+  window_size: 30
+  min_visible_keypoints: 8
+  min_visible_ratio: 0.50
+  smoothing_frames: 7
+  knee_sitting_angle: 125
+  walking_velocity: 0.05
+  falling_velocity: 0.08
+  lying_aspect_ratio: 1.15

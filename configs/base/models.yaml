@@ -1,0 +1,35 @@
+human_detection:
+  backend: ultralytics
+  model: models/human_detect/yolov8n.pt
+  fallback:
+    - models/yolo/yolov8n.pt
+    - yolov8n.pt
+
+human_tracking:
+  backend: ultralytics_bytetrack
+  model: models/human_detect/yolov8n.pt
+  fallback:
+    - models/yolo/yolov8n.pt
+    - yolov8n.pt
+  tracker_config: bytetrack.yaml
+
+pose_estimation:
+  backend: ultralytics
+  model: models/pose_estimation/yolov8n-pose.pt
+  fallback:
+    - models/yolo/yolov8n-pose.pt
+    - yolov8n-pose.pt
+
+face:
+  enabled: false
+  detector: scrfd_500m
+  recognizer: arcface_r100
+  detector_model: models/face_detect/det_500m.onnx
+  recognizer_model: models/face_recognition/w600k_mbf.onnx
+  landmark_model: models/face_recognition/2d106det.onnx
+  anti_spoofing_model: models/face_antispoof/best_model_quantized.onnx
+
+global_reid:
+  method: tfcs_par
+  osnet_x0_25_model: models/global_reid/osnet_x0_25_market.onnx
+  osnet_x1_0_model: models/global_reid/osnet_x1_0_market.onnx

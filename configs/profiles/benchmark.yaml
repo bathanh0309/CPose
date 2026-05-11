@@ -1,0 +1,29 @@
+profile: benchmark
+
+runtime:
+  device: auto
+  demo_mode: false
+  process_every_n_frames: 1
+  max_people_per_frame: 20
+
+output:
+  save_overlay: true
+  save_json: true
+  save_metrics: true
+  make_comparison: true
+  compare_count: 4
+  preview: false
+  debug: true
+
+root:
+  level: INFO
+
+handlers:
+  console:
+    level: INFO
+  file:
+    level: DEBUG
+
+benchmark:
+  save_console_summary: true
+  paper_ready_tables: true

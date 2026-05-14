@@ -4,6 +4,17 @@ system:
   device: "auto"
   event_log: "data/output/events/pipeline.jsonl"
   vis_dir: "data/output/vis"
+  default_source: "data/input/cam2_2026-01-29_16-26-40.mp4"
+  save_video: true
+
+logging:
+  enabled: false
+  level: "INFO"
+  save_events: false
+
+output:
+  short_names: true
+  save_json: false
   save_video: true
 
 pose:
@@ -21,6 +32,8 @@ reid:
   config: "configs/fast-reid/R50.yml"
   weights: "models/fastreid_market_R50.pth"
   gallery_dir: "data/gallery"
+  embedding_dirs:
+    - "data/face"
   threshold: 0.55
   reid_interval: 10
 

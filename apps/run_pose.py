@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger
+from src.utils.naming import make_video_output_name, resolve_output_path
 from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
 from src.utils.vis import FPSCounter, draw_detection, draw_info_panel
 
@@ -41,7 +42,7 @@ def main():
         device=cfg["system"]["device"],
     )
 
-    source = args.source or find_default_video_source(ROOT)
+    source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
@@ -49,10 +50,17 @@ def main():
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
-    if args.save_video:
-        output = args.output or str(Path(cfg["system"]["vis_dir"]) / f"{args.camera_id}_pose.mp4")
-        writer = create_video_writer(output, fps, width, height)
-        logger.info(f"Saving video to: {output}")
+    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    if save_video:
+        out_path = Path(args.output) if args.output else resolve_output_path(
+            cfg["system"]["vis_dir"],
+            make_video_output_name("pose", args.camera_id),
+        )
+        writer = create_video_writer(out_path, fps, width, height)
+        logger.info(f"Saving video to: {out_path}")
+
+    if not cfg.get("output", {}).get("save_json", False):
+        logger.info("Pose JSON disabled by config")
 
     fps_counter = FPSCounter()
     frame_idx = -1

@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger
+from src.utils.naming import make_video_output_name, resolve_output_path
 from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
 from src.utils.vis import FPSCounter, draw_detection, draw_info_panel, draw_reid_panel
 
@@ -54,14 +55,14 @@ def main():
         from src.reid.gallery import ReIDGallery
 
         extractor = FastReIDExtractor(cfg["reid"]["fastreid_root"], cfg["reid"]["config"], cfg["reid"]["weights"], cfg["system"]["device"])
-        gallery = ReIDGallery(extractor, cfg["reid"]["gallery_dir"])
+        gallery = ReIDGallery(extractor, cfg["reid"]["gallery_dir"], embedding_dirs=cfg["reid"].get("embedding_dirs"))
         gallery.build()
         gid_mgr = GlobalIDManager(gallery, threshold=cfg["reid"]["threshold"], reid_interval=cfg["reid"]["reid_interval"])
     except Exception as exc:
         reid_warning = f"FastReID unavailable: {exc}"
         logger.warning(reid_warning)
 
-    source = args.source or find_default_video_source(ROOT)
+    source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
@@ -69,10 +70,17 @@ def main():
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
-    if args.save_video:
-        output = args.output or str(Path(cfg["system"]["vis_dir"]) / f"{args.camera_id}_reid.mp4")
-        writer = create_video_writer(output, fps, width + 220, height)
-        logger.info(f"Saving video to: {output}")
+    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    if save_video:
+        out_path = Path(args.output) if args.output else resolve_output_path(
+            cfg["system"]["vis_dir"],
+            make_video_output_name("reid", args.camera_id),
+        )
+        writer = create_video_writer(out_path, fps, width + 220, height)
+        logger.info(f"Saving video to: {out_path}")
+
+    if not cfg.get("output", {}).get("save_json", False):
+        logger.info("ReID JSON disabled by config")
 
     last_crop = None
     last_matches = []

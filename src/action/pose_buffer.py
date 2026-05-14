@@ -5,6 +5,7 @@ import numpy as np
 
 from src.utils.io import ensure_dir, save_pickle
 from src.utils.logger import get_logger
+from src.utils.naming import make_clip_id
 
 logger = get_logger(__name__)
 
@@ -139,12 +140,12 @@ class PoseSequenceBuffer:
         scores = np.stack(list(state["scores"]), axis=0)                # [T, V]
         h, w = state["img_shape"]
 
-        sample_id = (
-            f"cam_{camera_id}"
-            f"__track_{int(local_track_id):04d}"
-            f"__gid_{global_id}"
-            f"__f_{frame_idx[0]:06d}_{frame_idx[-1]:06d}"
-            f"__n_{state['export_count']:03d}"
+        clip_index = int(state["export_count"])
+        sample_id = make_clip_id(
+            camera_id=camera_id,
+            local_track_id=local_track_id,
+            global_id=global_id,
+            clip_index=clip_index,
         )
 
         ann = {
@@ -153,6 +154,12 @@ class PoseSequenceBuffer:
             "img_shape": (int(h), int(w)),
             "original_shape": (int(h), int(w)),
             "label": int(self.default_label),
+            "camera_id": str(camera_id),
+            "local_track_id": int(local_track_id),
+            "global_id": str(global_id),
+            "frame_start": int(frame_idx[0]),
+            "frame_end": int(frame_idx[-1]),
+            "clip_index": clip_index,
             "keypoint": keypoints[None, ...].astype(np.float32),        # [M, T, V, C], M=1
             "keypoint_score": scores[None, ...].astype(np.float32)      # [M, T, V]
         }

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import cv2
@@ -9,28 +10,40 @@ logger = get_logger(__name__)
 
 
 class ReIDGallery:
-    def __init__(self, extractor, gallery_dir):
+    def __init__(self, extractor, gallery_dir, embedding_dirs=None):
         self.extractor = extractor
         self.gallery_dir = Path(gallery_dir)
+        self.embedding_dirs = [Path(path) for path in (embedding_dirs or [])]
         self.prototypes = {}
         self.memory = {}
         self.initial_empty = True
+        self._dimension_warnings = set()
 
     @staticmethod
     def cosine_similarity(a, b):
         denom = (np.linalg.norm(a) * np.linalg.norm(b)) + 1e-12
         return float(np.dot(a, b) / denom)
 
-    def build(self):
-        self.prototypes = {}
-        self.memory = {}
+    @staticmethod
+    def _person_id_from_dir(person_dir: Path) -> str:
+        meta_path = person_dir / "meta.json"
+        if meta_path.exists():
+            try:
+                with meta_path.open("r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                person_id = str(meta.get("person_id", "")).strip()
+                if person_id:
+                    return person_id
+            except Exception as exc:
+                logger.warning(f"Cannot read embedding metadata {meta_path}: {exc}")
+        return person_dir.name
 
+    def _build_from_image_gallery(self):
         if not self.gallery_dir.exists():
             logger.warning(f"ReID gallery directory does not exist: {self.gallery_dir}")
-            self.initial_empty = True
             return
 
-        logger.info(f"Building ReID gallery from: {self.gallery_dir}")
+        logger.info(f"Building ReID gallery images from: {self.gallery_dir}")
         for person_dir in self.gallery_dir.iterdir():
             if not person_dir.is_dir():
                 continue
@@ -44,10 +57,55 @@ class ReIDGallery:
                     feats.append(self.extractor.extract(img))
 
             if feats:
-                feats = np.stack(feats, axis=0)
-                self.memory[person_dir.name] = feats
-                self.prototypes[person_dir.name] = feats.mean(axis=0).astype(np.float32)
-                logger.info(f"Loaded {len(feats)} ReID embeddings for {person_dir.name}")
+                self._add_feature_stack(person_dir.name, feats, source="image gallery")
+
+    def _build_from_npy_dirs(self):
+        for embedding_dir in self.embedding_dirs:
+            if not embedding_dir.exists():
+                logger.warning(f"Embedding directory does not exist: {embedding_dir}")
+                continue
+
+            logger.info(f"Inspecting external embeddings from: {embedding_dir}")
+            for person_dir in embedding_dir.iterdir():
+                if not person_dir.is_dir():
+                    continue
+
+                person_id = self._person_id_from_dir(person_dir)
+                feats = []
+                for npy_path in sorted(person_dir.glob("*.npy")):
+                    try:
+                        feat = np.load(npy_path).astype(np.float32).reshape(-1)
+                    except Exception as exc:
+                        logger.warning(f"Cannot load embedding {npy_path}: {exc}")
+                        continue
+                    feats.append(feat)
+
+                if feats:
+                    self._add_feature_stack(person_id, feats, source=f"npy embeddings {person_dir}")
+
+    def _add_feature_stack(self, person_id, feats, source):
+        feats = np.stack(feats, axis=0).astype(np.float32)
+        if person_id in self.memory:
+            if self.memory[person_id].shape[1] != feats.shape[1]:
+                logger.warning(
+                    f"Skipping {source} for {person_id}: dim {feats.shape[1]} != existing dim {self.memory[person_id].shape[1]}"
+                )
+                return
+            self.memory[person_id] = np.vstack([self.memory[person_id], feats])
+        else:
+            self.memory[person_id] = feats
+
+        self.prototypes[person_id] = self.memory[person_id].mean(axis=0).astype(np.float32)
+        logger.info(f"Loaded {len(feats)} embeddings for {person_id} from {source}; dim={feats.shape[1]}")
+
+    def build(self):
+        self.prototypes = {}
+        self.memory = {}
+        self._dimension_warnings = set()
+
+        self._build_from_image_gallery()
+        self._build_from_npy_dirs()
+
         if not self.prototypes:
             logger.warning(f"ReID gallery empty: {self.gallery_dir}")
         self.initial_empty = not bool(self.prototypes)
@@ -59,6 +117,13 @@ class ReIDGallery:
         best_id = "unknown"
         best_score = -1.0
         for person_id, proto in self.prototypes.items():
+            if proto.shape != feat.shape:
+                if person_id not in self._dimension_warnings:
+                    logger.warning(
+                        f"Skipping gallery id={person_id}: embedding dim {proto.shape[0]} != FastReID dim {feat.shape[0]}"
+                    )
+                    self._dimension_warnings.add(person_id)
+                continue
             score = self.cosine_similarity(feat, proto)
             if score > best_score:
                 best_score = score
@@ -71,6 +136,8 @@ class ReIDGallery:
     def get_top_matches(self, feat, topk=3):
         matches = []
         for person_id, proto in self.prototypes.items():
+            if proto.shape != feat.shape:
+                continue
             matches.append((person_id, self.cosine_similarity(feat, proto), None))
         matches.sort(key=lambda item: item[1], reverse=True)
         return matches[:topk]

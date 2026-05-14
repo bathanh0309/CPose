@@ -7,6 +7,7 @@ import yaml
 PATH_FIELDS = {
     ("system", "event_log"),
     ("system", "vis_dir"),
+    ("system", "default_source"),
     ("pose", "weights"),
     ("reid", "fastreid_root"),
     ("reid", "config"),
@@ -89,6 +90,12 @@ def resolve_cfg_paths(cfg: dict, root: Path) -> dict:
     tracker_yaml = cfg.get("tracker", {}).get("tracker_yaml")
     if tracker_yaml:
         cfg["tracker"]["tracker_yaml"] = resolve_tracker_yaml(tracker_yaml, root)
+
+    embedding_dirs = cfg.get("reid", {}).get("embedding_dirs")
+    if embedding_dirs:
+        cfg["reid"]["embedding_dirs"] = [
+            resolve_project_path(path, root) for path in embedding_dirs
+        ]
 
     return cfg
 

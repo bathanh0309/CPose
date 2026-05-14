@@ -9,11 +9,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.action.pose_buffer import PoseSequenceBuffer
-from src.core.event import EventBus
+from src.core.event import EventBus, NullEventBus
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.trackers.bytetrack import ByteTrackWrapper
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger
+from src.utils.naming import make_video_output_name, resolve_output_path
 from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel, draw_reid_panel
 
@@ -77,7 +78,7 @@ def main():
         from src.reid.gallery import ReIDGallery
 
         extractor = FastReIDExtractor(cfg["reid"]["fastreid_root"], cfg["reid"]["config"], cfg["reid"]["weights"], cfg["system"]["device"])
-        gallery = ReIDGallery(extractor, cfg["reid"]["gallery_dir"])
+        gallery = ReIDGallery(extractor, cfg["reid"]["gallery_dir"], embedding_dirs=cfg["reid"].get("embedding_dirs"))
         gallery.build()
         gid_mgr = GlobalIDManager(gallery, threshold=cfg["reid"]["threshold"], reid_interval=cfg["reid"]["reid_interval"])
     except Exception as exc:
@@ -91,7 +92,8 @@ def main():
         default_label=cfg["adl"].get("default_label", 0),
         max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
     )
-    event_bus = EventBus(cfg["system"]["event_log"])
+    save_events = bool(cfg.get("logging", {}).get("save_events", True))
+    event_bus = EventBus(cfg["system"].get("event_log"), enabled=save_events) if save_events else NullEventBus()
 
     posec3d_runner = None
     if cfg["adl"].get("auto_infer", False):
@@ -106,7 +108,7 @@ def main():
         except Exception as exc:
             logger.warning(f"PoseC3D disabled: {exc}")
 
-    source = args.source or find_default_video_source(ROOT)
+    source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
@@ -115,10 +117,17 @@ def main():
     width, height, fps, total = get_video_meta(cap)
     panel_w = 220
     writer = None
-    if args.save_video:
-        output = args.output or str(Path(cfg["system"]["vis_dir"]) / f"{args.camera_id}_pipeline.mp4")
-        writer = create_video_writer(output, fps, width + panel_w, height)
-        logger.info(f"Saving video to: {output}")
+    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    if save_video:
+        out_path = Path(args.output) if args.output else resolve_output_path(
+            cfg["system"]["vis_dir"],
+            make_video_output_name("pipe", args.camera_id),
+        )
+        writer = create_video_writer(out_path, fps, width + panel_w, height)
+        logger.info(f"Saving video to: {out_path}")
+
+    if not cfg.get("output", {}).get("save_json", False):
+        logger.info("Pipeline JSON disabled by config")
 
     fps_counter = FPSCounter()
     track_status = {}

@@ -1,195 +1,806 @@
-# CLAUDE.md — CPose Project Intelligence (v2)
+# CLAUDE.md — CPose Project Intelligence
 
-> **Dành cho AI coding agents: Claude, Codex, Cursor, Copilot.**
-> Đọc toàn bộ file này trước khi sửa bất kỳ file nào trong repo.
-> Nếu cần phá một rule, ghi rõ lý do trong commit message hoặc response.
-
----
-
-## 0. Tóm Tắt Nhanh Cho Agent (Token-Efficient)
-
-```
-Pipeline:  Frame → YoloPoseTracker → ByteTrackWrapper → FastReIDExtractor
-                 → ReIDGallery → GlobalIDManager → PoseSequenceBuffer
-                 → PoseC3DRunner → EventBus → JSONL
-
-Identity:  track_id  = local int, unique trong 1 camera session (từ Ultralytics)
-           global_id = string, cross-camera ("APhu", "gid_00001", ...)
-           cache key = (camera_id: str, local_track_id: int)
-
-Config:    MỌI path/threshold/hyperparam → configs/system/pipeline.yaml
-           Validate bằng src/utils/config.py::validate_cfg() trước khi build model
-           Resolve path bằng resolve_cfg_paths(cfg, ROOT)
-
-Logging:   get_logger(__name__) — KHÔNG dùng print() trong pipeline
-
-Error:     Frame-level: log + continue. Init-level: raise sớm. Resource: finally cleanup.
-```
+> For AI coding agents: Claude, Cursor, Codex, Copilot Workspace.
+>
+> Read this file before modifying any file in this repository.
+>
+> Project goal: build a real-time human perception pipeline:
+>
+> **YOLO11-Pose → ByteTrack → FastReID → PoseC3D → ADL visualization**
+>
+> Every application under `apps/` must be able to display processed video and optionally save output video.
 
 ---
 
-## 1. Kiến Trúc Pipeline (Chi Tiết)
+# 0. Executive Summary
 
-```
-Video / Camera frame (BGR numpy)
-    │
-    ▼
-YoloPoseTracker.infer(frame, persist=True)          src/detectors/yolo_pose.py
-    └─ Ultralytics YOLO.track() — ByteTrack nội bộ qua tracker_yaml
-    └─ Output: list[DetectionDict], raw_result
-    │
-    ▼
-ByteTrackWrapper.update(frame)                       src/trackers/bytetrack.py
-    └─ Thin wrapper, chỉ delegate sang detector.infer()
-    └─ KHÔNG có tracking logic riêng — ByteTrack do Ultralytics xử lý
-    │
-    ▼
-[Per-detection loop]
-    │
-    ├─► crop = frame[y1:y2, x1:x2]
-    │
-    ▼
-GlobalIDManager.assign(camera_id, track_id, crop, frame_idx)
-    │                                                src/core/global_id.py
-    ├─ Cache hit + reid_interval chưa hết → return (cached_gid, 1.0)
-    ├─ Cache miss hoặc interval elapsed →
-    │       FastReIDExtractor.extract(crop)          src/reid/fast_reid.py
-    │           └─ L2-normalized float32 [D]
-    │       ReIDGallery.query(feat, threshold)       src/reid/gallery.py
-    │           └─ cosine similarity O(N) scan
-    │           └─ ("person_id", score) hoặc ("unknown", score)
-    └─ Return (global_id: str, reid_score: float)
-    │
-    ▼
-PoseSequenceBuffer.update(...)                       src/action/pose_buffer.py
-    └─ Accumulate keypoints, sliding window seq_len/stride
-    └─ Khi đủ window → export .pkl (MMAction2 format)
-    └─ _gc() dọn dead tracks mỗi frame
-    │
-    ▼
-PoseC3DRunner.run_test(pkl_path)   [chỉ khi auto_infer=true]
-    └─ subprocess gọi MMAction2 tools/test.py       src/action/posec3d.py
-    └─ ⚠️ HIỆN TẠI: kết quả label KHÔNG được đọc lại vào pipeline
-    │
-    ▼
-EventBus.emit(event_type, payload)                   src/core/event.py
-    └─ Ghi JSONL, payload phải JSON-serializable
+```text
+Input:
+  Video / Webcam / RTSP stream
+
+Main pipeline:
+  Frame
+    → YOLO11-Pose
+    → ByteTrack local tracking
+    → Person crop
+    → FastReID embedding
+    → ReID gallery matching
+    → Global ID assignment
+    → Pose sequence buffer
+    → PoseC3D ADL inference
+    → Visualization + JSONL event logging
+
+Core rule:
+  configs/system/pipeline.yaml is the single source of truth.
+
+Do not:
+  - hard-code absolute paths
+  - force CUDA on CPU-only machines
+  - use default_label as real ADL prediction
+  - store credentials in repo
+  - change detection dict schema without updating all modules
 ```
 
----
+# 1. Repository Structure
 
-## 2. Cấu Trúc Thư Mục Chuẩn
-
-```
+```text
 CPose/
-├── apps/               Entry points ONLY — không chứa business logic
-│   ├── run_pipeline.py
-│   ├── run_pose.py
-│   ├── run_reid.py
-│   └── run_adl.py
+├── apps/
+│   ├── run_pipeline.py      # Full pipeline
+│   ├── run_pose.py          # YOLO11-Pose + ByteTrack visualizer
+│   ├── run_reid.py          # ReID visualizer
+│   └── run_adl.py           # ADL / skeleton action visualizer
+│
 ├── configs/
-│   ├── system/pipeline.yaml    ← MỌI config tập trung ở đây
-│   ├── fast-reid/R50.yml
-│   └── posec3d/posec3d.py
+│   ├── system/
+│   │   └── pipeline.yaml    # Main config, single source of truth
+│   ├── fast-reid/
+│   │   └── R50.yml
+│   └── posec3d/
+│       └── posec3d.py
+│
 ├── src/
-│   ├── action/         PoseSequenceBuffer, PoseC3DRunner
-│   ├── core/           EventBus, GlobalIDManager
-│   ├── detectors/      YoloPoseTracker
-│   ├── reid/           FastReIDExtractor, ReIDGallery
-│   ├── trackers/       ByteTrackWrapper
-│   └── utils/          logger, config, io, vis
+│   ├── action/
+│   │   ├── pose_buffer.py
+│   │   └── posec3d.py
+│   ├── core/
+│   │   ├── event.py
+│   │   └── global_id.py
+│   ├── detectors/
+│   │   └── yolo_pose.py
+│   ├── reid/
+│   │   ├── fast_reid.py
+│   │   └── gallery.py
+│   ├── trackers/
+│   │   └── bytetrack.py
+│   └── utils/
+│       ├── config.py
+│       ├── io.py
+│       ├── logger.py
+│       ├── video.py
+│       └── vis.py
+│
 ├── data/
-│   ├── gallery/        Ảnh reference ReID (không commit)
-│   ├── face/           Face embeddings theo person_id/ (không commit .npy)
-│   └── output/         Tất cả output runtime (không commit)
-├── models/             Weights (không commit — xem README)
-├── static/             Web assets (hiện rỗng)
-└── docs/               Papers, diagrams (không commit .pdf trực tiếp)
+│   ├── gallery/             # ReID reference images, not committed
+│   └── output/              # Runtime outputs, not committed
+│
+├── models/                  # Model weights, not committed
+├── README.md
+└── CLAUDE.md
+
 ```
 
-**Rule:** Logic mới → `src/<package>/`. Không nhét vào `apps/`.
+## Rules
 
----
+apps/      = entry points only
+src/       = business logic
+configs/   = configuration only
+models/    = local weights, not committed
+data/      = local data/runtime output, not committed
 
-## 3. Detection Dict Contract (KHÔNG THAY ĐỔI)
+# 2. Main Design Principles
+## 2.1 Single Source of Truth
 
-Mọi detection dict trong toàn bộ pipeline phải theo schema này:
+All paths, thresholds, model weights, output directories and hyperparameters must come from:
 
-```python
-detection = {
-    "bbox":             [x1, y1, x2, y2],    # float, pixel coords
-    "score":            float,                # confidence [0.0, 1.0]
-    "class_id":         int,                  # 0 = person
-    "track_id":         int,                  # -1 nếu chưa tracked
-    "keypoints":        [[x, y], ...] | None, # list of [x, y], length=V
-    "keypoint_scores":  [float, ...] | None,  # length=V, cùng V với keypoints
-}
-```
+configs/system/pipeline.yaml
 
-- Đọc optional keys bằng `det.get("key")`, **không** dùng `det["key"]` cho optional fields.
-- `V` = số keypoints (mặc định 17 COCO). Nếu model khác dùng số V khác, phải cập nhật `PoseSequenceBuffer` và MMAction2 config đồng bộ.
+Do not hard-code values inside apps/ or src/.
 
----
+Correct:
 
-## 4. PoseSequenceBuffer Output Contract (KHÔNG THAY ĐỔI)
+cfg = load_pipeline_cfg(Path(args.config), ROOT)
+weights = cfg["pose"]["weights"]
+device = cfg["system"]["device"]
 
-`.pkl` export phải giữ đúng format MMAction2 pose annotation:
+Incorrect:
 
-```python
-{
-    "split": {"test": [sample_id: str]},
-    "annotations": [{
-        "frame_dir":       str,
-        "total_frames":    int,
-        "img_shape":       (H: int, W: int),
-        "original_shape":  (H: int, W: int),
-        "label":           int,
-        "keypoint":        np.float32,   # shape [M=1, T, V, C=2]
-        "keypoint_score":  np.float32,   # shape [M=1, T, V]
-    }]
-}
-```
-
-**Không đổi format này** nếu không sửa đồng bộ PoseC3D config và MMAction2 dataloader.
-
----
-
-## 5. Rules Không Được Vi Phạm
-
-### 5.1 Path Rules
-
-```python
-# ✅ ĐÚNG — resolve từ __file__
-ROOT = Path(__file__).resolve().parents[1]  # apps/ → repo root
-
-# ❌ SAI — hardcode absolute path
+weights = "models/yolo11n-pose.pt"
+device = "cuda"
 ROOT = Path(r"D:\Capstone_Project")
-ROOT = Path("/home/user/CPose")
-```
+## 2.2 Path Rule
 
-- `configs/system/pipeline.yaml` dùng **relative path**. Code resolve bằng `resolve_cfg_paths(cfg, ROOT)`.
-- Không hardcode path trong `configs/posec3d/posec3d.py` hoặc `configs/fast-reid/R50.yml`. Xem Bug #6.
+Every relative path must be resolved from the project root, not from the current terminal directory.
 
-### 5.2 Config Rules
+Correct pattern inside apps/*.py:
 
-- Path, threshold, hyperparameter → `configs/system/pipeline.yaml`.
-- Config mới → thêm vào `validate_cfg()` trong `src/utils/config.py`.
-- Validate **trước** khi build bất kỳ model/module nào.
-- Không hardcode magic value trong business logic nếu cần tune.
+from pathlib import Path
+import sys
 
-### 5.3 Error Handling Rules
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-```python
-# Frame-level: log + skip
+Then load config:
+
+from src.utils.config import load_pipeline_cfg
+
+cfg = load_pipeline_cfg(Path(args.config), ROOT)
+## 2.3 Device Rule
+
+The code must run on both CPU-only and CUDA machines.
+
+pipeline.yaml should use:
+
+system:
+  device: "auto"
+
+auto means:
+
+if torch.cuda.is_available():
+    use cuda
+else:
+    use cpu
+
+Never force:
+
+device = 0
+device = "cuda"
+
+unless the config loader already confirmed CUDA is available.
+
+## 2.4 Visualization Rule
+
+Every script under apps/ must support:
+
+--source
+--camera-id
+--config
+--show
+--save-video
+--output
+--max-frames
+
+Every script must:
+
+- read frames from video/webcam/RTSP
+- process frames
+- draw results on frame
+- call cv2.imshow() if --show is used
+- write output .mp4 if --save-video is used
+- release OpenCV resources safely
+# 3. Standard CLI Contract for All Apps
+
+Every apps/run_*.py should expose this argument structure:
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--source", type=str, required=True)
+    parser.add_argument("--camera-id", type=str, default="cam01")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(ROOT / "configs" / "system" / "pipeline.yaml"),
+    )
+    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--save-video", action="store_true")
+    parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--max-frames", type=int, default=0)
+
+    return parser.parse_args()
+
+Expected commands:
+
+python apps/run_pose.py --source data/sample.mp4 --show --max-frames 100
+
+python apps/run_reid.py --source data/sample.mp4 --show --max-frames 100
+
+python apps/run_adl.py --source data/sample.mp4 --show --max-frames 150
+
+python apps/run_pipeline.py --source data/sample.mp4 --camera-id cam01 --show --max-frames 150
+# 4. Detection Dict Contract
+
+Every detector/tracker output must follow this schema exactly:
+
+detection = {
+    "bbox": [x1, y1, x2, y2],
+    "score": float,
+    "class_id": int,
+    "track_id": int,
+    "keypoints": [[x, y], ...] | None,
+    "keypoint_scores": [float, ...] | None,
+}
+
+Meaning:
+
+bbox:
+  [x1, y1, x2, y2] in pixel coordinates
+
+score:
+  detection confidence
+
+class_id:
+  0 = person
+
+track_id:
+  local tracking ID from ByteTrack / Ultralytics tracker
+  -1 means no valid track ID
+
+keypoints:
+  COCO-17 keypoints by default
+
+keypoint_scores:
+  confidence for each keypoint
+
+Rules:
+
+- Optional fields must be read with det.get(...)
+- Do not assume keypoints always exist
+- Do not assume track_id is always valid
+- Do not use local track_id as global identity
+
+Correct:
+
+track_id = det.get("track_id", -1)
+keypoints = det.get("keypoints")
+
+Incorrect:
+
+track_id = det["track_id"]
+keypoints = det["keypoints"]
+# 5. Identity Contract
+
+There are two different identity concepts:
+
+local_track_id:
+  int
+  generated by ByteTrack / Ultralytics tracker
+  valid only inside one camera session
+
+global_id:
+  str
+  generated by ReID / GlobalIDManager
+  can be used across cameras or sessions if gallery is stable
+
+Cache key must be:
+
+key = (str(camera_id), int(local_track_id))
+
+Do not use only track_id as key.
+
+Correct:
+
+key = (str(camera_id), int(local_track_id))
+
+Incorrect:
+
+key = int(local_track_id)
+# 6. Module Responsibilities
+## 6.1 YoloPoseTracker
+
+File:
+
+src/detectors/yolo_pose.py
+
+Responsibility:
+
+- load YOLO11-Pose model
+- run YOLO.track()
+- use Ultralytics ByteTrack through tracker YAML
+- return DetectionDict list
+
+Input:
+
+frame: np.ndarray  # BGR image
+
+Output:
+
+detections, raw_result
+
+Rules:
+
+- validate weights path during initialization
+- use normalized device from config
+- do not hard-code CUDA
+- classes should default to [0] for person only
+## 6.2 ByteTrackWrapper
+
+File:
+
+src/trackers/bytetrack.py
+
+Responsibility:
+
+- thin wrapper around detector.infer()
+- no independent ByteTrack checkpoint logic
+
+Important clarification:
+
+The current project uses Ultralytics built-in ByteTrack through:
+tracker_yaml: "bytetrack.yaml"
+
+It does not load bytetrack_s_mot17.pth.tar.
+Do not claim the repo uses external ByteTrack checkpoint unless it is actually implemented.
+## 6.3 FastReIDExtractor
+
+File:
+
+src/reid/fast_reid.py
+
+Responsibility:
+
+- load FastReID config
+- load FastReID weights
+- extract L2-normalized appearance embedding from person crop
+
+Input:
+
+image_bgr: np.ndarray
+
+Output:
+
+feature: np.ndarray  # float32, normalized
+
+Rules:
+
+- validate fastreid_root
+- validate config_path
+- validate weights_path
+- insert fastreid_root into sys.path only once
+- do not silently ignore missing files
+## 6.4 ReIDGallery
+
+File:
+
+src/reid/gallery.py
+
+Responsibility:
+
+- build gallery from data/gallery/
+- compute prototype embeddings for each person
+- query nearest person by cosine similarity
+- optionally support FAISS for large galleries
+
+Expected gallery structure:
+
+data/gallery/
+├── person_001/
+│   ├── 001.jpg
+│   ├── 002.jpg
+│   └── 003.jpg
+├── person_002/
+│   ├── 001.jpg
+│   └── 002.jpg
+└── person_003/
+    └── 001.jpg
+
+Query contract:
+
+person_id, score = gallery.query(feat, threshold=0.55)
+
+Return:
+
+("person_001", 0.82)
+or
+("unknown", 0.31)
+
+Rules:
+
+- never add embedding under person_id="unknown"
+- warn if gallery is empty
+- pipeline must still run if gallery is empty
+## 6.5 GlobalIDManager
+
+File:
+
+src/core/global_id.py
+
+Responsibility:
+
+- map local_track_id to global_id
+- use ReID only every N frames
+- cache identity results
+- generate new gid_NNNNN when no gallery match is found
+
+Expected return:
+
+global_id, reid_score, status = manager.assign(...)
+
+Recommended status values:
+
+"cache_hit"
+"gallery_match"
+"new_global_id"
+"reid_failed"
+
+Rules:
+
+- do not run ReID every frame
+- keep global_id stable for the same track
+- cache both global_id and last score
+- do not return fake score 1.0 for cache hit
+- provide cleanup for lost tracks
+## 6.6 PoseSequenceBuffer
+
+File:
+
+src/action/pose_buffer.py
+
+Responsibility:
+
+- collect skeleton keypoints over time
+- export fixed-length clip when seq_len is reached
+- prepare MMAction2-compatible .pkl annotation
+
+Required output .pkl format:
+
+{
+    "split": {
+        "test": [sample_id]
+    },
+    "annotations": [
+        {
+            "frame_dir": sample_id,
+            "total_frames": int,
+            "img_shape": (H, W),
+            "original_shape": (H, W),
+            "label": int,
+            "keypoint": np.ndarray,        # [M, T, V, C]
+            "keypoint_score": np.ndarray,  # [M, T, V]
+        }
+    ]
+}
+
+For current YOLO11-Pose:
+
+M = 1
+T = seq_len
+V = 17
+C = 2
+
+Rules:
+
+- validate keypoint count = 17
+- return status for visualization
+- default_label is only for annotation export
+- default_label is not real ADL prediction
+
+Recommended return object:
+
+{
+    "status": "collecting" | "exported" | "skipped",
+    "current_len": int,
+    "seq_len": int,
+    "pkl_path": str | None,
+}
+## 6.7 PoseC3DRunner
+
+File:
+
+src/action/posec3d.py
+
+Responsibility:
+
+- validate MMAction2 / PoseC3D root
+- build temporary test config
+- run action recognition
+- return parsed ADL result
+
+Recommended return:
+
+{
+    "ok": bool,
+    "label": int | None,
+    "label_name": str | None,
+    "score": float | None,
+    "stdout": str,
+    "stderr": str,
+}
+
+Rules:
+
+- do not crash full pipeline if auto_infer=false
+- do not display default_label as prediction
+- parse result from a stable file if possible, not fragile stdout regex
+- handle subprocess failure clearly
+## 6.8 EventBus
+
+File:
+
+src/core/event.py
+
+Responsibility:
+
+- write JSONL event logs
+
+Standard event types:
+
+track_update
+pose_clip_exported
+adl_result
+reid_warning
+pipeline_error
+
+Rules:
+
+- payload must be JSON-serializable
+- convert Path to str
+- convert numpy types to Python int/float/list
+# 7. Required Config Schema
+
+File:
+
+configs/system/pipeline.yaml
+
+Recommended schema:
+
+system:
+  device: "auto"
+  event_log: "data/output/events/pipeline.jsonl"
+  vis_dir: "data/output/vis"
+  save_video: true
+
+pose:
+  weights: "models/yolo11n-pose.pt"
+  conf: 0.45
+  iou: 0.5
+
+tracker:
+  tracker_yaml: "bytetrack.yaml"
+
+reid:
+  fastreid_root: ".github/fast-reid"
+  config: "configs/fast-reid/R50.yml"
+  weights: "models/fastreid_market_R50.pth"
+  gallery_dir: "data/gallery"
+  threshold: 0.55
+  reid_interval: 10
+
+adl:
+  mmaction_root: ".github/pose-c3d"
+  base_config: "configs/posec3d/posec3d.py"
+  weights: "models/posec3d_r50_ntu60.pth"
+  seq_len: 48
+  stride: 12
+  max_idle_frames: 150
+  export_dir: "data/output/clips_pkl"
+  default_label: 0
+  work_dir: "data/output/posec3d"
+  auto_infer: false
+
+visualization:
+  draw_bbox: true
+  draw_skeleton: true
+  draw_track_id: true
+  draw_global_id: true
+  draw_reid_score: true
+  draw_adl_status: true
+  draw_fps: true
+
+If new config keys are added, update:
+
+src/utils/config.py::validate_cfg()
+# 8. src/utils/config.py Standard
+
+The config utility must provide:
+
+load_pipeline_cfg(path: Path, root: Path) -> dict
+validate_cfg(cfg: dict) -> None
+resolve_cfg_paths(cfg: dict, root: Path) -> dict
+normalize_device(value) -> str | None
+
+Required behavior:
+
+- load YAML
+- validate required sections and keys
+- resolve relative paths from project root
+- keep Ultralytics built-in tracker names as bare names
+- convert device "auto" into "cuda" or "cpu"
+- fallback to CPU if CUDA is unavailable
+
+Device normalization rule:
+
+if device in {"auto", ""}:
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+if device in {"cuda", "cuda:0", "0"} and not torch.cuda.is_available():
+    return "cpu"
+# 9. src/utils/video.py Standard
+
+Create this file if missing.
+
+Required functions:
+
+def parse_video_source(source: str):
+    return int(source) if str(source).isdigit() else source
+
+
+def open_video_source(source: str):
+    ...
+
+
+def get_video_meta(cap):
+    ...
+
+
+def create_video_writer(output_path, fps, width, height):
+    ...
+
+
+def safe_imshow(window_name, frame, delay=1):
+    ...
+
+Rules:
+
+- support webcam index: "0"
+- support video path
+- support RTSP URL
+- validate cap.isOpened()
+- fallback FPS to 25.0 if invalid
+- release resources in apps
+# 10. Visualization Standard
+
+File:
+
+src/utils/vis.py
+
+Required functions:
+
+draw_detection(frame, det, label=None, color=None)
+draw_skeleton_only(frame, keypoints, keypoint_scores=None, color=None)
+draw_info_panel(frame, info: dict, pos=(10, 10))
+draw_reid_panel(frame, query_crop, matches)
+draw_adl_status(frame, status)
+
+COCO-17 edge list:
+
+COCO_EDGES = [
+    (5, 7), (7, 9),
+    (6, 8), (8, 10),
+    (5, 6),
+    (5, 11), (6, 12),
+    (11, 12),
+    (11, 13), (13, 15),
+    (12, 14), (14, 16),
+    (0, 5), (0, 6),
+]
+
+Overlay examples:
+
+track=12 conf=0.87
+gid_00003 score=0.71
+ADL: collecting 25/48
+ADL: clip exported
+ADL: walking score=0.83
+FPS: 18.7
+Device: cpu
+# 11. Application Requirements
+## 11.1 apps/run_pose.py
+
+Must show:
+
+- bbox
+- skeleton
+- local track_id
+- detection confidence
+- FPS
+- device
+
+Must not:
+
+- hard-code model path
+- hard-code output directory
+- only save JSON
+
+Expected command:
+
+python apps/run_pose.py --source data/sample.mp4 --show --save-video
+## 11.2 apps/run_reid.py
+
+Must show:
+
+- bbox
+- skeleton if available
+- local track_id
+- global_id
+- ReID score
+- optional ReID side panel
+- warning if gallery is empty
+
+Must handle:
+
+- missing gallery folder
+- empty gallery
+- missing FastReID dependency
+
+Expected command:
+
+python apps/run_reid.py --source data/sample.mp4 --show --save-video
+## 11.3 apps/run_adl.py
+
+Must show processed video, not only .pkl skeleton viewer.
+
+Must show:
+
+- bbox
+- skeleton
+- track_id
+- ADL collection status
+- ADL export status
+- ADL prediction if auto_infer=true and inference succeeds
+
+Must not:
+
+- display default_label as real action
+- require existing .pkl as only input mode
+
+Expected command:
+
+python apps/run_adl.py --source data/sample.mp4 --show --save-video
+## 11.4 apps/run_pipeline.py
+
+Must run full pipeline:
+
+YOLO11-Pose
+→ ByteTrack
+→ FastReID
+→ GlobalIDManager
+→ PoseSequenceBuffer
+→ PoseC3D optional inference
+→ EventBus
+→ Visualization
+
+Must show:
+
+- bbox
+- skeleton
+- local track_id
+- global_id
+- ReID score/status
+- ADL status
+- FPS
+- device
+
+Expected command:
+
+python apps/run_pipeline.py --source data/sample.mp4 --camera-id cam01 --show --save-video
+# 12. Error Handling Rules
+Initialization-level errors
+
+Raise early with clear message.
+
+Examples:
+
+if not weights_path.exists():
+    raise FileNotFoundError(f"Model weights not found: {weights_path}")
+
+if not config_path.exists():
+    raise FileNotFoundError(f"Config not found: {config_path}")
+Frame-level errors
+
+Log and continue.
+
 try:
     detections, _ = tracker.update(frame)
 except Exception as exc:
     logger.warning(f"[frame {frame_idx}] tracker failed: {exc}", exc_info=True)
     continue
+Resource cleanup
 
-# Resource: phải có finally
+Always use finally.
+
 try:
-    cap = cv2.VideoCapture(source)
     ...
 finally:
     cap.release()
@@ -197,439 +808,383 @@ finally:
         writer.release()
     cv2.destroyAllWindows()
 
-# Init-level: raise sớm với message rõ ràng
-if not self.mmaction_root.exists():
-    raise FileNotFoundError(f"mmaction_root not found: {self.mmaction_root}")
-```
+Do not use bare except:
 
-- **Không** dùng bare `except:`. Luôn dùng `except Exception as exc:` hoặc exception cụ thể hơn.
+except:
+    ...
 
-### 5.4 Logging Rules
+Use:
 
-```python
+except Exception as exc:
+    ...
+# 13. Logging Rules
+
+Use:
+
 from src.utils.logger import get_logger
+
 logger = get_logger(__name__)
-```
 
-- **Không** dùng `print()` trong pipeline. Chỉ chấp nhận trong script debug độc lập.
-- `logger.debug` cho per-frame verbose, `logger.info` cho milestones, `logger.warning` cho recoverable errors, `logger.error` cho fatal.
+Do not use print() inside core pipeline modules.
 
-### 5.5 Identity Rules
+Allowed logging levels:
 
-- `global_id` là string: tên người từ gallery hoặc `gid_NNNNN`.
-- `local_track_id` chỉ unique trong 1 camera session. KHÔNG dùng làm cross-camera key.
-- Cache key = `(camera_id: str, local_track_id: int)`.
-- Gọi `forget_track(camera_id, track_id)` khi tracker báo lost. Hiện tại pipeline chưa làm — xem Bug #2.
-- **Không** thêm embedding của unknown track vào gallery với key `"unknown"` — xem Bug #1.
+logger.debug     per-frame verbose details
+logger.info      module initialization / output saved
+logger.warning   recoverable runtime error
+logger.error     fatal error before exit
+# 14. ReID Rules
+Do not run ReID every frame
 
-### 5.6 Security Rules
+Use:
 
-- Credential (RTSP URL với user/pass) phải ở `.env`, KHÔNG commit vào repo.
-- `.env` phải có trong `.gitignore`.
-- `data/config/resources.txt` hiện vi phạm rule này — xem Bug #9.
+reid:
+  reid_interval: 10
+Do not pollute gallery with "unknown"
 
-### 5.7 ReID Rules
+Incorrect:
 
-- Không gọi ReID CNN mỗi frame. Dùng `reid_interval` để re-check định kỳ.
-- Khi gallery scale lớn (>50 người), phải dùng FAISS — xem Bug #8.
-- EMA update prototype sau mỗi `add_embedding`. Công thức: `proto = alpha * proto + (1-alpha) * feat`.
+gallery.add_embedding("unknown", feat)
 
-### 5.8 ADL Rules
+Correct:
 
-- ADL label kết quả **phải** được đọc từ stdout/file của subprocess và emit qua EventBus.
-- `PoseC3DRunner.run_test()` hiện không trả label về pipeline — xem Bug #4.
-- Keypoint count V phải match với MMAction2 model (NTU60 = 17 COCO).
-
----
-
-## 6. Danh Sách Bug Đã Xác Định (Phải Fix, Không Workaround)
-
-### Bug #1 — `gallery.add_embedding("unknown", feat)` [CRITICAL]
-
-**File:** `src/core/global_id.py` dòng ~37
-**Vấn đề:** Khi `matched_id == "unknown"`, code gọi `self.gallery.add_embedding("unknown", feat)`. Điều này:
-- Tạo key `"unknown"` trong `gallery.prototypes` và `gallery.memory`
-- Mọi track sau khi gán `unknown` sẽ tích lũy embedding dưới cùng 1 prototype
-- Sau nhiều frame, prototype "unknown" converge thành mean của mọi người lạ → gây false match
-- Memory leak vô hạn
-
-**Fix:**
-```python
-# global_id.py :: assign()
 if matched_id == "unknown":
     matched_id = self.track_to_global.get(key) or self._new_global_id()
-    # Chỉ add embedding cho global_id mới, KHÔNG add cho "unknown"
     self.gallery.add_embedding(matched_id, feat)
-    logger.info(f"New global_id={matched_id} camera={camera_id} track={local_track_id}")
-```
+Cache identity and score
 
-### Bug #2 — `GlobalIDManager` memory leak [HIGH]
+Incorrect:
 
-**File:** `src/core/global_id.py`
-**Vấn đề:** `track_to_global` và `track_frame_count` tăng vô hạn. `forget_track()` tồn tại nhưng không bao giờ được gọi trong `run_pipeline.py`. Sau hàng giờ chạy với nhiều người đi qua frame, dict này sẽ rất lớn.
+return self.track_to_global[key], 1.0
 
-**Fix:** Thêm `_gc(current_frame_idx)` vào `GlobalIDManager` tương tự `PoseSequenceBuffer`, hoặc gọi `forget_track()` trong pipeline khi `track_id` không còn xuất hiện trong detections của frame hiện tại.
+Correct:
 
-```python
-# Ở cuối mỗi frame trong run_pipeline.py
-active_tracks = {det["track_id"] for det in detections if det.get("track_id", -1) >= 0}
-for tid in list(global_id_manager.track_to_global.keys()):
-    cam, ltid = tid
-    if cam == args.camera_id and ltid not in active_tracks:
-        global_id_manager.forget_track(cam, ltid)
-```
-
-### Bug #3 — `run_pose.py` hardcode model path [MEDIUM]
-
-**File:** `apps/run_pose.py` dòng 11
-**Vấn đề:** `MODEL_PATH = ROOT / "models" / "yolo11n-pose.pt"` hardcode, vi phạm Config Rule 5.2.
-
-**Fix:**
-```python
-# Xóa hardcode, load từ config
-cfg = load_pipeline_cfg(ROOT / "configs" / "system" / "pipeline.yaml", ROOT)
-model = YOLO(cfg["pose"]["weights"])
-```
-
-### Bug #4 — ADL label không được đọc lại vào pipeline [HIGH]
-
-**File:** `src/action/posec3d.py`, `apps/run_pipeline.py`
-**Vấn đề:** `PoseC3DRunner.run_test()` chạy subprocess và trả về `subprocess.CompletedProcess`, không parse label. Pipeline không đọc output, không emit `adl_result` event. Toàn bộ action recognition loop vô nghĩa.
-
-**Fix:** `run_test()` phải:
-1. Parse kết quả từ stdout hoặc một output JSON/txt được viết ra `work_dir`
-2. Trả về `(label: int, label_name: str, confidence: float)` hoặc `None` nếu fail
-3. Pipeline phải emit `event_bus.emit("adl_result", {...})` với kết quả
-
-### Bug #5 — Relative `_BASE_` trong `configs/fast-reid/R50.yml` [MEDIUM]
-
-**File:** `configs/fast-reid/R50.yml`
-**Vấn đề:** `_BASE_: ../../.github/fast-reid/configs/Market1501/bagtricks_R50.yml`
-YACS resolve path này relative so với file yml. Nếu thư mục `.github/fast-reid` di chuyển, hoặc CWD thay đổi, sẽ fail silently.
-
-**Fix:** Dùng absolute path được inject bởi `FastReIDExtractor` lúc runtime, hoặc luôn chạy với `cwd=ROOT`.
-
-### Bug #6 — Hardcode relative path trong `configs/posec3d/posec3d.py` [MEDIUM]
-
-**File:** `configs/posec3d/posec3d.py`
-**Vấn đề:**
-```python
-load_from = r'../../models/posec3d_r50_ntu60.pth'  # Chỉ đúng nếu CWD là configs/posec3d/
-```
-`PoseC3DRunner.build_temp_test_config()` đã dùng absolute path trong temp config, nhưng base config này vẫn có relative path.
-
-**Fix:** `PoseC3DRunner` phải resolve `self.base_config` thành absolute path trước khi dùng làm `_base_` trong temp config. Hoặc xóa `load_from` khỏi `posec3d.py` và chỉ set trong temp config.
-
-### Bug #7 — `bytetrack.yaml` bare filename [LOW]
-
-**File:** `configs/system/pipeline.yaml` → `tracker.tracker_yaml`
-**Vấn đề:** `"bytetrack.yaml"` không có path prefix. Ultralytics tìm file này trong package của nó (`ultralytics/cfg/trackers/`), hoạt động với built-in name. Nhưng nếu muốn dùng custom bytetrack config, phải là absolute/relative path rõ ràng.
-
-**Fix:** Thêm note vào config rằng đây là Ultralytics built-in name. Nếu cần custom, dùng `str(ROOT / "configs" / "bytetrack_custom.yaml")`.
-
-### Bug #8 — FAISS trong requirements nhưng không dùng [MEDIUM]
-
-**File:** `src/reid/gallery.py`, `requirements.txt`
-**Vấn đề:** `ReIDGallery.query()` dùng O(N) cosine scan. `faiss-cpu` được cài nhưng không dùng. Với gallery 100+ người × nhiều embeddings, mỗi frame ReID sẽ chậm.
-
-**Fix:** Implement FAISS index trong `ReIDGallery`:
-```python
-import faiss
-
-class ReIDGallery:
-    def __init__(self, ...):
-        self.index = None   # faiss.IndexFlatIP
-        self.id_map = []    # person_id tương ứng với mỗi vector trong index
-
-    def _rebuild_index(self):
-        if not self.prototypes:
-            self.index = None
-            return
-        vecs = np.stack(list(self.prototypes.values()), axis=0).astype(np.float32)
-        faiss.normalize_L2(vecs)
-        self.index = faiss.IndexFlatIP(vecs.shape[1])
-        self.index.add(vecs)
-        self.id_map = list(self.prototypes.keys())
-
-    def query(self, feat, threshold=0.55):
-        if self.index is None or self.index.ntotal == 0:
-            return "unknown", -1.0
-        q = feat[None, :].astype(np.float32)
-        faiss.normalize_L2(q)
-        D, I = self.index.search(q, 1)
-        score = float(D[0, 0])
-        if score < threshold:
-            return "unknown", score
-        return self.id_map[I[0, 0]], score
-```
-
-Gọi `_rebuild_index()` sau mỗi `add_embedding()` hoặc dùng `IndexIDMap` để incremental add.
-
-### Bug #9 — RTSP credentials plaintext trong repo [CRITICAL - Security]
-
-**File:** `data/config/resources.txt`
-**Vấn đề:**
-```
-Cam Nha __rtsp://bathanh0309:bathanh0309@192.168.100.160:554/stream2
-```
-Username/password camera bị expose nếu repo là public hoặc có thêm collaborator.
-
-**Fix:**
-1. Xóa file này khỏi git history: `git filter-branch` hoặc `git-filter-repo`
-2. Đổi password camera ngay
-3. Tạo `.env`:
-   ```
-   CAM_NHA_URL=rtsp://user:pass@192.168.100.160:554/stream2
-   CAM_SAN_URL=rtsp://user:pass@192.168.100.242:554/stream2
-   ```
-4. Thêm `.env` vào `.gitignore`
-5. Load trong pipeline: `from dotenv import load_dotenv; load_dotenv()`
-
-### Bug #10 — `FaceGallery` class thiếu [HIGH]
-
-**File:** `data/face/README.md` reference, nhưng class không tồn tại trong `src/`
-**Vấn đề:** `data/face/` có cấu trúc embeddings (`.npy`, `meta.json`) cho face recognition, nhưng không có `FaceGallery` class nào implement logic load/query. Đây là một subsystem chưa được implement.
-
-**Fix:** Cần tạo `src/reid/face_gallery.py` với:
-- `load(face_dir)` → stack embeddings từ `embeddings.npy` hoặc `emb_NN.npy`
-- `query(feat, threshold)` → cosine hoặc FAISS
-- Phân biệt rõ với `ReIDGallery` (body appearance) vs `FaceGallery` (face)
-
-### Bug #11 — `GlobalIDManager` trả `1.0` khi cache hit [LOW]
-
-**File:** `src/core/global_id.py` dòng ~22
-```python
-if key in self.track_to_global and not should_reid:
-    return self.track_to_global[key], 1.0   # ← confidence giả
-```
-Dashboard hoặc event log sẽ thấy `reid_score=1.0` cho mọi cached frame, misleading.
-
-**Fix:** Cache cả score cùng với global_id:
-```python
-self.track_to_global[key] = (matched_id, float(score))
-# khi return cache:
 gid, cached_score = self.track_to_global[key]
-return gid, cached_score
-```
+return gid, cached_score, "cache_hit"
+Empty gallery behavior
 
-### Bug #12 — Keypoint count không được validate [MEDIUM]
+If gallery is empty:
 
-**File:** `src/action/pose_buffer.py`
-**Vấn đề:** `PoseSequenceBuffer.update()` không kiểm tra `keypoints_xy.shape[0] == 17`. Nếu model YOLO được đổi sang variant khác (ví dụ 133 keypoints wholebody), MMAction2 PoseC3D sẽ nhận tensor sai shape và crash hoặc cho kết quả sai.
+- pipeline still runs
+- new gid_NNNNN can be assigned
+- overlay must show "ReID gallery empty"
+- do not crash
+# 15. ADL Rules
+default_label is not prediction
 
-**Fix:**
-```python
-EXPECTED_KEYPOINTS = 17  # COCO
+default_label exists only for exported MMAction2 annotation.
+
+Do not display:
+
+Label: 0
+
+as if it were a predicted action.
+
+Display instead:
+
+ADL: collecting 25/48
+ADL: exported
+ADL: inference disabled
+ADL: walking score=0.83
+Keypoint validation
+
+Current expected keypoints:
+
+COCO-17
+
+Required check:
+
+EXPECTED_KEYPOINTS = 17
 
 if keypoints_xy.shape[0] != EXPECTED_KEYPOINTS:
     logger.warning(
-        f"Unexpected keypoint count {keypoints_xy.shape[0]} != {EXPECTED_KEYPOINTS}, skipping"
+        f"Unexpected keypoint count {keypoints_xy.shape[0]} != {EXPECTED_KEYPOINTS}"
     )
-    return None
+    return {
+        "status": "skipped",
+        "reason": "invalid_keypoint_count",
+        "current_len": 0,
+        "seq_len": self.seq_len,
+        "pkl_path": None,
+    }
+# 16. Security Rules
+
+Never commit:
+
+.env
+RTSP usernames/passwords
+camera passwords
+API keys
+model weights
+large datasets
+runtime .pkl outputs
+face embeddings
+
+.gitignore must include:
+
+.env
+*.pt
+*.pth
+*.pth.tar
+*.onnx
+*.engine
+*.pkl
+*.npy
+data/output/
+data/gallery/
+models/
+
+If a credential was committed:
+
+1. remove it from repo
+2. rotate password immediately
+3. purge from git history if public
+4. move to .env
+# 17. Model Files
+
+Expected local model layout:
+
+models/
+├── yolo11n-pose.pt
+├── fastreid_market_R50.pth
+└── posec3d_r50_ntu60.pth
+
+Important:
+
+ByteTrack currently uses Ultralytics built-in tracker YAML:
+tracker_yaml: "bytetrack.yaml"
+
+The project does not need bytetrack_s_mot17.pth.tar unless a custom external ByteTrack implementation is added.
+# 18. External Repositories
+
+Expected external dependencies:
+
+.github/
+├── fast-reid/
+└── pose-c3d/
+
+FastReID:
+
+git clone https://github.com/JDAI-CV/fast-reid.git .github/fast-reid
+
+MMAction2 / PoseC3D:
+
+git clone https://github.com/open-mmlab/mmaction2.git .github/pose-c3d
+
+Rules:
+
+- Do not import FastReID globally outside FastReIDExtractor
+- Do not import MMAction2 globally unless needed
+- Validate external repo root before use
+# 19. Known High-Priority Fixes
+Fix 1 — CPU/CUDA device bug
+
+Problem:
+
+torch.cuda.is_available() == False
+but code still requests device=0 or cuda
+
+Required fix:
+
+- use device: "auto" in pipeline.yaml
+- normalize device in src/utils/config.py
+- never pass invalid CUDA device to Ultralytics
+Fix 2 — App scripts do not consistently show processed video
+
+Required fix:
+
+Every apps/run_*.py must:
+- open video source
+- process every frame
+- draw overlay
+- call cv2.imshow if --show
+- write .mp4 if --save-video
+Fix 3 — run_pose.py hard-codes model path
+
+Required fix:
+
+Load YOLO weights from cfg["pose"]["weights"].
+Fix 4 — ReID gallery empty or invalid
+
+Required fix:
+
+- Warn clearly
+- Continue pipeline
+- Show overlay warning
+Fix 5 — ADL default label misused
+
+Required fix:
+
+Do not display default_label as predicted ADL result.
+Show collecting/exported/inference-disabled/inferred status.
+Fix 6 — PoseC3D inference result not returned
+
+Required fix:
+
+PoseC3DRunner.run_test() should return structured result:
+{
+  "ok": bool,
+  "label": int | None,
+  "label_name": str | None,
+  "score": float | None,
+  "stdout": str,
+  "stderr": str,
+}
+Fix 7 — Memory leak in ID managers
+
+Required fix:
+
+- GlobalIDManager must clean old tracks
+- PoseSequenceBuffer already has GC-like behavior; keep it
+- Pipeline should identify active tracks per frame
+# 20. Smoke Test Checklist
+
+Before committing, run:
+
+python -m compileall apps src
+
+Then run:
+
+python apps/run_pose.py --source data/sample.mp4 --show --max-frames 100
+
+Expected:
+
+- video window opens
+- bbox visible
+- skeleton visible
+- track_id visible
+- no CUDA error on CPU machine
+
+Run:
+
+python apps/run_pipeline.py --source data/sample.mp4 --camera-id cam01 --show --max-frames 150
+
+Expected:
+
+- video window opens
+- bbox + skeleton visible
+- global_id visible
+- ReID score/status visible
+- ADL collecting/export status visible
+- output JSONL written
+- no crash if gallery is empty
+
+# 21. Code Style
+
+Use standard import order:
+
+```python
+# standard library
+import argparse
+import sys
+from pathlib import Path
+
+# third-party
+import cv2
+import numpy as np
+
+# local
+from src.utils.config import load_pipeline_cfg
 ```
-Hoặc đưa `expected_keypoints` vào config để flexible.
 
-### Bug #13 — `ByteTrackWrapper` misleading name [LOW]
+Rules:
 
-**File:** `src/trackers/bytetrack.py`, `README.md`
-**Vấn đề:** README nói "download `bytetrack_s_mot17.pth.tar`" nhưng file này không được load ở đâu cả. ByteTrack được Ultralytics xử lý nội bộ qua `tracker_yaml`. `bytetrack_s_mot17.pth.tar` trong `models/` là thừa.
+- Public functions should use type hints where practical
+- Avoid huge functions
+- Keep apps thin
+- Keep model logic inside src/
+- Avoid broad refactor unless required
+- Do not change file formats silently
 
-**Fix:** Xóa `bytetrack_s_mot17.pth.tar` khỏi bảng model trong README, hoặc thêm note rõ "ByteTrack được Ultralytics quản lý, không cần download riêng".
+# 22. JSONL Event Format
 
----
+Every event row should look like:
 
-## 7. Module Contracts
+{
+  "ts_ms": 1710000000000,
+  "type": "track_update",
+  "payload": {
+    "camera_id": "cam01",
+    "frame_idx": 25,
+    "local_track_id": 3,
+    "global_id": "gid_00001",
+    "reid_score": 0.72,
+    "bbox": [100, 120, 250, 400]
+  }
+}
 
-### `YoloPoseTracker` — `src/detectors/yolo_pose.py`
+Rules:
 
-```
-Input:   BGR frame (numpy.ndarray H×W×3)
-Output:  (list[DetectionDict], ultralytics.Results)
-Method:  infer(frame, persist=True)
-Note:    persist=True bắt buộc để ByteTrack trong Ultralytics giữ track memory
-         classes=[0] — chỉ detect người
-```
+- payload must not contain numpy.ndarray
+- payload must not contain pathlib.Path
+- convert all numpy int/float to Python int/float
+# 23. Pull Request / Commit Response Format
 
-### `ByteTrackWrapper` — `src/trackers/bytetrack.py`
+When an AI agent modifies the repo, it must report:
 
-```
-Input:   BGR frame
-Output:  (list[DetectionDict], raw_result)
-Method:  update(frame)
-Note:    Thin wrapper. Không thêm tracking logic riêng.
-         ByteTrack thực sự nằm trong Ultralytics, không phải đây.
-```
+Files changed:
+- path/to/file.py
+- path/to/config.yaml
 
-### `FastReIDExtractor` — `src/reid/fast_reid.py`
+What changed:
+- short bullet per file
 
-```
-Input:   BGR crop (numpy.ndarray)
-Output:  L2-normalized float32 vector shape [D] (D=2048 cho R50)
-Method:  extract(image_bgr)
-Note:    sys.path.insert chỉ làm 1 lần, có check duplicate.
-         Nếu fastreid_root không tồn tại → raise FileNotFoundError
-```
+Why:
+- explain bug or logic issue fixed
 
-### `ReIDGallery` — `src/reid/gallery.py`
+How to test:
+- exact commands
 
-```
-build()              Load ảnh từ gallery_dir/{person_name}/*.{jpg,png,...}
-query(feat, thr)     → (person_id: str, score: float) | ("unknown", score)
-add_embedding(id, feat) → update prototype (phải gọi _rebuild_index sau đó)
-```
+Remaining limitations:
+- honest notes
 
-### `GlobalIDManager` — `src/core/global_id.py`
+Example:
 
-```
-assign(camera_id, local_track_id, crop_bgr, frame_idx) → (global_id: str, score: float)
-forget_track(camera_id, local_track_id)                → cleanup cache
-```
+Files changed:
+- src/utils/config.py
+- apps/run_pose.py
 
-### `PoseSequenceBuffer` — `src/action/pose_buffer.py`
+What changed:
+- Added safe device normalization
+- Reworked run_pose.py to load config and show processed video
 
-```
-update(...) → Path | None   (None nếu chưa đủ seq_len hoặc chưa đến stride)
-reset_track(camera_id, local_track_id) → manual cleanup
-_gc(current_frame_idx) → auto cleanup idle tracks
-```
+How to test:
+python apps/run_pose.py --source data/sample.mp4 --show --max-frames 100
+# 24. Do Not Do These
+Do not hard-code absolute paths.
+Do not force CUDA.
+Do not use print in src modules.
+Do not add unknown embeddings to gallery under "unknown".
+Do not treat local track_id as global identity.
+Do not display default_label as ADL prediction.
+Do not commit model weights.
+Do not commit credentials.
+Do not change MMAction2 pkl format unless updating config too.
+Do not let OpenCV windows/camera/writer leak.
+Do not swallow exceptions silently.
+# 25. Final Project Goal
 
-### `PoseC3DRunner` — `src/action/posec3d.py`
+A correct CPose demo should show, on live video:
 
-```
-run_test(ann_file: str) → subprocess.CompletedProcess
-⚠️ HIỆN TẠI chưa parse label. Phải fix Bug #4 trước khi dùng trong production.
-```
+Person bbox
+COCO-17 skeleton
+Local track_id
+Global person ID
+ReID similarity score
+ADL status or action label
+FPS
+Device
+Camera ID
 
-### `EventBus` — `src/core/event.py`
+Example overlay:
 
-```
-emit(event_type: str, payload: dict) → ghi JSONL
-payload phải JSON-serializable (không chứa numpy array, Path object)
-Events chuẩn: "track_update", "pose_clip_exported", "adl_result" (chưa implement)
-```
+CPose Full Pipeline
+camera: cam01
+frame: 152
+device: cpu
+fps: 17.8
 
----
-
-## 8. Config Schema Đầy Đủ (`configs/system/pipeline.yaml`)
-
-```yaml
-system:
-  device: "cuda"          # hoặc "cpu"
-  event_log: "data/output/events/pipeline.jsonl"
-  vis_dir: "data/output/vis"
-  save_video: true
-
-pose:
-  weights: "models/yolo11n-pose.pt"
-  conf: 0.45              # float [0.0, 1.0]
-  iou: 0.5                # float [0.0, 1.0]
-
-tracker:
-  tracker_yaml: "bytetrack.yaml"  # Ultralytics built-in name
-
-reid:
-  fastreid_root: ".github/fast-reid"
-  config: "configs/fast-reid/R50.yml"
-  weights: "models/fastreid_market_R50.pth"
-  gallery_dir: "data/gallery"
-  threshold: 0.55         # float, cosine similarity cutoff
-  reid_interval: 10       # int, frames giữa 2 lần query gallery
-
-adl:
-  mmaction_root: ".github/pose-c3d"
-  base_config: "configs/posec3d/posec3d.py"
-  weights: "models/posec3d_r50_ntu60.pth"
-  seq_len: 48             # int, frames per clip
-  stride: 12              # int, export stride
-  max_idle_frames: 150    # int, gc threshold
-  export_dir: "data/output/clips_pkl"
-  default_label: 0        # int, nhãn mặc định khi chưa infer
-  work_dir: "data/output/posec3d"
-  auto_infer: false       # bool, bật PoseC3D subprocess
-```
-
-Mọi key mới phải được thêm vào `validate_cfg()` trong `src/utils/config.py`.
-
----
-
-## 9. Quy Trình Thêm Tính Năng
-
-1. **Đặt logic** vào đúng package trong `src/`, không nhét vào `apps/`.
-2. **Config** → `configs/system/pipeline.yaml`.
-3. **Validate** → update `validate_cfg()`.
-4. **Logger** → `get_logger(__name__)`.
-5. **Không phá** DetectionDict contract và PoseSequenceBuffer `.pkl` format.
-6. **Compile check**: `python -m compileall apps src`
-7. **Security**: Không commit credential, weight, PDF.
-
----
-
-## 10. Code Style
-
-- Import order: stdlib → third-party → local (isort).
-- Type hints cho public API của mỗi class/function mới.
-- **Không** bare `except:`.
-- **Không** refactor rộng nếu task chỉ cần bugfix hẹp.
-- **Không** revert thay đổi không liên quan trong dirty worktree.
-
----
-
-## 11. Bảng "Không Làm"
-
-| Không làm | Lý do |
-|-----------|-------|
-| Hardcode absolute path | Chỉ chạy trên 1 máy |
-| `print()` trong pipeline | Thiếu timestamp, không filter được |
-| `gallery.add_embedding("unknown", feat)` | Pollute gallery, false match |
-| Gọi ReID CNN mỗi frame | Không realtime với nhiều người |
-| Để `track_to_global` tăng vô hạn | Memory leak |
-| Bỏ `try/finally` cho OpenCV resource | Camera/writer/window leak |
-| Commit `.pt`, `.pth`, `.pkl`, `.pdf`, `.npy` | Làm repo nặng |
-| Commit credential vào repo | Security risk |
-| Đổi `.pkl` output format tùy tiện | Break MMAction2 |
-| Lặp `sys.path.insert` không kiểm soát | Side effect global process |
-| Dùng FAISS index không rebuild sau add | Stale index, wrong results |
-| Parse PoseC3D kết quả bằng regex trên stdout | Fragile; dùng output file |
-
----
-
-## 12. Dependency Ngoài Pip
-
-| Library | Config key | Ghi chú |
-|---------|-----------|---------|
-| FastReID | `reid.fastreid_root` | Clone vào `.github/fast-reid` |
-| MMAction2 / PoseC3D | `adl.mmaction_root` | Clone vào `.github/pose-c3d` nếu bật `auto_infer` |
-
-`FastReIDExtractor` tự inject path. Không thêm `sys.path.insert` cho FastReID ở module khác.
-
----
-
-## 13. Checklist Trước Khi Commit
-
-- [ ] Không còn hardcoded `D:\...`, `/home/...` trong `apps/`, `src/`, `configs/`.
-- [ ] Không có credential (IP cam, password) trong code hoặc config file.
-- [ ] Resource OpenCV/file/subprocess được cleanup bằng `finally`.
-- [ ] Exception được bắt đúng cấp (frame-level vs init-level).
-- [ ] Config mới đã được validate trong `validate_cfg()`.
-- [ ] `gallery.add_embedding()` không được gọi với `person_id="unknown"`.
-- [ ] `forget_track()` được gọi khi track lost.
-- [ ] `.pt`, `.pth`, `.pkl`, `.pdf`, `.npy`, `.env` không bị staged.
-- [ ] `python -m compileall apps src` pass không có error.
-- [ ] DetectionDict contract và PoseSequenceBuffer `.pkl` contract không bị phá.
-- [ ] Mọi event payload JSON-serializable (không có numpy, Path).
-
----
-
-## 14. Files Cần Cẩn Thận Khi Sửa
-
-| File | Rủi ro khi sửa |
-|------|----------------|
-| `configs/system/pipeline.yaml` | Ảnh hưởng toàn pipeline |
-| `src/action/pose_buffer.py::_export_current_window()` | Format `.pkl` cố định |
-| `src/reid/gallery.py::add_embedding()` | Dễ gây Bug #1 quay lại |
-| `src/core/global_id.py::assign()` | Logic identity dễ race condition |
-| `src/utils/config.py::validate_cfg()` | Thêm key mới phải thêm vào đây |
-| `requirements.txt` | Kiểm tra compatibility trước khi đổi version |
-
----
-
+track=4
+gid=gid_00003
+reid=0.68
+ADL: collecting 32/48

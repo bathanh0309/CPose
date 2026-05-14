@@ -1,0 +1,195 @@
+:root {
+    /* Theme Trắng Sáng */
+    --bg-body: #f0f2f5;
+    --bg-panel: #ffffff;
+    --text-dark: #1e293b;
+    --text-muted: #64748b;
+    --border: #cbd5e1;
+    
+    /* Màu Sắc Chuẩn */
+    --primary: #0ea5e9;
+    
+    /* Trạng thái Module & Nút Bấm */
+    --mod-yellow: #facc15;
+    --mod-yellow-border: #eab308;
+    --mod-green: #22c55e;
+    --mod-green-border: #16a34a;
+    --mod-red: #ef4444;
+    --mod-red-border: #dc2626;
+
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Roboto', sans-serif;
+    background-color: var(--bg-body);
+    color: var(--text-dark);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Header */
+.top-nav {
+    display: flex;
+    align-items: center;
+    background: var(--bg-panel);
+    padding: 12px 25px;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.logo { display: flex; align-items: center; gap: 10px; }
+.logo-accent { width: 14px; height: 14px; background: var(--primary); border-radius: 3px; }
+.logo h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.5px; }
+
+/* Dashboard */
+.main-dashboard {
+    flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 20px;
+    min-width: 0;
+}
+
+.camera-block {
+    display: flex; flex-direction: column; gap: 0;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    overflow: hidden;
+    min-width: 0;
+}
+
+/* Camera Header Controls */
+.camera-header {
+    background: #f8fafc; padding: 12px 15px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    flex-wrap: wrap;
+}
+.cam-info { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; min-width: 0; }
+.cam-id { font-weight: 700; color: var(--primary); font-size: 15px; min-width: 60px; }
+
+input[type="text"] {
+    flex: 1; background: #ffffff; border: 1px solid var(--border);
+    color: var(--text-dark); padding: 9px 12px; border-radius: 4px; font-size: 14px;
+    transition: 0.2s;
+}
+input[type="text"]:focus { outline: none; border-color: var(--primary); }
+
+.camera-select {
+    flex: 1;
+    min-width: 0;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    color: var(--text-dark);
+    padding: 9px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+.camera-select:focus { outline: none; border-color: var(--primary); }
+
+.btn-icon {
+    font-size: 13px; background: #e2e8f0; color: #334155; padding: 9px 12px;
+    border-radius: 4px; cursor: pointer; font-weight: 500; border: 1px solid var(--border);
+    transition: 0.2s;
+    white-space: nowrap;
+}
+.btn-icon:hover { background: #cbd5e1; }
+
+.cam-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+
+/* Các trạng thái của nút ON/OFF */
+.btn {
+    border: none; padding: 9px 14px; border-radius: 4px; font-weight: 700;
+    cursor: pointer; font-size: 14px; transition: 0.2s; 
+    min-width: 54px;
+}
+/* Mặc định chưa nhấn là Màu Vàng */
+.btn-default { 
+    background: var(--mod-yellow); color: #1e293b; border: 1px solid var(--mod-yellow-border); 
+}
+.btn-default:hover { opacity: 0.8; }
+
+/* Trạng thái đã nhấn ON (Xanh) */
+.btn-on-active {
+    background: var(--mod-green); color: white; border: 1px solid var(--mod-green-border);
+}
+
+/* Trạng thái đã nhấn OFF (Đỏ) */
+.btn-off-active {
+    background: var(--mod-red); color: white; border: 1px solid var(--mod-red-border);
+}
+
+/* AI Modules Configuration */
+.cam-modules {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 15px; background: #ffffff;
+    border-bottom: 1px solid var(--border);
+}
+.module-title { font-size: 13px; font-weight: 700; color: var(--text-muted); }
+
+.module-toggle { cursor: pointer; }
+.module-toggle input { display: none; }
+.module-btn {
+    display: inline-block; padding: 6px 16px; border-radius: 20px;
+    font-size: 13px; font-weight: 600; transition: 0.2s;
+    /* Mặc định chưa nhấn: Nền vàng, chữ đen */
+    background: var(--mod-yellow); color: #1e293b; border: 1px solid var(--mod-yellow-border);
+}
+/* Trạng thái đã nhấn: Nền xanh, chữ trắng */
+.module-toggle input:checked + .module-btn {
+    background: var(--mod-green); color: white; border-color: var(--mod-green-border);
+}
+
+/* Video Frame */
+.video-container {
+    flex: 1.2; background: #e2e8f0; border-bottom: 1px solid var(--border);
+    position: relative; min-height: 250px;
+}
+.video-wrapper { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden;}
+
+.placeholder { color: #94a3b8; font-weight: 700; font-size: 20px; letter-spacing: 2px; }
+.stream-img { width: 100%; height: 100%; object-fit: contain; display: none; background: #000; }
+
+.status-overlay {
+    position: absolute; top: 15px; right: 15px; background: rgba(255,255,255,0.9);
+    padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
+    color: var(--text-dark); border: 1px solid var(--border); box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Log Console */
+.log-console {
+    flex: 0.8; background: #ffffff; display: flex; flex-direction: column; overflow: hidden;
+}
+.log-header {
+    background: #f8fafc; padding: 8px 15px; font-size: 13px;
+    color: var(--text-muted); font-weight: 700; border-bottom: 1px solid var(--border);
+}
+.log-output {
+    padding: 12px 15px; font-family: var(--font-mono); font-size: 13px;
+    overflow-y: auto; height: 150px; line-height: 1.6;
+}
+.log-msg { margin-bottom: 6px; color: #334155; }
+.log-msg.system { color: #0284c7; font-weight: 500; } 
+.log-msg.ai { color: #059669; } 
+.log-msg.error { color: #dc2626; }
+
+@media (max-width: 1100px) {
+    body { overflow: auto; }
+    .main-dashboard {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+}
+
+@media (max-width: 700px) {
+    .camera-header { align-items: stretch; }
+    .cam-info,
+    .cam-actions {
+        flex-basis: 100%;
+        width: 100%;
+    }
+    .cam-actions .btn { flex: 1; }
+}

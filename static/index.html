@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CPose - Control Panel</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="top-nav">
+        <div class="logo">
+            <span class="logo-accent"></span>
+            <h1>CPose</h1>
+        </div>
+    </header>
+
+    <main class="main-dashboard">
+        <section class="camera-block">
+            <div class="camera-header">
+                <div class="cam-info">
+                    <span class="cam-id">CAM 01</span>
+                    <select id="input-cam1" class="camera-select">
+                        <option value="">-- Tải dữ liệu từ resources.txt --</option>
+                    </select>
+                    <label class="btn-icon">
+                        Chọn File
+                        <input type="file" id="upload-cam1" accept="video/*" hidden>
+                    </label>
+                </div>
+                <div class="cam-actions">
+                    <button id="btn-on-cam1" class="btn btn-default" onclick="toggleCamera('cam1', true)">ON</button>
+                    <button id="btn-off-cam1" class="btn btn-default" onclick="toggleCamera('cam1', false)">OFF</button>
+                </div>
+            </div>
+
+            <div class="cam-modules">
+                <span class="module-title">AI MODULES:</span>
+                <label class="module-toggle">
+                    <input type="checkbox" id="track-cam1" checked>
+                    <span class="module-btn">Tracking</span>
+                </label>
+                <label class="module-toggle">
+                    <input type="checkbox" id="pose-cam1" checked>
+                    <span class="module-btn">Pose</span>
+                </label>
+                <label class="module-toggle">
+                    <input type="checkbox" id="reid-cam1" checked>
+                    <span class="module-btn">ReID</span>
+                </label>
+                <label class="module-toggle">
+                    <input type="checkbox" id="adl-cam1">
+                    <span class="module-btn">ADL</span>
+                </label>
+            </div>
+
+            <div class="video-container">
+                <div class="video-wrapper">
+                    <div class="placeholder" id="placeholder-cam1">CHƯA CÓ TÍN HIỆU</div>
+                    <img id="stream-cam1" src="" class="stream-img" alt="Camera 1 stream">
+                    <div class="status-overlay" id="status-cam1">OFFLINE</div>
+                </div>
+            </div>
+
+            <div class="log-console">
+                <div class="log-header">Log Camera 1</div>
+                <div class="log-output" id="log-cam1">
+                    <p class="log-msg system">[System] Đang chờ cấu hình...</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="camera-block">
+            <div class="camera-header">
+                <div class="cam-info">
+                    <span class="cam-id">CAM 02</span>
+                    <select id="input-cam2" class="camera-select">
+                        <option value="">-- Tải dữ liệu từ resources.txt --</option>
+                    </select>
+                    <label class="btn-icon">
+                        Chọn File
+                        <input type="file" id="upload-cam2" accept="video/*" hidden>
+                    </label>
+                </div>
+                <div class="cam-actions">
+                    <button id="btn-on-cam2" class="btn btn-default" onclick="toggleCamera('cam2', true)">ON</button>
+                    <button id="btn-off-cam2" class="btn btn-default" onclick="toggleCamera('cam2', false)">OFF</button>
+                </div>
+            </div>
+
+            <div class="cam-modules">
+                <span class="module-title">AI MODULES:</span>
+                <label class="module-toggle">
+                    <input type="checkbox" id="track-cam2" checked>
+                    <span class="module-btn">Tracking</span>
+                </label>
+                <label class="module-toggle">
+                    <input type="checkbox" id="pose-cam2" checked>
+                    <span class="module-btn">Pose</span>
+                </label>
+                <label class="module-toggle">
+                    <input type="checkbox" id="reid-cam2" checked>
+                    <span class="module-btn">ReID</span>
+                </label>
+                <label class="module-toggle">
+                    <input type="checkbox" id="adl-cam2">
+                    <span class="module-btn">ADL</span>
+                </label>
+            </div>
+
+            <div class="video-container">
+                <div class="video-wrapper">
+                    <div class="placeholder" id="placeholder-cam2">CHƯA CÓ TÍN HIỆU</div>
+                    <img id="stream-cam2" src="" class="stream-img" alt="Camera 2 stream">
+                    <div class="status-overlay" id="status-cam2">OFFLINE</div>
+                </div>
+            </div>
+
+            <div class="log-console">
+                <div class="log-header">Log Camera 2</div>
+                <div class="log-output" id="log-cam2">
+                    <p class="log-msg system">[System] Đang chờ cấu hình...</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="scripts.js"></script>
+</body>
+</html>

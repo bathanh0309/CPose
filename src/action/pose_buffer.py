@@ -7,6 +7,10 @@ from src.utils.io import ensure_dir, save_pickle
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+EXPECTED_KEYPOINTS = 17
+
+
 class PoseSequenceBuffer:
     def __init__(
         self,
@@ -44,17 +48,42 @@ class PoseSequenceBuffer:
         self._gc(int(frame_idx))
 
         if keypoints_xy is None:
-            return None
+            return {"status": "waiting", "current_len": 0, "seq_len": self.seq_len, "pkl_path": None}
 
         keypoints_xy = np.asarray(keypoints_xy, dtype=np.float32)
         if keypoints_xy.ndim != 2 or keypoints_xy.shape[1] != 2:
-            return None
+            return {
+                "status": "skipped",
+                "reason": "invalid_keypoint_shape",
+                "current_len": 0,
+                "seq_len": self.seq_len,
+                "pkl_path": None,
+            }
+        if keypoints_xy.shape[0] != EXPECTED_KEYPOINTS:
+            logger.warning(
+                f"Unexpected keypoint count {keypoints_xy.shape[0]} != {EXPECTED_KEYPOINTS}, skipping"
+            )
+            return {
+                "status": "skipped",
+                "reason": "invalid_keypoint_count",
+                "current_len": 0,
+                "seq_len": self.seq_len,
+                "pkl_path": None,
+            }
 
         num_kp = keypoints_xy.shape[0]
         if keypoint_scores is None:
             keypoint_scores = np.ones((num_kp,), dtype=np.float32)
         else:
             keypoint_scores = np.asarray(keypoint_scores, dtype=np.float32)
+            if keypoint_scores.ndim != 1 or keypoint_scores.shape[0] != EXPECTED_KEYPOINTS:
+                return {
+                    "status": "skipped",
+                    "reason": "invalid_keypoint_score_shape",
+                    "current_len": 0,
+                    "seq_len": self.seq_len,
+                    "pkl_path": None,
+                }
 
         state = self._get_state(camera_id, local_track_id)
         state["frame_idx"].append(int(frame_idx))
@@ -63,21 +92,37 @@ class PoseSequenceBuffer:
         state["img_shape"] = tuple(map(int, img_shape))
 
         if len(state["keypoints"]) < self.seq_len:
-            return None
+            return {
+                "status": "collecting",
+                "current_len": len(state["keypoints"]),
+                "seq_len": self.seq_len,
+                "pkl_path": None,
+            }
 
         end_idx = state["frame_idx"][-1]
         if end_idx - state["last_export_end"] < self.stride:
-            return None
+            return {
+                "status": "collecting",
+                "current_len": self.seq_len,
+                "seq_len": self.seq_len,
+                "pkl_path": None,
+            }
 
         state["export_count"] += 1
         state["last_export_end"] = end_idx
 
-        return self._export_current_window(
+        pkl_path = self._export_current_window(
             camera_id=camera_id,
             local_track_id=local_track_id,
             global_id=global_id,
             state=state
         )
+        return {
+            "status": "exported",
+            "current_len": self.seq_len,
+            "seq_len": self.seq_len,
+            "pkl_path": str(pkl_path),
+        }
 
     def _gc(self, current_frame_idx):
         dead = [

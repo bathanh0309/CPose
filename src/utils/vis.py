@@ -175,6 +175,28 @@ def draw_info_panel(frame, info: dict, pos=(10, 10)):
         cv2.putText(frame, line, (x0 + pad, ty), font, scale, (220, 220, 220), thickness, cv2.LINE_AA)
 
 
+def draw_adl_status(frame, status, pos=(10, 140)):
+    if isinstance(status, dict):
+        state = status.get("status", "waiting")
+        if state == "collecting":
+            text = f"ADL: collecting {status.get('current_len', 0)}/{status.get('seq_len', 0)}"
+        elif state == "exported":
+            text = "ADL: clip exported"
+        elif state == "inferred":
+            text = f"ADL: {status.get('label', '?')} score={float(status.get('score', 0.0)):.2f}"
+        elif state == "disabled":
+            text = "ADL: inference disabled"
+        elif state == "failed":
+            text = "ADL: inference failed"
+        elif state == "skipped":
+            text = f"ADL: skipped {status.get('reason', '')}".strip()
+        else:
+            text = f"ADL: {state}"
+    else:
+        text = str(status)
+    draw_info_panel(frame, {"ADL": text}, pos=pos)
+
+
 def draw_reid_panel(frame, query_crop, matches: list, panel_w=220):
     """Vẽ panel ReID bên phải frame.
 

@@ -1,6 +1,6 @@
-from ultralytics import YOLO
+from pathlib import Path
 
-from src.utils.device import resolve_torch_device
+from ultralytics import YOLO
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -16,13 +16,21 @@ class YoloPoseTracker:
         device=None,
         classes=None
     ):
-        logger.info(f"Loading YOLO pose model: {weights}")
-        self.model = YOLO(weights)
-        self.conf = conf
-        self.iou = iou
+        self.weights = Path(weights)
+        if not self.weights.exists():
+            raise FileNotFoundError(
+                f"YOLO pose weights not found: {self.weights}\n"
+                "Download yolo11n-pose.pt and set [pose].weights in configs/system/pipeline.yaml."
+            )
+        self.conf = float(conf)
+        self.iou = float(iou)
         self.tracker = tracker
-        self.device = resolve_torch_device(device)
+        self.device = device
         self.classes = classes if classes is not None else [0]
+        logger.info(f"Loading YOLO pose model: {self.weights}")
+        logger.info(f"YOLO device: {self.device}")
+        logger.info(f"YOLO tracker: {self.tracker}")
+        self.model = YOLO(str(self.weights))
 
     def infer(self, frame, persist=True):
         results = self.model.track(

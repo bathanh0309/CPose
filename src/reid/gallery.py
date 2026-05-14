@@ -14,6 +14,7 @@ class ReIDGallery:
         self.gallery_dir = Path(gallery_dir)
         self.prototypes = {}
         self.memory = {}
+        self.initial_empty = True
 
     @staticmethod
     def cosine_similarity(a, b):
@@ -26,6 +27,7 @@ class ReIDGallery:
 
         if not self.gallery_dir.exists():
             logger.warning(f"ReID gallery directory does not exist: {self.gallery_dir}")
+            self.initial_empty = True
             return
 
         logger.info(f"Building ReID gallery from: {self.gallery_dir}")
@@ -46,6 +48,9 @@ class ReIDGallery:
                 self.memory[person_dir.name] = feats
                 self.prototypes[person_dir.name] = feats.mean(axis=0).astype(np.float32)
                 logger.info(f"Loaded {len(feats)} ReID embeddings for {person_dir.name}")
+        if not self.prototypes:
+            logger.warning(f"ReID gallery empty: {self.gallery_dir}")
+        self.initial_empty = not bool(self.prototypes)
 
     def query(self, feat, threshold=0.55):
         if not self.prototypes:
@@ -63,7 +68,16 @@ class ReIDGallery:
             return "unknown", best_score
         return best_id, best_score
 
+    def get_top_matches(self, feat, topk=3):
+        matches = []
+        for person_id, proto in self.prototypes.items():
+            matches.append((person_id, self.cosine_similarity(feat, proto), None))
+        matches.sort(key=lambda item: item[1], reverse=True)
+        return matches[:topk]
+
     def add_embedding(self, person_id, feat):
+        if person_id == "unknown":
+            raise ValueError('Refusing to add ReID embedding under person_id="unknown"')
         if person_id not in self.memory:
             self.memory[person_id] = np.expand_dims(feat, axis=0)
         else:

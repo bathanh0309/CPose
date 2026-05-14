@@ -10,10 +10,10 @@ logger = get_logger(__name__)
 
 class PoseC3DRunner:
     def __init__(self, mmaction_root, base_config, checkpoint, work_dir):
-        self.mmaction_root = Path(mmaction_root)
-        self.base_config = Path(base_config)
-        self.checkpoint = Path(checkpoint)
-        self.work_dir = Path(work_dir)
+        self.mmaction_root = Path(mmaction_root).resolve()
+        self.base_config = Path(base_config).resolve()
+        self.checkpoint = Path(checkpoint).resolve()
+        self.work_dir = Path(work_dir).resolve()
 
         if not self.mmaction_root.exists():
             raise FileNotFoundError(f"mmaction_root not found: {self.mmaction_root}")
@@ -85,13 +85,14 @@ test_dataloader = dict(
                                 first = res[0]
                                 # If first is an int label
                                 if isinstance(first, int):
-                                    return int(first), str(int(first)), 1.0
+                                    label = int(first)
+                                    return {"status": "inferred", "label": str(label), "score": 1.0, "label_id": label}
                                 # If first is (label, score)
                                 if isinstance(first, (list, tuple)) and len(first) >= 1:
                                     try:
                                         label = int(first[0])
                                         score = float(first[1]) if len(first) > 1 else 1.0
-                                        return label, str(label), score
+                                        return {"status": "inferred", "label": str(label), "score": score, "label_id": label}
                                     except Exception:
                                         pass
                         except Exception as exc:
@@ -103,13 +104,15 @@ test_dataloader = dict(
                     label_name = m2.group(1)
                     try:
                         label = int(label_name)
-                        return label, label_name, 1.0
+                        return {"status": "inferred", "label": label_name, "score": 1.0, "label_id": label}
                     except Exception:
-                        return None
+                        return {"status": "inferred", "label": label_name, "score": 1.0, "label_id": None}
             except Exception as exc:
                 logger.debug(f"Error while parsing PoseC3D output: {exc}", exc_info=True)
 
             logger.info("PoseC3D subprocess finished; no ADL result parsed.")
-            return None
+            if cp.returncode != 0:
+                return {"status": "failed", "label": None, "score": 0.0, "message": combined[-1000:]}
+            return {"status": "completed_no_result", "label": None, "score": 0.0, "message": "No parseable ADL output"}
         finally:
             Path(cfg_path).unlink(missing_ok=True)

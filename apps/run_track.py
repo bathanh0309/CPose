@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -9,110 +8,100 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.detectors.yolo_pose import YoloPoseTracker
+from src.trackers.bytetrack import ByteTrackWrapper
 from src.utils.config import load_pipeline_cfg
-from src.utils.io import ensure_dir
 from src.utils.logger import get_logger
-from src.utils.vis import draw_detection
+from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
+from src.utils.vis import FPSCounter, draw_detection, draw_info_panel
 
-DEFAULT_SOURCE = ROOT / "data" / "input" / "cam1_2026-01-29_16-26-25.mp4"
-OUTPUT_DIR = ROOT / "data" / "output"
 logger = get_logger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Debug YOLO pose + ByteTrack")
-    parser.add_argument(
-        "--source",
-        type=str,
-        default=str(DEFAULT_SOURCE),
-        help="image/video path or webcam index",
-    )
-    parser.add_argument("--conf", type=float, default=None)
+    parser = argparse.ArgumentParser(description="Run ByteTrack over YOLO11-Pose detections")
+    parser.add_argument("--source", type=str, default=None)
     parser.add_argument("--camera-id", type=str, default="cam01")
+    parser.add_argument("--config", type=str, default=str(ROOT / "configs/system/pipeline.yaml"))
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--save-vis", action="store_true")
+    parser.add_argument("--no-show", action="store_true")
+    parser.add_argument("--save-video", action="store_true")
+    parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--max-frames", type=int, default=0)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
-    from src.detectors.yolo_pose import YoloPoseTracker
-    from src.trackers.bytetrack import ByteTrackWrapper
-
-    cfg = load_pipeline_cfg(ROOT / "configs" / "system" / "pipeline.yaml", ROOT)
-    conf = cfg["pose"]["conf"] if args.conf is None else args.conf
+    cfg = load_pipeline_cfg(Path(args.config), ROOT)
 
     detector = YoloPoseTracker(
         weights=cfg["pose"]["weights"],
-        conf=conf,
+        conf=cfg["pose"]["conf"],
         iou=cfg["pose"]["iou"],
         tracker=cfg["tracker"]["tracker_yaml"],
         device=cfg["system"]["device"],
     )
     tracker = ByteTrackWrapper(detector)
 
-    source = int(args.source) if args.source.isdigit() else args.source
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise FileNotFoundError(f"Cannot open source: {source}")
+    source = args.source or find_default_video_source(ROOT)
+    if source is None:
+        raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    vis_dir = ensure_dir(OUTPUT_DIR / "vis")
+    show = not args.no_show
+    cap, _ = open_video_source(source)
+    width, height, fps, total = get_video_meta(cap)
     writer = None
+    if args.save_video:
+        output = args.output or str(Path(cfg["system"]["vis_dir"]) / f"{args.camera_id}_track.mp4")
+        writer = create_video_writer(output, fps, width, height)
+        logger.info(f"Saving video to: {output}")
+
+    fps_counter = FPSCounter()
     frame_idx = -1
-    all_results = []
-
-    logger.info(f"Tracking started | source={source} | camera={args.camera_id}")
-
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
-
             frame_idx += 1
-            h, w = frame.shape[:2]
+            if args.max_frames and frame_idx >= args.max_frames:
+                break
 
-            if writer is None and args.save_vis:
-                out_path = str(Path(vis_dir) / f"{args.camera_id}_track_debug.mp4")
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(out_path, fourcc, 20.0, (w, h))
-                logger.info(f"Video writer opened: {out_path}")
+            try:
+                detections, _ = tracker.update(frame)
+            except Exception as exc:
+                logger.warning(f"[frame {frame_idx}] tracking failed: {exc}", exc_info=True)
+                continue
 
-            detections, _ = tracker.update(frame)
-            serializable = []
+            tracked = 0
             for det in detections:
-                track_id = int(det.get("track_id", -1))
-                label = f"t{track_id}" if track_id >= 0 else "untracked"
-                draw_detection(frame, det, label=label)
-                serializable.append(det)
+                tid = det.get("track_id", -1)
+                if tid >= 0:
+                    tracked += 1
+                draw_detection(frame, det, label=f"track={tid} conf={det['score']:.2f}")
 
-            all_results.append({
-                "frame_index": frame_idx,
-                "detections": serializable,
+            draw_info_panel(frame, {
+                "Module": "YOLO11-Pose + ByteTrack",
+                "Camera": args.camera_id,
+                "Frame": f"{frame_idx}/{total}" if total else frame_idx,
+                "Detections": len(detections),
+                "Tracked": tracked,
+                "Device": cfg["system"]["device"],
+                "FPS": f"{fps_counter.tick():.1f}",
             })
 
             if writer is not None:
                 writer.write(frame)
-
-            if args.show:
-                cv2.imshow("CPose Tracking", frame)
-                if cv2.waitKey(1) & 0xFF == 27:
-                    logger.info("ESC pressed; stopping.")
+            if show:
+                key = safe_imshow("CPose - Tracking", frame)
+                if key in (27, ord("q"), ord("Q")):
                     break
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user.")
     finally:
         cap.release()
         if writer is not None:
             writer.release()
         cv2.destroyAllWindows()
-
-    out_json = OUTPUT_DIR / "track_results.json"
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, ensure_ascii=False, indent=2)
-
-    logger.info(f"Saved track results to: {out_json}")
 
 
 if __name__ == "__main__":

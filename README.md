@@ -107,10 +107,10 @@ pip install -r requirements.txt
 
 ```bash
 # FastReID
-git clone https://github.com/JDAI-CV/fast-reid.git third_party/fast-reid
+git clone https://github.com/JDAI-CV/fast-reid.git .github/fast-reid
 
 # Cập nhật path trong configs/system/pipeline.yaml
-# reid.fastreid_root: third_party/fast-reid
+# reid.fastreid_root: .github/fast-reid
 ```
 
 ---

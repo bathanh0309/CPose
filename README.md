@@ -33,7 +33,7 @@ Video / Camera frame
 
 | Model | File name | Size | Download |
 |-------|-----------|------|----------|
-| YOLOv11-Pose (detection + keypoint) | `yolov11-pose.pt` | ~138 MB | [Ultralytics Releases](https://huggingface.co/Ultralytics/YOLO11/blob/main/yolo11n-pose.pt) |
+| YOLOv11n-Pose (detection + keypoint) | `yolov11n-pose.pt` | ~138 MB | [Ultralytics Releases](https://huggingface.co/Ultralytics/YOLO11/blob/main/yolo11n-pose.pt) |
 | ByteTrack (MOT17 pretrained) | `bytetrack_s_mot17.pth.tar` | ~69 MB | [ByteTrack Releases](https://github.com/ifzhang/ByteTrack/releases/download/v0.1/bytetrack_s_mot17.pth.tar) |
 | FastReID Market-1501 (ResNet-50) | `fastreid_market_R50.pth` | ~287 MB | [JDAI-CV FastReID Model Zoo](https://github.com/JDAI-CV/fast-reid/blob/master/MODEL_ZOO.md) |
 | PoseC3D ADL (finetuned) | `posec3d_r50_ntu60.pth` | ~200 MB |  [Pose C3D ](https://github.com/open-mmlab/mmaction2/tree/main/configs/skeleton/posec3d) |

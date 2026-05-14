@@ -11,6 +11,8 @@ dist/
 *.egg-info/
 .eggs/
 
+data/config/
+
 # ===========================
 # Virtual environments
 # ===========================

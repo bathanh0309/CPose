@@ -57,6 +57,59 @@ test_dataloader = dict(
                 str(self.checkpoint)
             ]
             logger.info("Running PoseC3D subprocess")
-            return subprocess.run(cmd, cwd=str(self.mmaction_root), check=False)
+            # capture output so we can try to parse results
+            cp = subprocess.run(cmd, cwd=str(self.mmaction_root), check=False, capture_output=True, text=True)
+
+            stdout = cp.stdout or ""
+            stderr = cp.stderr or ""
+            combined = stdout + "\n" + stderr
+
+            # Try to find a results file under work_dir or parse stdout
+            try:
+                import re
+                import pickle
+
+                # look for a saved results path in the combined output
+                m = re.search(r"saved to (.+)", combined, re.IGNORECASE)
+                if m:
+                    path_str = m.group(1).strip()
+                    p = Path(path_str)
+                    if not p.is_absolute():
+                        p = (self.work_dir / p).resolve()
+                    if p.exists():
+                        try:
+                            with open(p, "rb") as f:
+                                res = pickle.load(f)
+                            # res may be a list/array of predictions
+                            if isinstance(res, (list, tuple)) and len(res) > 0:
+                                first = res[0]
+                                # If first is an int label
+                                if isinstance(first, int):
+                                    return int(first), str(int(first)), 1.0
+                                # If first is (label, score)
+                                if isinstance(first, (list, tuple)) and len(first) >= 1:
+                                    try:
+                                        label = int(first[0])
+                                        score = float(first[1]) if len(first) > 1 else 1.0
+                                        return label, str(label), score
+                                    except Exception:
+                                        pass
+                        except Exception as exc:
+                            logger.warning(f"Failed to load PoseC3D results file {p}: {exc}", exc_info=True)
+
+                # fallback: try parse simple predicted class lines
+                m2 = re.search(r"Predicted.*class[:=]\s*(\w+)", combined, re.IGNORECASE)
+                if m2:
+                    label_name = m2.group(1)
+                    try:
+                        label = int(label_name)
+                        return label, label_name, 1.0
+                    except Exception:
+                        return None
+            except Exception as exc:
+                logger.debug(f"Error while parsing PoseC3D output: {exc}", exc_info=True)
+
+            logger.info("PoseC3D subprocess finished; no ADL result parsed.")
+            return None
         finally:
             Path(cfg_path).unlink(missing_ok=True)

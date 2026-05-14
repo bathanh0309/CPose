@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from src.utils.device import resolve_torch_device
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -19,7 +20,7 @@ class FastReIDExtractor:
 
         self.config_path = str(config_path)
         self.weights_path = str(weights_path)
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = resolve_torch_device(device) or ("cuda" if torch.cuda.is_available() else "cpu")
 
         fastreid_path = str(self.fastreid_root)
         if fastreid_path not in sys.path:

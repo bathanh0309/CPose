@@ -8,19 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.action.pose_buffer import PoseSequenceBuffer
-from src.action.posec3d import PoseC3DRunner
-from src.core.event import EventBus
-from src.core.global_id import GlobalIDManager
-from src.detectors.yolo_pose import YoloPoseTracker
-from src.reid.fast_reid import FastReIDExtractor
-from src.reid.gallery import ReIDGallery
-from src.trackers.bytetrack import ByteTrackWrapper
 from src.utils.config import load_pipeline_cfg
 from src.utils.io import ensure_dir
 from src.utils.logger import get_logger
 from src.utils.vis import draw_detection
 
+DEFAULT_SOURCE = ROOT / "data" / "input" / "cam1_2026-01-29_16-26-25.mp4"
 logger = get_logger("pipeline")
 
 
@@ -30,7 +23,7 @@ def load_cfg(path: Path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="CPose inference pipeline")
-    parser.add_argument("--source", type=str, required=True)
+    parser.add_argument("--source", type=str, default=str(DEFAULT_SOURCE))
     parser.add_argument("--camera-id", type=str, default="cam01")
     parser.add_argument(
         "--config",
@@ -42,6 +35,15 @@ def parse_args():
 
 
 def build_pipeline(cfg):
+    from src.action.pose_buffer import PoseSequenceBuffer
+    from src.action.posec3d import PoseC3DRunner
+    from src.core.event import EventBus
+    from src.core.global_id import GlobalIDManager
+    from src.detectors.yolo_pose import YoloPoseTracker
+    from src.reid.fast_reid import FastReIDExtractor
+    from src.reid.gallery import ReIDGallery
+    from src.trackers.bytetrack import ByteTrackWrapper
+
     logger.info("Building detector...")
     detector = YoloPoseTracker(
         weights=cfg["pose"]["weights"],
@@ -190,12 +192,35 @@ def main():
 
                     if posec3d_runner is not None:
                         try:
-                            posec3d_runner.run_test(str(pkl_path))
+                            adl_result = posec3d_runner.run_test(str(pkl_path))
+                            # adl_result expected to be (label_id:int, label_name:str, confidence:float) or None
+                            if adl_result is not None and isinstance(adl_result, tuple) and len(adl_result) >= 3:
+                                label_id, label_name, confidence = adl_result[:3]
+                                event_bus.emit("adl_result", {
+                                    "camera_id": args.camera_id,
+                                    "frame_idx": frame_idx,
+                                    "local_track_id": int(det["track_id"]),
+                                    "global_id": global_id,
+                                    "label_id": int(label_id),
+                                    "label_name": str(label_name),
+                                    "confidence": float(confidence),
+                                    "pkl_path": str(pkl_path)
+                                })
                         except Exception as exc:
                             logger.warning(f"PoseC3D inference failed: {exc}", exc_info=True)
 
             if writer is not None:
                 writer.write(frame)
+
+            # Cleanup GlobalID mappings for tracks that are no longer active in this frame
+            try:
+                active_tracks = {det["track_id"] for det in detections if det.get("track_id", -1) >= 0}
+                for tid_key in list(global_id_manager.track_to_global.keys()):
+                    cam, ltid = tid_key
+                    if cam == args.camera_id and ltid not in active_tracks:
+                        global_id_manager.forget_track(cam, ltid)
+            except Exception as exc:
+                logger.debug(f"GlobalIDManager GC failed: {exc}", exc_info=True)
 
             if args.show:
                 cv2.imshow("CPose Pipeline", frame)

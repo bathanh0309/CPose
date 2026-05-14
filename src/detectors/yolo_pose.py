@@ -1,5 +1,6 @@
 from ultralytics import YOLO
 
+from src.utils.device import resolve_torch_device
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,7 +21,7 @@ class YoloPoseTracker:
         self.conf = conf
         self.iou = iou
         self.tracker = tracker
-        self.device = device
+        self.device = resolve_torch_device(device)
         self.classes = classes if classes is not None else [0]
 
     def infer(self, frame, persist=True):

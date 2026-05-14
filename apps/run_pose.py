@@ -3,15 +3,14 @@ import json
 import sys
 from pathlib import Path
 
-from ultralytics import YOLO
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.utils.logger import get_logger
+from src.utils.config import load_pipeline_cfg
 
-MODEL_PATH = ROOT / "models" / "yolo11n-pose.pt"
+DEFAULT_SOURCE = ROOT / "data" / "input" / "cam1_2026-01-29_16-26-25.mp4"
 OUTPUT_DIR = ROOT / "data" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 logger = get_logger(__name__)
@@ -19,7 +18,12 @@ logger = get_logger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Debug YOLO pose detection")
-    parser.add_argument("--source", type=str, required=True, help="image/video path or webcam index")
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=str(DEFAULT_SOURCE),
+        help="image/video path or webcam index",
+    )
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument("--save-vis", action="store_true")
     return parser.parse_args()
@@ -55,7 +59,11 @@ def result_to_dict(result):
 
 def main():
     args = parse_args()
-    model = YOLO(str(MODEL_PATH))
+
+    from ultralytics import YOLO
+
+    cfg = load_pipeline_cfg(Path(ROOT / "configs" / "system" / "pipeline.yaml"), ROOT)
+    model = YOLO(str(cfg["pose"]["weights"]))
 
     source = int(args.source) if args.source.isdigit() else args.source
     results = model.predict(
@@ -65,6 +73,7 @@ def main():
         project=str(OUTPUT_DIR),
         name="pose_vis",
         verbose=False,
+        stream=True,
     )
 
     all_results = []

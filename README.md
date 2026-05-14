@@ -1,7 +1,6 @@
-# CPose — Multi-Person Pose-Based Action Recognition
+# CPose
 
-> Real-time pipeline: **YOLO Pose** → **ByteTrack** → **FastReID** → **PoseC3D** → ADL classification  
-> Capstone Project · ĐH Bách Khoa Đà Nẵng · 2021–2026
+> Real-time pipeline: **YOLO Pose** → **ByteTrack** → **FastReID** → **PoseC3D** → ADL recognition
 
 ---
 
@@ -30,34 +29,31 @@ Video / Camera frame
 
 ---
 
-## 📦 Model Weights — Download Manually
-
-> **Các file `.pth`, `.pt` không được commit lên repo** (quá nặng).  
-> Tải về và đặt vào thư mục `models/` theo đúng tên file dưới đây.
+## Model
 
 | Model | File name | Size | Download |
 |-------|-----------|------|----------|
-| YOLOv8-Pose (detection + keypoint) | `yolov8x-pose-p6.pt` | ~138 MB | [Ultralytics Releases](https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8x-pose-p6.pt) |
+| YOLOv11-Pose (detection + keypoint) | `yolov11-pose.pt` | ~138 MB | [Ultralytics Releases](https://huggingface.co/Ultralytics/YOLO11/blob/main/yolo11n-pose.pt) |
 | ByteTrack (MOT17 pretrained) | `bytetrack_s_mot17.pth.tar` | ~69 MB | [ByteTrack Releases](https://github.com/ifzhang/ByteTrack/releases/download/v0.1/bytetrack_s_mot17.pth.tar) |
 | FastReID Market-1501 (ResNet-50) | `fastreid_market_R50.pth` | ~287 MB | [JDAI-CV FastReID Model Zoo](https://github.com/JDAI-CV/fast-reid/blob/master/MODEL_ZOO.md) |
-| PoseC3D ADL (finetuned) | `ADL-posec3d.pth` | ~200 MB | 🔒 Internal — liên hệ nhóm |
+| PoseC3D ADL (finetuned) | `posec3d_r50_ntu60.pth` | ~200 MB |  [Pose C3D ](https://github.com/open-mmlab/mmaction2/tree/main/configs/skeleton/posec3d) |
 
 **Sau khi tải về:**
 
 ```
 CPose/
 └── models/
-    ├── yolov8x-pose-p6.pt
+    ├── yolov11n-pose.pt
     ├── bytetrack_s_mot17.pth.tar
     ├── fastreid_market_R50.pth
-    └── ADL-posec3d.pth
+    └── posec3d_r50_ntu60.pth
 ```
 
 Kiểm tra path trong `configs/system/pipeline.yaml`:
 
 ```yaml
 detector:
-  weights: models/yolov8x-pose-p6.pt
+  weights: models/yolov11n-pose.pt
 
 tracker:
   weights: models/bytetrack_s_mot17.pth.tar
@@ -66,12 +62,12 @@ reid:
   weights: models/fastreid_market_R50.pth
 
 adl:
-  weights: models/ADL-posec3d.pth
+  weights: models/posec3d_r50_ntu60.pth
 ```
 
 ---
 
-## 🛠 Installation
+## Installation
 
 ### 1. Tạo virtual environment
 
@@ -119,7 +115,7 @@ git clone https://github.com/JDAI-CV/fast-reid.git third_party/fast-reid
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 # Chạy toàn bộ pipeline
@@ -133,7 +129,7 @@ python apps/run_adl.py  --clip data/output/clips_pkl/sample.pkl
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 CPose/
@@ -160,12 +156,8 @@ CPose/
 
 ---
 
-## 🤖 For AI Coding Agents
+## For AI Coding Agents
 
 Đọc [`CLAUDE.md`](./CLAUDE.md) trước khi chạm vào bất kỳ file nào.
 
 ---
-
-## License
-
-Internal project — ĐH Bách Khoa Đà Nẵng · 2025–2026

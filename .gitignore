@@ -1,0 +1,63 @@
+# ===========================
+# Python
+# ===========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ===========================
+# Virtual environments
+# ===========================
+.venv/
+venv/
+env/
+
+# ===========================
+# Model weights  <-- KHÔNG push, dùng link trong README
+# ===========================
+models/*.pth
+models/*.pth.tar
+models/*.pt
+models/*.onnx
+models/*.bin
+models/*.safetensors
+# Giữ lại placeholder để git track thư mục
+!models/.gitkeep
+
+# ===========================
+# Data & outputs
+# ===========================
+data/output/
+data/gallery/
+*.pkl
+*.csv
+*.jsonl
+
+# ===========================
+# PDF papers (dùng docs/ thay thế)
+# ===========================
+*.pdf
+
+# ===========================
+# IDE / OS
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===========================
+# Misc
+# ===========================
+*.log
+tmp/
+temp/
+.env

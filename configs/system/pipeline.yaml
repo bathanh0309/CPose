@@ -1,0 +1,33 @@
+system:
+  device: "cuda"
+  event_log: "data/output/events/pipeline.jsonl"
+  vis_dir: "data/output/vis"
+  save_video: true
+
+pose:
+  weights: "models/yolo11n-pose.pt"
+  conf: 0.45
+  iou: 0.5
+
+tracker:
+  tracker_yaml: "bytetrack.yaml"
+
+reid:
+  fastreid_root: ".github/fast-reid"
+  config: "configs/fast-reid/R50.yml"
+  weights: "models/fastreid_market_R50.pth"
+  gallery_dir: "data/gallery"
+  threshold: 0.55
+  reid_interval: 10
+
+adl:
+  mmaction_root: ".github/pose-c3d"
+  base_config: "configs/posec3d/posec3d.py"
+  weights: "models/posec3d_r50_ntu60.pth"
+  seq_len: 48
+  stride: 12
+  max_idle_frames: 150
+  export_dir: "data/output/clips_pkl"
+  default_label: 0
+  work_dir: "data/output/posec3d"
+  auto_infer: false

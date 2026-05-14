@@ -1,0 +1,7 @@
+_BASE_: ../../.github/fast-reid/configs/Market1501/bagtricks_R50.yml
+
+OUTPUT_DIR: data/output/fastreid
+
+MODEL:
+  WEIGHTS: models/fastreid_market_R50.pth
+  DEVICE: cuda

@@ -1,0 +1,994 @@
+\documentclass[a4paper, twoside, 12pt]{article}
+
+% ==================== 1. GÓI HỖ TRỢ TIẾNG VIỆT & FONT ====================
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}
+\usepackage[vn vietnamese]{babel}
+\usepackage{mathptmx} % Font tương đương Times New Roman
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{cuted}
+\usepackage{graphicx} 
+\usepackage{float} 
+\usepackage{cuted}
+\usepackage{hyperref}
+\usepackage{tikz} 
+\usetikzlibrary{calc} 
+\usepackage{xcolor} 
+\usepackage{booktabs}  
+\usepackage{multirow}
+\usepackage{fancyhdr}
+\usepackage{mathptmx}
+\usepackage{multicol}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, calc, shadows.blur}
+\usepackage{caption}
+\usepackage{subcaption}
+\usetikzlibrary{positioning, arrows.meta}
+% ==================== 2. CĂN LỀ (GEOMETRY) ====================
+\usepackage[
+    paperheight=29.7cm,
+    paperwidth=21cm,
+    right=20mm, % Lề phải
+    left=20mm,  % Lề trái
+    top=20mm,   % Lề trên
+    bottom=20mm,% Lề dưới
+    headheight=30pt, % Tăng độ cao header để chứa đủ 2 dòng nếu cần
+    headsep=20pt     % Khoảng cách từ header đến nội dung
+]{geometry}
+
+% ==================== 3. QUY ĐỊNH GIÃN CÁCH (SPACING) ====================
+\usepackage{setspace}
+\renewcommand{\baselinestretch}{1.15} % Giãn dòng thống nhất (khoảng 1.15 đến 1.2 là đẹp)
+\setlength{\parindent}{0.5cm}        % Thụt đầu dòng đoạn văn mới
+\setlength{\parskip}{4pt}            % Khoảng cách giữa các đoạn văn
+
+% ==================== 4. MÀU SẮC & ĐỒ HỌA ====================
+\usepackage{xcolor}
+\definecolor{myblue}{RGB}{0, 112, 192}
+\definecolor{myred}{RGB}{255, 0, 0}
+\definecolor{headerred}{RGB}{255, 0, 0}
+\definecolor{headerblack}{RGB}{0, 0, 0} % Định nghĩa màu đen cho đường kẻ
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{multicol} % Hỗ trợ chia 2 cột
+\usepackage{caption}
+
+% ==================== 5. SECTION STYLE (TIÊU ĐỀ MỤC) ====================
+\usepackage{titlesec}
+\titleformat{\section}
+  {\normalfont\bfseries\fontsize{12.5}{15}\selectfont}
+  {\thesection.}
+  {0.5em}
+  {}
+
+\titleformat{\subsection}
+  {\normalfont\bfseries\fontsize{12.5}{15}\selectfont}
+  {\thesubsection.}
+  {0.5em}
+  {}
+
+% ==================== 6. HEADER & FOOTER (XEN KẼ CHẴN LẺ) ====================
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+
+% Cấu hình cho trang LẺ (Odd - O)
+\fancyhead[OR]{%
+    \textcolor{headerred}{\footnotesize\textbf{Hội nghị Sinh viên Nghiên cứu Khoa học Trường Đại học Bách Khoa, ĐHĐN năm học 2025 - 2026}}
+}
+
+% Cấu hình cho trang CHẴN (Even - E)
+\fancyhead[EL]{%
+    \textcolor{headerred}{\footnotesize\textbf{SVTH: Nguyễn Bá Thành, Nguyễn Văn Huy; GVHD: Đào Duy Tuấn, Văn Phú Tuấn}}
+}
+
+\fancyfoot[C]{\thepage} % Số trang ở giữa chân trang
+
+% Đường kẻ header
+\renewcommand{\headrulewidth}{0.5pt}
+\renewcommand{\headrule}{%
+    \hbox to\headwidth{\color{headerblack}\leaders\hrule height \headrulewidth\hfill}
+}
+
+% Cấu hình riêng cho TRANG ĐẦU TIÊN (thường không dùng xen kẽ)
+\fancypagestyle{firstpage}{ 
+    \fancyhf{}
+    \fancyhead[R]{\textcolor{headerred}{\footnotesize\textbf{Hội nghị Sinh viên Nghiên cứu Khoa học Trường Đại học Bách Khoa, ĐHĐN năm học 2025 - 2026}}}
+    \fancyfoot[C]{\thepage}
+    \renewcommand{\headrulewidth}{0.5pt}
+}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{hyperref}
+% ==================== BẮT ĐẦU NỘI DUNG VĂN BẢN ====================
+\begin{document}
+\setlength{\multicolsep}{5pt} % Mặc định thường là 12pt, chỉnh xuống 5pt hoặc 0pt để khít hơn
+
+% Thiết lập cỡ chữ 12.5pt cho toàn bộ bài viết (áp dụng sau \begin{document})
+\fontsize{12.5}{15}\selectfont 
+
+\thispagestyle{firstpage} % Áp dụng style trang đầu
+
+% --- PHẦN TIÊU ĐỀ (Chiếm toàn bộ chiều ngang) ---
+\begin{center}
+    {\fontsize{12.3}{15}\selectfont \textcolor{myblue}{\textbf{THIẾT KẾ HỆ THỐNG PHÂN TÍCH HÀNH VI TOÀN CẢNH THEO THỜI GIAN THỰC}}} \\
+    \vspace{2pt}
+    {\fontsize{12.5}{15}\selectfont \textcolor{myred}{\textbf{DESIGNING A REAL-TIME, COMPREHENSIVE BEHAVIORAL ANALYSIS SYSTEM}}} \\
+    
+    \vspace{10pt}
+    
+    {\fontsize{11}{13}\selectfont
+        \textit{\textbf{SVTH: Nguyễn Bá Thành$^*$, Nguyễn Văn Huy$^{**}$}} \\
+        \textit{Lớp: 21DTCLC4$^*$, 21KTMT$^{**}$; Khoa Điện Tử - Viễn Thông, Trường Đại học Bách khoa Đại học Đà Nẵng;} \\
+        \textit{Email: 106210200@sv1.dut.udn.vn, 106210218@sv1.dut.udn.vn} \\
+        \vspace{5pt}
+        \textit{\textbf{GVHD: Đào Duy Tuấn, Văn Phú Tuấn}} \\
+        \textit{Khoa: Điện Tử - Viễn Thông, Trường: Đại học Bách khoa Đại học Đà Nẵng;}\\
+        \textit{Email: ddtuan@dut.udn.vn, vptuan@dut.udn.vn}
+    }
+\end{center}
+
+% ==================== PHẦN TÓM TẮT & ABSTRACT (CHIA 2 CỘT) ====================
+\begin{multicols}{2}
+    % --- CỘT TRÁI: TIẾNG VIỆT ---
+\textbf{Tóm tắt -} Trong nghiên cứu này, chúng tôi đề xuất CPose, một hệ thống xử lý tuần tự theo thời gian cho bài toán giám sát hoạt động con người đa camera. Kết hợp các thành phần phát hiện người, ước lượng tư thế, nhận diện hoạt động sinh hoạt hằng ngày, nhận diện khuôn mặt, đặc trưng ngoại hình, cơ sở dữ liệu vector và cơ chế suy luận Global ID dựa trên ràng buộc không gian và thời gian. Kết quả cho thấy CPose có khả năng tích hợp hiệu quả nhiều mô-đun để nâng cao độ chính xác trong nhận diện và định danh xuyên camera.
+
+\columnbreak
+
+\textbf{Abstract -} In this study, we propose CPose, a time-first sequential framework for multi-camera human activity monitoring. CPose integrates person detection, pose estimation, daily activity recognition, face recognition, body appearance features, vector-based retrieval, and spatio temporal Global ID reasoning. Experimental results demonstrate that CPose effectively combines multiple modules to improve accuracy in cross-camera recognition and identification.
+
+\end{multicols}
+
+% Khoảng cách giữa phần Abstract và Nội dung chính
+\vspace{0.2cm}
+
+\begin{multicols}{2}
+
+    \textbf{Từ khóa -} Ước tính tư thế, nhận dạng hoạt động, nhận dạng lại người, theo dõi qua nhiều camera, liên kết nhận dạng nhiều camera, suy luận không gian thời gian, thị giác máy tính.
+    
+    \columnbreak % Lệnh quan trọng: Ép nội dung sau đây sang cột thứ 2
+    \textbf{Key words -} Pose estimation, activity recognition, ADL, person ReID, multi-camera tracking, cross-camera identity association, spatio-temporal reasoning, computer vision.
+\end{multicols}
+
+\vspace{0.2cm}
+% ==================== PHẦN NỘI DUNG CHÍNH (TIẾP TỤC 2 CỘT) ====================
+\begin{multicols}{2}
+\section{Đặt vấn đề}
+\vspace{-0.56cm}
+\hspace*{0.5cm}Trong môi trường thực tế, một camera đơn lẻ thường không đủ bao phủ toàn bộ không gian. Vì vậy, hệ thống giám sát nhiều camera được sử dụng để mở rộng vùng quan sát. Tuy nhiên, việc giám sát nhiều camera đặt ra nhiều thách thức mới. Khi một người rời khỏi camera này và xuất hiện ở camera khác, hệ thống cần xác định đó có phải là cùng một người hay không. Vấn đề này trở nên khó hơn khi giữa hai camera tồn tại vùng mù như thang máy, hành lang không có camera, phòng kín hoặc khu vực bị che khuất. Ngoài ra, người dùng có thể quay lưng, bị che mặt, thay đổi tư thế, thay đổi ánh sáng hoặc thậm chí thay áo sau khi đi vào phòng.
+
+Các thuật toán theo dõi đối tượng hiện đại như DeepSORT, ByteTrack, OCSORT, BoTSORT và StrongSORT đã chứng minh hiệu quả trong bài toán theo dõi nhiều đối tượng trong một video. Tuy nhiên, các thuật toán này chủ yếu giải quyết bài toán duy trì ID trong cùng một luồng camera. Khi người biến mất khỏi một camera và xuất hiện lại ở camera khác sau một khoảng thời gian, các tracker này không đủ thông tin để duy trì định danh toàn cục. Trong khi đó, các phương pháp Person ReID dựa trên ngoại hình hoặc màu sắc trang phục dễ bị sai khi người thay áo, bị che khuất hoặc điều kiện ánh sáng thay đổi.
+
+\end{multicols}
+
+\vspace{0.2cm}
+% ========= PHẦN 2 CÁC NGHIÊN CỨU LIÊN QUAN====================
+\begin{multicols}{2}
+\section{Các nghiên cứu liên quan}
+\vspace{-0.6cm}
+\hspace*{0.5cm}\textbf{Detect people in photos and videos}\\
+Phát hiện người là bước đầu tiên trong nhiều hệ thống giám sát thị giác máy tính. Các phương pháp truyền thống thường dựa trên đặc trưng thủ công như HOG kết hợp SVM. Tuy nhiên, các phương pháp này khó hoạt động ổn định trong môi trường thực tế có nhiều thay đổi về ánh sáng, góc nhìn, che khuất và mật độ người. Trong CPose, detector được sử dụng để phát hiện vùng chứa người trước khi đưa vào module pose estimation và ReID.
+
+\textbf{Human Pose Estimation}\\
+Ước lượng tư thế người nhằm xác định vị trí các điểm khớp chính trên cơ thể, ví dụ mũi, vai, khuỷu tay, cổ tay, hông, gối và cổ chân. Các mô hình pose estimation hiện đại có thể được chia thành hai nhóm: top-down và bottom-up. Phương pháp top-down phát hiện người trước, sau đó ước lượng keypoint cho từng người. 
+
+\textbf{Activities Daily Living Recognition}\\
+Nhận diện hoạt động sinh hoạt hằng ngày, hay ADL recognition, là bài toán phân loại trạng thái hoặc hành động của con người như đứng, ngồi, đi bộ, nằm, té ngã. 
+
+\textbf{Multiple Object Tracking }\\
+Theo dõi người qua nhiều camera là bài toán phát hiện và duy trì ID của nhiều đối tượng qua các frame trong một video. Các phương pháp như DeepSORT, ByteTrack, OCSORT, DeepOCSORT, BoTSORT và StrongSORT đã đạt kết quả tốt trong nhiều benchmark. Những phương pháp này thường kết hợp detector với mô hình chuyển động, đặc trưng ngoại hình và thuật toán association.
+
+\textbf{Person ReID}\\
+Khôi phục định danh người nhằm so khớp danh tính của một người giữa các camera khác nhau. Các phương pháp ReID truyền thống dựa nhiều vào ngoại hình, màu sắc trang phục và đặc trưng học sâu từ ảnh crop người. Tuy nhiên, trong các kịch bản thực tế như nhà thông minh hoặc giám sát dài hạn, người dùng có thể thay áo, bị che khuất hoặc không có khuôn mặt rõ ràng. Khi đó, ReID chỉ dựa trên ngoại hình dễ tạo ra ID mới không cần thiết hoặc gán nhầm người.
+
+\textbf{Face Recognition \& Face Anti-Spoofing}\\
+Nhận diện khuôn mặt và xác thực khuôn mặt có thể được xem là một nhánh xác thực bổ trợ cho ReID dựa trên toàn thân và pose. Cụ thể, sau khi phát hiện khuôn mặt, hệ thống có thể đồng thời trích xuất embedding nhận diện khuôn mặt và tính điểm anti-spoofing cho từng khuôn mặt. Nếu hai module sử dụng các bounding box khác nhau, thuật toán IoU matching có thể được dùng để liên kết kết quả nhận diện và kết quả anti-spoofing tương ứng với cùng một khuôn mặt. Cơ chế này cho phép hệ thống xử lý nhiều người trong cùng một khung hình, tức là có thể nhận diện và kiểm tra giả mạo đồng thời cho nhiều khuôn mặt. Tuy nhiên, do khuôn mặt có thể bị che khuất, quay nghiêng, đeo khẩu trang hoặc không xuất hiện rõ trong camera giám sát, nhánh face recognition--anti-spoofing không nên thay thế hoàn toàn ReID và pose-based reasoning. Thay vào đó, nó nên được sử dụng như một nguồn bằng chứng có độ tin cậy cao khi khuôn mặt đủ rõ, kết hợp với pose, tracklet, đặc trưng ngoại hình và ràng buộc không-thời gian để tăng tính ổn định của hệ thống định danh đa camera.
+
+\textbf{Spatio - temporal inference in systems}\\
+Suy luận không thời gian là hướng tiếp cận sử dụng thông tin về vị trí, thời gian và quan hệ giữa các vùng quan sát để cải thiện quyết định của hệ thống. Trong bài toán đa camera, không phải mọi chuyển tiếp giữa hai camera đều hợp lý. Ví dụ, nếu topology thực tế là cam01 → cam02 → cam03 → cam04, thì một người vừa biến mất ở cam01 khó có thể xuất hiện ở cam04 chỉ sau vài giây nếu không đi qua các camera trung gian.
+\end{multicols}
+
+
+\vspace{0.2cm}
+
+% ========= PHẦN 3 DATASET ====================
+\begin{multicols}{2}
+\section{Dữ liệu}
+\vspace{-0.6cm}
+
+\hspace*{0.5cm}\textbf{Tổng quan dữ liệu}\\
+Để xây dựng và đánh giá hệ thống CPose trong bài toán phân tích hành vi toàn cảnh theo thời gian thực, nhóm sử dụng dữ liệu kết hợp từ hai nhóm chính: dữ liệu công khai và dữ liệu tự thu thập trong môi trường thực tế. Mục tiêu của việc kết hợp này là bảo đảm dữ liệu có tính đa dạng về góc nhìn camera, tư thế người, điều kiện ánh sáng, mức độ che khuất, khoảng cách quan sát và số lượng người xuất hiện đồng thời trong cùng một khung hình.
+
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Dữ liệu công khai}\\
+Đối với bài toán nhận diện hoạt động dựa trên khung xương người, nhóm tham khảo các bộ dữ liệu NTU RGB+D và Toyota Smarthome. NTU RGB+D cung cấp dữ liệu RGB, depth, infrared và skeleton 3D cho nhiều lớp hành động khác nhau, thường được sử dụng để đánh giá các mô hình skeleton-based action recognition như ST-GCN, CTR-GCN, BlockGCN và SkateFormer~\cite{shahroudy2016ntu,yan2018stgcn,chen2021ctrgcn,zhou2024blockgcn,do2024skateformer}. Trong khi đó, Toyota Smarthome tập trung vào hoạt động sinh hoạt hằng ngày trong môi trường nhà thông minh, có nhiều góc nhìn camera, hiện tượng che khuất, mất cân bằng lớp và các hành động có chuyển động nhỏ~\cite{das2019toyota}. Đây là bộ dữ liệu có bối cảnh gần với mục tiêu ứng dụng của CPose hơn so với các bộ dữ liệu hành động tổng quát.
+
+Đối với bài toán tái định danh người, nhóm tham khảo các bộ dữ liệu và khảo sát liên quan đến Market-1501, MARS và video-based ReID~\cite{zheng2015market1501,ye2021deep}. Các dữ liệu này hỗ trợ việc định hình cách tổ chức gallery, query, tracklet và cách đánh giá khả năng duy trì danh tính giữa các camera. Đối với nhánh nhận diện khuôn mặt và chống giả mạo, nhóm tham khảo FaceNet, ArcFace và các triển khai face anti-spoofing nhẹ như MiniFASNet hoặc face-antispoof-onnx~\cite{schroff2015facenet,deng2019arcface,liu2021minifasnet,faceantispoofonnx}.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Dữ liệu tự thu thập}\\
+Bên cạnh dữ liệu công khai, nhóm tiến hành thu thập dữ liệu thực tế từ hệ thống camera RTSP trong môi trường trong nhà. Hệ thống gồm nhiều camera được đặt tại các vị trí khác nhau, ký hiệu là Cam1, Cam2, Cam3 và Cam4. Cam1 được dùng cho bài toán nhận diện khuôn mặt và chống giả mạo tại khu vực đầu vào; Cam2, Cam3 và Cam4 phục vụ theo dõi, tái định danh người và nhận diện hoạt động ở các vùng quan sát bên trong.
+
+
+\vspace{0.2cm}
+\begin{center}
+\captionof{table}{Thống kê nguồn dữ liệu sử dụng trong CPose}
+\label{tab:cpose_dataset_summary}
+\renewcommand{\arraystretch}{1.2}
+\scriptsize
+\begin{tabular}{|p{2.6cm}|p{1.8cm}|p{2.2cm}|p{1.4cm}|}
+\hline
+\textbf{Nguồn dữ liệu} & \textbf{Quy mô} & \textbf{Dạng dữ liệu} & \textbf{Mục đích} \\
+\hline
+NTU RGB+D & 56,880 / 114,480 video & RGB-D, skeleton & ADL tham khảo \\
+\hline
+Toyota Smarthome & 16,115 clip & RGB-D, skeleton & ADL trong nhà \\
+\hline
+Market-1501 / MARS & Ảnh / tracklet & Person crop & ReID \\
+\hline
+CPose self-collect & Đang cập nhật & RGB, bbox, pose & Kiểm thử thực tế \\
+\hline
+Face self-collect & Đang cập nhật & Face crop & Face ID / spoof \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Nhãn dữ liệu}\\
+Trong phạm vi hiện tại, CPose tập trung vào tám nhãn hoạt động chính: \textit{standing}, \textit{sitting}, \textit{walking}, \textit{lying\_down}, \textit{falling}, \textit{reaching}, \textit{bending} và \textit{unknown}. Các nhãn này được lựa chọn vì có tính ứng dụng cao trong giám sát an toàn tại nhà, chăm sóc người cao tuổi và phát hiện tình huống bất thường.
+
+Đối với ReID, nhãn dữ liệu được tổ chức theo danh tính người. Mỗi người được gán một mã định danh toàn cục, ví dụ ID001, ID002 hoặc ID003. Các tracklet của cùng một người ở các camera khác nhau được kiểm tra thủ công để hạn chế sai nhãn. Đối với face anti-spoofing, dữ liệu được chia thành hai nhóm: \textit{live} và \textit{spoof}. Nhóm \textit{live} gồm khuôn mặt thật được camera ghi lại trực tiếp, còn nhóm \textit{spoof} gồm ảnh in, ảnh màn hình điện thoại hoặc video phát lại.
+
+\vspace{0.2cm}
+\begin{center}
+\captionof{table}{Các lớp hoạt động trong tập dữ liệu CPose}
+\label{tab:cpose_adl_classes}
+\renewcommand{\arraystretch}{1.2}
+\scriptsize
+\begin{tabular}{|c|p{2.2cm}|p{4.5cm}|}
+\hline
+\textbf{STT} & \textbf{Nhãn} & \textbf{Mô tả} \\
+\hline
+1 & standing & Người đứng thẳng hoặc gần như đứng yên \\
+\hline
+2 & sitting & Người ở tư thế ngồi, đầu gối gập rõ \\
+\hline
+3 & walking & Người di chuyển qua nhiều frame liên tiếp \\
+\hline
+4 & lying\_down & Thân người gần song song với mặt đất \\
+\hline
+5 & falling & Chuyển nhanh sang tư thế nghiêng hoặc nằm \\
+\hline
+6 & reaching & Tay đưa cao hoặc vươn khỏi vùng thân \\
+\hline
+7 & bending & Thân người cúi xuống, vận tốc thấp \\
+\hline
+8 & unknown & Không đủ keypoint hoặc tư thế không rõ \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Tiền xử lý dữ liệu}\\
+Quá trình tiền xử lý được thực hiện nhằm chuẩn hóa dữ liệu đầu vào cho các module trong hệ thống. Trước hết, các khung hình được trích xuất từ video hoặc luồng RTSP theo tốc độ cố định. Sau đó, YOLOv11 được sử dụng để phát hiện người, trong khi YOLOv11-pose hoặc OpenPose được sử dụng để trích xuất 17 keypoints theo định dạng COCO~\cite{yolov11,cao2017openpose}. Mỗi keypoint gồm tọa độ $(x,y)$ và độ tin cậy tương ứng.
+
+
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Chia tập dữ liệu}\\
+Dữ liệu tự thu thập được chia thành ba tập: huấn luyện, xác thực và kiểm tra. Để tránh rò rỉ dữ liệu giữa các tập, việc chia dữ liệu được thực hiện theo video hoặc theo người, thay vì chia ngẫu nhiên theo từng frame. Cách chia này giúp bảo đảm các frame gần giống nhau trong cùng một đoạn video không xuất hiện đồng thời ở cả tập huấn luyện và tập kiểm tra.
+
+Trong giai đoạn đầu, nhóm sử dụng tỉ lệ 70\% cho huấn luyện, 15\% cho xác thực và 15\% cho kiểm tra. Tập huấn luyện dùng để tối ưu mô hình, tập xác thực dùng để điều chỉnh siêu tham số, còn tập kiểm tra chỉ được dùng ở giai đoạn đánh giá cuối cùng.
+
+\vspace{0.2cm}
+\begin{center}
+\captionof{table}{Tỉ lệ chia dữ liệu tự thu thập}
+\label{tab:cpose_split}
+\renewcommand{\arraystretch}{1.2}
+\scriptsize
+\begin{tabular}{|p{2.8cm}|c|c|c|}
+\hline
+\textbf{Loại dữ liệu} & \textbf{Train} & \textbf{Val} & \textbf{Test} \\
+\hline
+Video ADL & 70\% & 15\% & 15\% \\
+\hline
+Tracklet ReID & 70\% & 15\% & 15\% \\
+\hline
+Ảnh khuôn mặt live & 70\% & 15\% & 15\% \\
+\hline
+Ảnh khuôn mặt spoof & 70\% & 15\% & 15\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Định dạng dữ liệu đầu ra}\\
+Sau tiền xử lý, dữ liệu được lưu theo từng video hoặc từng camera. Mỗi mẫu gồm frame gốc, bounding box người, keypoints, nhãn ADL, track ID tạm thời, global ID nếu đã được tái định danh, face ID và spoof score nếu phát hiện được khuôn mặt. Cấu trúc này cho phép tái sử dụng dữ liệu cho nhiều mục đích: huấn luyện ADL, đánh giá tracking, đánh giá ReID và kiểm thử face anti-spoofing.
+
+\vspace{0.2cm}
+\begin{center}
+\captionof{table}{Định dạng dữ liệu sau tiền xử lý}
+\label{tab:cpose_output_format}
+\renewcommand{\arraystretch}{1.2}
+\scriptsize
+\begin{tabular}{|p{2.3cm}|p{2.2cm}|p{3.1cm}|}
+\hline
+\textbf{Trường} & \textbf{Kiểu} & \textbf{Ý nghĩa} \\
+\hline
+frame\_id & Integer & Chỉ số frame trong video \\
+\hline
+camera\_id & String & Mã camera quan sát \\
+\hline
+bbox & Float[4] & Tọa độ người $(x_1,y_1,x_2,y_2)$ \\
+\hline
+keypoints & Float[17,3] & 17 keypoint COCO \\
+\hline
+track\_id & Integer & ID tạm thời trong camera \\
+\hline
+global\_id & Integer/String & ID toàn cục sau ReID \\
+\hline
+adl\_label & String & Nhãn hoạt động \\
+\hline
+face\_id & Integer/String & ID khuôn mặt \\
+\hline
+spoof\_score & Float & Điểm live/spoof \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.2cm}
+
+% ========= PHẦN 4 PHƯƠNG PHÁP NGHIÊN CỨU ĐỀ XUẤT ====================
+\section{Phương pháp nghiên cứu đề xuất}
+\begin{figure*}[t] % Bắt đầu môi trường hình ảnh tràn 2 cột phía trên trang [cite: 131]
+\centering % Căn giữa toàn bộ sơ đồ trong trang [cite: 133]
+\resizebox{1\textwidth}{!}{% % Điều chỉnh kích thước sơ đồ vừa khít chiều ngang văn bản [cite: 276]
+\begin{tikzpicture}[ % Bắt đầu vẽ sơ đồ với gói TikZ
+    font=\scriptsize\sffamily, % Thiết lập font chữ nhỏ và không chân cho sơ đồ
+    >=Stealth, % Sử dụng kiểu mũi tên nhọn Stealth hiện đại
+    block/.style={ % Định nghĩa phong cách cho các khối chức năng chính
+        draw=black!60, % Vẽ viền màu đen nhạt
+        rounded corners=2pt, % Bo góc nhẹ cho các khối
+        line width=0.55pt, % Độ dày đường viền khối
+        align=center, % Căn giữa nội dung chữ bên trong khối
+        minimum height=1cm, % Chiều cao tối thiểu của mỗi khối
+        text width=2cm, % Chiều rộng cố định cho nội dung chữ
+        fill=white % Màu nền mặc định của khối là trắng
+    },
+    sideblock/.style={ % Phong cách cho các khối ở hai cột biên (Data/Metrics)
+        draw=black!60, % Viền đen nhạt
+        rounded corners=2pt, % Bo góc khối biên
+        line width=0.55pt, % Độ dày viền
+        align=center, % Căn giữa chữ
+        minimum height=1cm, % Chiều cao khối biên
+        text width=2cm, % Chiều rộng khối biên
+        fill=white % Màu nền trắng
+    },
+    panel/.style={ % Phong cách cho các khung nền phân tầng (Layers)
+        draw=#1!50, % Màu viền khung theo tham số truyền vào
+        dashed, % Sử dụng nét đứt cho khung phân tầng
+        rounded corners=5pt, % Bo góc lớn cho khung nền
+        line width=0.60pt, % Độ dày viền khung
+        fill=#1!4, % Màu nền mờ cho khung để phân biệt vùng
+        inner sep=15pt % Khoảng cách đệm bên trong khung
+    },
+    panel/.default=white, % Màu mặc định cho khung là màu xám
+    line/.style={ % Phong cách cho đường kẻ luồng dữ liệu chính
+        ->, % Có mũi tên chỉ hướng
+        line width=0.65pt, % Độ dày đường kẻ
+        draw=black!70, % Màu sắc đường kẻ
+        shorten >=1pt, % Thu ngắn đầu mũi tên 1pt để tránh dính khối
+        shorten <=1pt % Thu ngắn đuôi mũi tên 1pt
+    },
+    dashline/.style={ % Phong cách cho đường kẻ tương tác xuyên tầng
+        ->, % Có mũi tên chỉ hướng
+        dashed, % Sử dụng nét đứt cho luồng tương tác phụ
+        line width=0.55pt, % Độ dày đường nét đứt
+        draw=black!50, % Màu sắc nét đứt
+        shorten >=1pt, % Thu ngắn đầu mũi tên
+        shorten <=1pt % Thu ngắn đuôi mũi tên
+    },
+    lbl/.style={ % Phong cách cho các nhãn mô tả trên mũi tên
+        font=\tiny\itshape, % Chữ cực nhỏ và in nghiêng
+        text=black!65, % Màu sắc chữ nhãn
+        inner sep=1pt % Khoảng cách đệm cho nhãn
+    },
+    title/.style={ % Phong cách cho tiêu đề của từng tầng Layer
+        font=\scriptsize\bfseries\sffamily, % Chữ đậm và sử dụng font sans-serif
+        fill=white, % Nền tiêu đề màu trắng để nổi bật trên khung nét đứt
+        inner sep=1.5pt, % Khoảng cách đệm cho tiêu đề
+        anchor=north west % Điểm neo ở góc trên bên trái
+    }
+]
+
+% =====================================================
+% COORDINATES (Thiết lập hệ tọa độ cho sơ đồ)
+% =====================================================
+\def\xData{-0.3} % Tọa độ trục X cho cột dữ liệu DATA
+\def\xOne{2.8} % Tọa độ trục X cho cột chức năng đầu tiên
+\def\xTwo{5.8} % Tọa độ trục X cho cột chức năng thứ hai
+\def\xThree{8.7} % Tọa độ trục X cho cột chức năng thứ ba
+\def\xFour{11.7} % Tọa độ trục X cho cột chức năng thứ tư
+\def\xMetric{14.7} % Tọa độ trục X cho cột chỉ số đánh giá METRICS
+
+\def\yProduct{0} % Tọa độ trục Y cho tầng PRODUCT LAYER
+\def\yCore{-1.85} % Tọa độ trục Y cho tầng AI CORE
+\def\yResearch{-3.70} % Tọa độ trục Y cho tầng RESEARCH LAYER
+
+% =====================================================
+% LEFT COLUMN: DATA (Nguồn dữ liệu đầu vào)
+% =====================================================
+\node[sideblock, fill=blue!7] (d1) at (\xData,\yProduct) {
+    \textbf{RTSP Test}\\ % Nguồn video thời gian thực phục vụ kiểm thử [cite: 132, 284]
+    Live Stream
+};
+
+\node[sideblock, fill=blue!7] (d2) at (\xData,\yCore) {
+    \textbf{Model .pt}\\ % Kho lưu trữ trọng số mô hình đã huấn luyện
+    Weights
+};
+
+\node[sideblock, fill=blue!7] (d3) at (\xData,\yResearch) {
+    \textbf{ADL Dataset}\\ % Tập dữ liệu hoạt động thường ngày cho nghiên cứu
+    Train / Val
+};
+
+% =====================================================
+% ROW 1: PRODUCT LAYER (Pipeline vận hành thực tế)
+% =====================================================
+\node[block, fill=cyan!8] (p1) at (\xOne,\yProduct) {
+    \textbf{Stream Input}\\ % Mô-đun thu nhận luồng video RTSP [cite: 132, 268]
+    RTSP
+};
+
+\node[block, fill=cyan!8] (p2) at (\xTwo,\yProduct) {
+    \textbf{Inference}\\ % Thực thi suy luận mô hình qua ONNX Runtime [cite: 276, 284]
+    ONNX Runtime
+};
+
+\node[block, fill=cyan!8] (p3) at (\xThree,\yProduct) {
+    \textbf{Backend}\\ % Hệ thống xử lý trung tâm Flask API
+    Flask API
+};
+
+\node[block, fill=cyan!8] (p4) at (\xFour,\yProduct) {
+    \textbf{Dashboard}\\ % Giao diện hiển thị thời gian thực qua Socket.IO
+    Socket.IO
+};
+
+% =====================================================
+% ROW 2: AI CORE (Các mô-đun AI cốt lõi)
+% =====================================================
+\node[block, fill=orange!10] (c1) at (\xOne,\yCore) {
+    \textbf{Detection}\\ % Mô-đun nhận diện đối tượng YOLOv11 [cite: 132, 268]
+    YOLOv11
+};
+
+\node[block, fill=orange!10] (c2) at (\xTwo,\yCore) {
+    \textbf{Tracking}\\ % Bộ theo dấu đối tượng ByteTrack [cite: 132, 268]
+    ByteTrack
+};
+
+\node[block, fill=orange!10] (c3) at (\xThree,\yCore) {
+    \textbf{Pose / ADL}\\ % Ước lượng tư thế và phân loại hành động [cite: 192, 286]
+    YOLOv11-Pose
+};
+
+\node[block, fill=orange!10] (c4) at (\xFour,\yCore) {
+    \textbf{Identity}\\ % Tìm kiếm định danh qua thư viện FAISS
+    FAISS
+};
+
+% =====================================================
+% ROW 3: RESEARCH LAYER (Khung thực nghiệm nghiên cứu)
+% =====================================================
+\node[block, fill=violet!8] (r1) at (\xOne,\yResearch) {
+    \textbf{Data Loader}\\ % Trình nạp và phân tách dữ liệu nghiên cứu
+    Short Video
+};
+
+\node[block, fill=violet!8] (r2) at (\xTwo,\yResearch) {
+    \textbf{Annotation}\\ % Xây dựng nhãn dữ liệu định dạng JSON
+    JSON Label
+};
+
+\node[block, fill=violet!8] (r3) at (\xThree,\yResearch) {
+    \textbf{Experiment}\\ % Thực hiện các thử nghiệm bóc tách thành phần (Ablation)
+    Ablation
+};
+
+\node[block, fill=violet!8] (r4) at (\xFour,\yResearch) {
+    \textbf{Registry}\\ % Quản lý và lưu trữ mô hình đạt kết quả tốt nhất
+    Best Model
+};
+
+% =====================================================
+% RIGHT COLUMN: METRICS (Chỉ số đánh giá hệ thống)
+% =====================================================
+\node[sideblock, fill=red!7] (m1) at (\xMetric,\yProduct) {
+    \textbf{Runtime}\\ % Đánh giá tốc độ xử lý khung hình FPS [cite: 270, 293]
+    FPS / Latency
+};
+
+\node[sideblock, fill=red!7] (m2) at (\xMetric,\yCore) {
+    \textbf{ReID}\\ % Đánh giá độ chính xác định danh IDF1 [cite: 270, 306]
+    mAP / IDF1
+};
+
+\node[sideblock, fill=red!7] (m3) at (\xMetric,\yResearch) {
+    \textbf{ADL Score}\\ % Độ chính xác phân loại hành động Accuracy [cite: 291, 306]
+    Accuracy
+};
+
+% =====================================================
+% BACKGROUND PANELS (Khung nền phân chia các tầng)
+% =====================================================
+\begin{scope}[on background layer]
+    \node[panel=blue, fit=(d1)(d2)(d3)] (dataPanel) {}; % Khung bao cho cột dữ liệu DATA
+    \node[panel=cyan, fit=(p1)(p2)(p3)(p4)] (prodPanel) {}; % Khung bao cho tầng sản phẩm
+    \node[panel=orange, fit=(c1)(c2)(c3)(c4)] (corePanel) {}; % Khung bao cho tầng thuật toán lõi
+    \node[panel=violet, fit=(r1)(r2)(r3)(r4)] (resPanel) {}; % Khung bao cho tầng nghiên cứu
+    \node[panel=red, fit=(m1)(m2)(m3)] (metricPanel) {}; % Khung bao cho cột chỉ số đánh giá
+\end{scope}
+
+% =====================================================
+% PANEL TITLES (Tiêu đề nằm bên trong mỗi tầng)
+% =====================================================
+\node[title, text=blue!70!black] 
+at ($(dataPanel.north west)+(0.10,-0.08)$) {DATA}; % Tiêu đề tầng Dữ liệu
+
+\node[title, text=cyan!50!black] 
+at ($(prodPanel.north west)+(0.10,-0.08)$) {PRODUCT LAYER}; % Tiêu đề tầng Sản phẩm
+
+\node[title, text=orange!75!black] 
+at ($(corePanel.north west)+(0.10,-0.08)$) {AI CORE}; % Tiêu đề tầng Thuật toán lõi
+
+\node[title, text=violet!75!black] 
+at ($(resPanel.north west)+(0.10,-0.08)$) {RESEARCH LAYER}; % Tiêu đề tầng Nghiên cứu
+
+\node[title, text=red!70!black] 
+at ($(metricPanel.north west)+(0.10,-0.08)$) {METRICS}; % Tiêu đề tầng Chỉ số
+
+% =====================================================
+% HORIZONTAL FLOWS (Luồng dữ liệu ngang trong các tầng)
+% =====================================================
+
+% Luồng tầng sản phẩm
+\draw[line] (d1) -- node[above,lbl]{stream} (p1); % Truyền luồng stream từ camera vào hệ thống [cite: 268]
+\draw[line] (p1) -- node[above,lbl]{frame} (p2); % Chuyển đổi luồng thành các khung hình frame để suy luận
+\draw[line] (p2) -- node[above,lbl]{event} (p3); % Trích xuất sự kiện event từ suy luận AI [cite: 287]
+\draw[line] (p3) -- node[above,lbl]{call} (p4); % Cập nhật trạng thái state lên giao diện người dùng
+\draw[line] (p4) -- node[above,lbl]{log} (m1); % Ghi nhật ký log để tính toán FPS vận hành [cite: 306]
+
+% Luồng tầng thuật toán AI Core
+\draw[line] (d2) -- node[above,lbl]{model} (c1); % Nạp trọng số mô hình vào bộ nhận diện
+\draw[line] (c1) -- node[above,lbl]{bbox} (c2); % Truyền hộp bao đối tượng bbox cho bộ theo dấu
+\draw[line] (c2) -- node[above,lbl]{track} (c3); % Duy trì track theo dấu cho bộ ước lượng tư thế
+\draw[line] (c3) -- node[above,lbl]{embed} (c4); % Trích xuất đặc trưng embed để định danh
+\draw[line] (c4) -- node[above,lbl]{eval} (m2); % Đưa kết quả đi đánh giá độ chính xác IDF1 [cite: 306]
+
+% Luồng tầng nghiên cứu
+\draw[line] (d3) -- node[above,lbl]{data} (r1); % Cung cấp dữ liệu thô cho bộ nạp nghiên cứu
+\draw[line] (r1) -- node[above,lbl]{sample} (r2); % Trích xuất các mẫu sample để gán nhãn
+\draw[line] (r2) -- node[above,lbl]{label} (r3); % Sử dụng nhãn label cho các thử nghiệm mô hình
+\draw[line] (r3) -- node[above,lbl]{result} (r4); % Thu thập kết quả result thực nghiệm
+\draw[line] (r4) -- node[above,lbl]{report} (m3); % Xuất báo cáo report chỉ số Accuracy
+
+% =====================================================
+% MINIMAL CROSS-LAYER FLOWS (Tương tác xuyên tầng)
+% =====================================================
+\draw[dashline] (p2.south) -- node[right,lbl]{call} (c2.north); % Product gọi chức năng tracking từ Core
+\draw[dashline] (p3.south) -- node[right,lbl]{state} (c3.north); % Cập nhật trạng thái hành vi từ Core lên Backend
+\draw[dashline] (r4.north) -- node[right,lbl]{deploy} (c4.south); % Triển khai mô hình nghiên cứu tốt nhất vào Core vận hành
+
+\end{tikzpicture}%
+}
+\caption{Kiến trúc của hệ thống CPose} % Chú thích tổng quát sơ đồ
+\label{fig:cpose_minimal_architecture} % Nhãn tham chiếu
+\end{figure*}
+% ========= PHẦN 5 PHƯƠNG PHÁP ĐÁNH GIÁ ====================
+\section{Phương pháp đánh giá}
+\vspace{-0.6cm}
+
+\hspace*{0.5cm}\textbf{Nguyên tắc đánh giá}\\
+Hệ thống CPose được đánh giá ở hai mức: đánh giá từng module riêng lẻ và đánh giá toàn bộ pipeline đầu cuối. Đánh giá từng module giúp xác định điểm mạnh và điểm yếu của từng thành phần như phát hiện người, tracking, ReID, face anti-spoofing và ADL. Đánh giá đầu cuối phản ánh khả năng vận hành thực tế của hệ thống khi xử lý đồng thời nhiều luồng RTSP.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Đánh giá phát hiện người}\\
+Đối với module phát hiện người, các chỉ số được sử dụng gồm Precision, Recall, mAP@0.5 và mAP@0.5:0.95~\cite{lin2014coco}. Precision phản ánh tỉ lệ phát hiện đúng trong số các detection được mô hình trả về, trong khi Recall phản ánh khả năng phát hiện đầy đủ các người có trong ảnh:
+\begin{equation}
+Precision=\frac{TP}{TP+FP},
+\end{equation}
+\begin{equation}
+Recall=\frac{TP}{TP+FN}.
+\end{equation}
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Đánh giá tracking}\\
+Đối với theo dõi đa đối tượng, nhóm sử dụng các chỉ số MOTA, IDF1 và số lần ID Switch~\cite{bernardin2008mota}. MOTA phản ánh tổng thể lỗi false positive, false negative và ID switch:
+\begin{equation}
+MOTA=1-\frac{\sum_t(FN_t+FP_t+IDSW_t)}{\sum_t GT_t}.
+\label{eq:mota}
+\end{equation}
+IDF1 được dùng để đánh giá mức độ nhất quán định danh theo thời gian. Đây là chỉ số quan trọng vì hệ thống CPose không chỉ cần phát hiện người mà còn cần duy trì ID ổn định qua nhiều frame.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Đánh giá ReID xuyên camera}\\
+Đối với ReID, các chỉ số chính gồm Rank-1, Rank-5, mAP và False Match Rate~\cite{zheng2015market1501,ye2021deep}. Rank-1 cho biết tỉ lệ truy vấn mà kết quả đúng đứng ở vị trí đầu tiên trong danh sách gallery. Trong bối cảnh CPose, ngoài Rank-1, nhóm còn theo dõi ID Switch liên camera và UNK Rate để đánh giá khả năng duy trì Global ID khi người di chuyển qua nhiều camera.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Đánh giá face recognition và anti-spoofing}\\
+Đối với nhận diện khuôn mặt, nhóm sử dụng Accuracy, FAR và FRR. FAR là tỉ lệ chấp nhận sai người không hợp lệ, còn FRR là tỉ lệ từ chối sai người hợp lệ. Đối với anti-spoofing, hệ thống sử dụng APCER, BPCER và ACER. Trong đó, ACER được tính bởi:
+\begin{equation}
+ACER=\frac{APCER+BPCER}{2}.
+\label{eq:acer}
+\end{equation}
+Một hệ thống an ninh tốt cần đồng thời có FAR thấp và ACER thấp, vì chỉ nhận diện đúng danh tính là chưa đủ nếu hệ thống vẫn có thể bị đánh lừa bằng ảnh hoặc video replay.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Đánh giá ADL và té ngã}\\
+Đối với nhận diện hoạt động, nhóm sử dụng Accuracy, Macro-F1 và Confusion Matrix. Macro-F1 được ưu tiên vì dữ liệu ADL thường mất cân bằng giữa các lớp, ví dụ số mẫu đứng và đi bộ thường nhiều hơn số mẫu té ngã. Đối với phát hiện té ngã, Recall được xem là chỉ số quan trọng vì bỏ sót té ngã có thể gây hậu quả nghiêm trọng. Tuy nhiên, Precision cũng cần được duy trì đủ cao để tránh cảnh báo sai quá nhiều.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Đánh giá thời gian thực}\\
+Đối với hệ thống thời gian thực, nhóm đánh giá FPS, độ trễ trung bình, độ trễ cực đại, mức sử dụng CPU/GPU/RAM và độ ổn định RTSP. FPS được tính bởi:
+\begin{equation}
+FPS=\frac{N_{frames}}{T_{process}}.
+\label{eq:fps}
+\end{equation}
+Độ trễ đầu cuối được đo từ thời điểm frame được nhận từ camera đến thời điểm kết quả hiển thị trên dashboard hoặc được ghi vào log sự kiện.
+
+\vspace{0.2cm}
+\begin{center}
+\captionof{table}{Chỉ số đánh giá hệ thống CPose}
+\label{tab:evaluation_metrics}
+\renewcommand{\arraystretch}{1.2}
+\scriptsize
+\begin{tabular}{|p{2.4cm}|p{3.2cm}|p{2.0cm}|}
+\hline
+\textbf{Hạng mục} & \textbf{Chỉ số} & \textbf{Mục tiêu} \\
+\hline
+Phát hiện người & Precision, Recall, mAP & Cao, ổn định \\
+\hline
+Tracking & MOTA, IDF1, IDSW & IDSW thấp \\
+\hline
+ReID & Rank-1, mAP, UNK Rate & Rank-1 cao \\
+\hline
+Face ID & Accuracy, FAR, FRR & FAR thấp \\
+\hline
+Anti-spoofing & APCER, BPCER, ACER & ACER thấp \\
+\hline
+ADL & Accuracy, Macro-F1 & F1 cao \\
+\hline
+Té ngã & Precision, Recall, F1 & Recall cao \\
+\hline
+Runtime & FPS, latency, RAM & Realtime \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.2cm}
+
+% ========= PHẦN 6 PHÂN TÍCH HIỆU SUẤT VÀ KẾT QUẢ ====================
+\section{Phân tích hiệu suất \& Kết quả}
+\vspace{-0.6cm}
+
+\hspace*{0.5cm}\textbf{Kết quả kỳ vọng}\\
+Ở giai đoạn hiện tại, hệ thống CPose được định hướng đánh giá theo hai nhóm kết quả: kết quả chức năng và kết quả hiệu năng. Kết quả chức năng thể hiện việc hệ thống có thực hiện đúng các nhiệm vụ như phát hiện người, gán ID, nhận diện hoạt động và phát hiện spoofing hay không. Kết quả hiệu năng thể hiện khả năng xử lý thời gian thực trên nhiều camera.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Phân tích phát hiện và tracking}\\
+Với detector YOLOv11, hệ thống được kỳ vọng phát hiện ổn định người trong các điều kiện quan sát thông thường. Tuy nhiên, chất lượng detection có thể suy giảm khi người xuất hiện quá nhỏ, bị che khuất nhiều hoặc ánh sáng quá yếu. Tracking bằng ByteTrack hoặc DeepSORT giúp duy trì ID cục bộ trong từng camera, nhưng vẫn có thể xảy ra ID switch khi hai người đi sát nhau hoặc giao cắt quỹ đạo.
+
+Đối với CPose, tracking không chỉ phục vụ hiển thị quỹ đạo mà còn là đầu vào quan trọng cho ADL và ReID. Nếu track ID không ổn định, chuỗi keypoint dùng cho ADL có thể bị trộn giữa nhiều người, dẫn đến phân loại sai. Vì vậy, IDF1 và ID Switch là các chỉ số cần được theo dõi chặt chẽ trong quá trình thực nghiệm.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Phân tích ReID và Global ID}\\
+ReID xuyên camera là một trong những phần khó nhất của hệ thống vì đặc trưng ngoại hình có thể thay đổi mạnh giữa các camera. Những yếu tố như góc nhìn, ánh sáng, khoảng cách và che khuất đều làm giảm độ tương đồng embedding. Do đó, hệ thống không nên chỉ dựa vào embedding đơn lẻ mà cần kết hợp temporal voting, camera topology và spatio-temporal gating.
+
+Trong thí nghiệm kỳ vọng, Global ID được xem là đúng nếu cùng một người được duy trì cùng một ID khi di chuyển từ camera này sang camera khác. Một lỗi nghiêm trọng là cùng một người bị tạo nhiều ID khác nhau hoặc hai người khác nhau bị gán chung một ID. Các lỗi này được thống kê thông qua ID Switch liên camera và False Match Rate.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Phân tích ADL}\\
+Với ADL dựa trên luật hình học, hệ thống có thể nhận diện tương đối tốt các trạng thái có khác biệt tư thế rõ ràng như đứng, ngồi, nằm và đi bộ. Tuy nhiên, các hành động gần nhau như cúi người, với tay hoặc chuyển tiếp giữa đứng và ngồi có thể gây nhầm lẫn. Nguyên nhân là các luật hình học thủ công chưa mô hình hóa đủ quan hệ thời gian dài và sự khác biệt giữa từng người.
+
+Về dài hạn, kết quả ADL có thể được cải thiện bằng cách thay bộ luật thủ công bằng các mô hình skeleton-based action recognition như ST-GCN, CTR-GCN hoặc BlockGCN~\cite{yan2018stgcn,chen2021ctrgcn,zhou2024blockgcn}. Các mô hình này có khả năng học quan hệ không gian giữa các khớp và quan hệ thời gian giữa các frame, phù hợp hơn với dữ liệu pose sequence.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Phân tích face anti-spoofing}\\
+Nhánh face anti-spoofing giúp tăng độ an toàn cho hệ thống khi nhận diện khuôn mặt. Nếu chỉ dùng face recognition, hệ thống có thể bị tấn công bằng ảnh in hoặc màn hình điện thoại. Khi bổ sung anti-spoofing, face embedding chỉ được đưa vào bước nhận diện nếu khuôn mặt vượt qua ngưỡng live score. Điều này làm giảm nguy cơ chấp nhận sai, đặc biệt tại camera đầu vào.
+
+Tuy nhiên, anti-spoofing có thể bị ảnh hưởng bởi điều kiện ánh sáng, độ phân giải mặt và chuyển động nhanh. Vì vậy, hệ thống cần voting nhiều frame thay vì ra quyết định chỉ từ một frame đơn lẻ.
+
+\vspace{0.2cm}
+\begin{center}
+\captionof{table}{Mục tiêu hiệu suất kỳ vọng của CPose}
+\label{tab:expected_results}
+\renewcommand{\arraystretch}{1.2}
+\scriptsize
+\begin{tabular}{|p{3.0cm}|p{2.5cm}|p{2.0cm}|}
+\hline
+\textbf{Hạng mục} & \textbf{Chỉ số} & \textbf{Mục tiêu} \\
+\hline
+Phát hiện người & mAP@0.5 & $\geq 0.80$ \\
+\hline
+Tracking & ID Switch & Thấp \\
+\hline
+ReID xuyên camera & Rank-1 & $\geq 80\%$ \\
+\hline
+Face anti-spoofing & ACER & Thấp \\
+\hline
+ADL cơ bản & Accuracy & $\geq 80\%$ \\
+\hline
+Phát hiện té ngã & Recall & $\geq 90\%$ \\
+\hline
+Runtime & FPS/camera & $\geq 15$ FPS \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.2cm}
+
+% ========= PHẦN 7 BÀN LUẬN ====================
+\section{Bàn luận}
+\vspace{-0.6cm}
+
+\hspace*{0.5cm}\textbf{Ưu điểm của hướng tiếp cận}\\
+Hướng tiếp cận của CPose có ưu điểm là kết hợp nhiều nguồn thông tin thay vì phụ thuộc vào một tín hiệu duy nhất. Face recognition có độ tin cậy cao khi khuôn mặt rõ; ReID toàn thân hữu ích khi khuôn mặt không xuất hiện; pose giúp nhận diện hành vi và hỗ trợ định danh trong một số trường hợp; còn spatio-temporal gating giúp loại bỏ các liên kết phi lý giữa các camera. Sự kết hợp này phù hợp với môi trường thực tế, nơi từng module riêng lẻ đều có thể gặp lỗi.
+
+Một ưu điểm khác là kiến trúc Master--Slave giúp kiểm soát việc tạo Global ID. Nếu mọi camera đều có quyền tạo ID mới, hệ thống dễ sinh nhiều ID cho cùng một người. Khi chỉ camera Master hoặc camera tin cậy cao được tạo ID, còn camera Slave chủ yếu xác minh và kế thừa ID, hệ thống có thể giảm nhiễu định danh.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Hạn chế hiện tại}\\
+Hạn chế đầu tiên nằm ở dữ liệu. Các bộ dữ liệu công khai như NTU RGB+D hoặc Toyota Smarthome có giá trị tham khảo, nhưng vẫn khác với môi trường triển khai thật của CPose. Camera trong nhà có thể có góc nhìn cao, ánh sáng yếu, độ phân giải thấp hoặc bị che khuất bởi vật thể. Vì vậy, dữ liệu tự thu thập đóng vai trò quyết định trong việc đánh giá thực tế.
+
+Hạn chế thứ hai là bộ phân loại ADL dựa trên luật. Cách tiếp cận này dễ giải thích, nhẹ và phù hợp cho giai đoạn đầu, nhưng khó bao quát các hành động phức tạp. Những hành động có biên độ nhỏ hoặc phụ thuộc vào đồ vật, chẳng hạn uống nước, lấy đồ hoặc cúi nhặt vật, cần mô hình học sâu hoặc kết hợp RGB với pose để nhận diện tốt hơn.
+
+Hạn chế thứ ba là ReID dựa trên ngoại hình có thể suy giảm khi người thay áo, bị che khuất hoặc ánh sáng giữa các camera khác nhau. Đây là lý do hệ thống cần kết hợp thêm face ID, pose, tracklet và ràng buộc topology camera.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Rủi ro triển khai thực tế}\\
+Một rủi ro quan trọng là độ trễ tích lũy khi nhiều module cùng chạy trên một thiết bị. Nếu detector, tracker, pose, ReID và face anti-spoofing đều chạy cho mọi frame, hệ thống có thể không đạt thời gian thực. Do đó, cần có chiến lược tối ưu như chạy detector theo chu kỳ, chỉ chạy face recognition khi có mặt rõ, chỉ chạy ReID khi tracklet đủ ổn định và sử dụng ONNX/FP16/INT8 để tăng tốc.
+
+Một rủi ro khác là vấn đề riêng tư. Hệ thống xử lý dữ liệu khuôn mặt, hành vi và định danh cá nhân, do đó cần có cơ chế bảo vệ dữ liệu, phân quyền truy cập và giới hạn lưu trữ evidence. Trong các phiên bản tiếp theo, nhóm cần bổ sung chính sách ẩn danh hoặc mã hóa dữ liệu nhạy cảm.
+
+
+\vspace{0.2cm}
+
+% ========= PHẦN 8 Ý NGHĨA KẾT QUẢ NGHIÊN CỨU ====================
+\section{Ý nghĩa kết quả nghiên cứu}
+\vspace{-0.6cm}
+
+\hspace*{0.5cm}\textbf{Ý nghĩa khoa học}\\
+Đề tài góp phần xây dựng một pipeline tổng hợp cho bài toán giám sát người trong môi trường đa camera. Thay vì chỉ giải quyết riêng lẻ từng bài toán như phát hiện người, ReID hoặc ADL, CPose đặt các bài toán này trong cùng một hệ thống thời gian thực. Điều này giúp nhóm có điều kiện đánh giá sự phụ thuộc giữa các module, ví dụ detection ảnh hưởng đến tracking, tracking ảnh hưởng đến ADL, còn ReID ảnh hưởng đến duy trì Global ID.
+
+Đề tài cũng cho thấy vai trò của pose trong các hệ thống giám sát hiện đại. Skeleton là biểu diễn gọn nhẹ, ít phụ thuộc hơn vào màu sắc quần áo và nền ảnh. Vì vậy, pose không chỉ dùng cho nhận diện hành động mà còn có thể hỗ trợ ReID và phát hiện tình huống bất thường.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Ý nghĩa thực tiễn}\\
+Về mặt ứng dụng, CPose hướng đến các hệ thống giám sát an toàn trong nhà, chăm sóc người cao tuổi, kiểm soát ra vào và cảnh báo bất thường. Hệ thống có thể trả lời đồng thời các câu hỏi: ai đang xuất hiện, người đó ở camera nào, đang làm gì và có sự kiện nguy hiểm hay không. Đây là mức thông tin cao hơn nhiều so với camera giám sát truyền thống chỉ ghi hình thụ động.
+
+Khi kết hợp face recognition với anti-spoofing, hệ thống có khả năng tăng độ an toàn ở khu vực đầu vào. Khi kết hợp ReID, tracking và ADL, hệ thống có thể duy trì theo dõi người trong không gian nhiều camera và phát hiện các hành vi cần chú ý như té ngã hoặc nằm bất động.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Ý nghĩa đào tạo và triển khai}\\
+Đề tài giúp nhóm làm chủ quy trình xây dựng hệ thống AI thực tế từ thu thập dữ liệu, xử lý video, triển khai mô hình, thiết kế API, lưu trữ sự kiện đến đánh giá hiệu năng. Đây là nền tảng quan trọng cho các hướng phát triển tiếp theo như Edge AI, AIoT, hệ thống giám sát thông minh và sản phẩm thị giác máy tính thương mại.
+
+\vspace{0.2cm}
+
+% ========= PHẦN 9 HƯỚNG PHÁT TRIỂN TƯƠNG LAI ====================
+\section{Hướng phát triển tương lai}
+\vspace{-0.6cm}
+
+\hspace*{0.5cm}\textbf{Mở rộng dữ liệu thực tế}\\
+Hướng phát triển quan trọng nhất là mở rộng dữ liệu tự thu thập. Nhóm cần ghi thêm dữ liệu ở nhiều thời điểm trong ngày, nhiều điều kiện ánh sáng, nhiều người khác nhau và nhiều tình huống che khuất. Dữ liệu nên được gán nhãn theo video hoặc tracklet để phục vụ huấn luyện ADL và ReID thực tế. Đối với face anti-spoofing, cần bổ sung thêm các kiểu tấn công như ảnh in chất lượng cao, màn hình điện thoại, màn hình máy tính bảng và video replay.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Nâng cấp ADL bằng mô hình học sâu}\\
+Trong giai đoạn tiếp theo, bộ phân loại ADL dựa trên luật có thể được thay bằng ST-GCN, CTR-GCN hoặc BlockGCN~\cite{yan2018stgcn,chen2021ctrgcn,zhou2024blockgcn}. Các mô hình này có khả năng học quan hệ giữa các khớp và quan hệ thời gian giữa các frame. Với dữ liệu đủ lớn, hệ thống có thể mở rộng từ các trạng thái cơ bản sang các hoạt động phức tạp hơn như uống nước, dùng điện thoại, mở cửa, nhặt đồ hoặc đi lên cầu thang.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Cải thiện ReID xuyên camera}\\
+ReID có thể được cải thiện bằng cách thay thế đặc trưng màu sắc thủ công bằng embedding học sâu như OSNet, TransReID hoặc các phương pháp video-based ReID. Ngoài ra, hệ thống có thể bổ sung feature bank cho mỗi Global ID để lưu nhiều biểu diễn của cùng một người ở các góc nhìn khác nhau. Điều này giúp giảm lỗi khi người quay lưng, nghiêng người hoặc thay đổi tư thế.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Tối ưu triển khai thời gian thực}\\
+Để triển khai thực tế, hệ thống cần được tối ưu bằng ONNX Runtime, TensorRT hoặc DirectML tùy phần cứng. Các mô hình có thể được lượng tử hóa FP16 hoặc INT8 nhằm giảm độ trễ và tiết kiệm bộ nhớ \cite{jacob2018quantization}. Ngoài ra, pipeline có thể được tổ chức bất đồng bộ theo nhiều hàng đợi: hàng đợi đọc RTSP, hàng đợi inference, hàng đợi ghi log và hàng đợi hiển thị dashboard.
+
+\vspace{0.1cm}
+\hspace*{0.5cm}\textbf{Bảo mật và riêng tư}\\
+Vì hệ thống xử lý dữ liệu nhạy cảm như khuôn mặt và hành vi cá nhân, hướng phát triển tương lai cần bổ sung cơ chế bảo vệ dữ liệu. Các giải pháp có thể bao gồm mã hóa embedding, phân quyền người dùng, xóa dữ liệu theo thời hạn, làm mờ khuôn mặt trong evidence công khai và chỉ lưu các sự kiện cần thiết thay vì lưu toàn bộ video.
+
+
+\vspace{0.2cm}
+
+% ========= PHẦN 10 KẾT LUẬN ====================
+\section{Kết luận}
+\vspace{-0.6cm}
+
+Báo cáo đã trình bày định hướng xây dựng hệ thống CPose cho bài toán phân tích hành vi toàn cảnh theo thời gian thực. Hệ thống được thiết kế nhằm giải quyết đồng thời nhiều nhiệm vụ quan trọng trong giám sát thông minh, bao gồm phát hiện người, theo dõi đa đối tượng, tái định danh xuyên camera, nhận diện khuôn mặt, chống giả mạo khuôn mặt, ước lượng tư thế và nhận diện hoạt động sinh hoạt hằng ngày.
+
+Về dữ liệu, nhóm định hướng kết hợp dữ liệu công khai như NTU RGB+D, Toyota Smarthome, Market-1501 và dữ liệu tự thu thập từ hệ thống camera RTSP trong nhà. Cách tổ chức dữ liệu theo frame, tracklet, Global ID, keypoint và nhãn ADL giúp hệ thống có thể đánh giá nhiều module khác nhau trên cùng một nền dữ liệu.
+
+Về phương pháp, hệ thống được chia thành hai module chính. Module A tập trung vào nhận diện khuôn mặt và anti-spoofing tại camera đầu vào. Module B tập trung vào tracking, ReID, pose estimation và ADL ở các camera bên trong. Kiến trúc Master--Slave và spatio-temporal gating được sử dụng để tăng tính nhất quán của Global ID khi người di chuyển qua nhiều camera.
+
+Về đánh giá, hệ thống được đề xuất đánh giá theo cả chỉ số mô hình và chỉ số vận hành thực tế, bao gồm mAP, MOTA, IDF1, Rank-1, FAR, FRR, ACER, Accuracy, Macro-F1, FPS và latency. Đây là cơ sở để nhóm tiếp tục triển khai, tối ưu và kiểm thử hệ thống trong các giai đoạn tiếp theo của đồ án.
+
+Tổng thể, CPose không chỉ là một bài toán nhận diện đơn lẻ mà là một hệ thống AI đa thành phần có khả năng kết nối nhận thức thị giác, định danh người và phân tích hành vi. Nếu được hoàn thiện với dữ liệu thực tế đủ lớn và tối ưu triển khai tốt, hệ thống có tiềm năng ứng dụng trong giám sát an toàn tại nhà, chăm sóc người cao tuổi, kiểm soát ra vào và các nền tảng camera thông minh thế hệ mới.
+
+\vspace{0.2cm}
+
+% ==================== TÀI LIỆU THAM KHẢO ====================
+\clearpage
+\addcontentsline{toc}{section}{Tài liệu tham khảo}
+\begin{thebibliography}{99}
+\fontsize{10}{12}\selectfont
+
+\bibitem{yolov11}
+Ultralytics,
+``YOLO11,''
+Ultralytics Documentation, 2024.
+[Online]. Available: \url{https://docs.ultralytics.com/models/yolo11/}
+
+\bibitem{openpose}
+Z.~Cao, T.~Simon, S.-E.~Wei, and Y.~Sheikh,
+``Realtime Multi-Person 2D Pose Estimation using Part Affinity Fields,''
+in \textit{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2017.
+
+\bibitem{rtmpose}
+T.~Jiang, P.~Lu, L.~Zhang, N.~Ma, R.~Han, C.~Lyu, Y.~Li, and K.~Chen,
+``RTMPose: Real-Time Multi-Person Pose Estimation Based on MMPose,''
+\textit{arXiv preprint arXiv:2303.07399}, 2023.
+
+\bibitem{ntu}
+A.~Shahroudy, J.~Liu, T.-T.~Ng, and G.~Wang,
+``NTU RGB+D: A Large Scale Dataset for 3D Human Activity Analysis,''
+in \textit{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2016.
+
+\bibitem{toyota}
+S.~Das, R.~Dai, M.~Koperski, L.~Minciullo, L.~Garattoni, F.~Bremond, and G.~Francesca,
+``Toyota Smarthome: Real-World Activities of Daily Living,''
+in \textit{Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV)}, 2019.
+
+\bibitem{stgcn}
+S.~Yan, Y.~Xiong, and D.~Lin,
+``Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition,''
+in \textit{Proc. AAAI Conf. Artif. Intell.}, 2018.
+
+\bibitem{msg3d}
+Z.~Liu, H.~Zhang, Z.~Chen, Z.~Wang, and W.~Ouyang,
+``Disentangling and Unifying Graph Convolutions for Skeleton-Based Action Recognition,''
+in \textit{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2020.
+
+\bibitem{ctrgcn}
+Y.~Chen, Z.~Zhang, C.~Yuan, B.~Li, Y.~Deng, and W.~Hu,
+``Channel-Wise Topology Refinement Graph Convolution for Skeleton-Based Action Recognition,''
+in \textit{Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV)}, 2021.
+
+\bibitem{blockgcn}
+Y.~Zhou, X.~Yan, Z.-Q.~Cheng, Y.~Yan, Q.~Dai, and X.-S.~Hua,
+``BlockGCN: Redefine Topology Awareness for Skeleton-Based Action Recognition,''
+in \textit{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2024.
+
+\bibitem{skateformer}
+J.~Do and M.~Kim,
+``SkateFormer: Skeletal-Temporal Transformer for Human Action Recognition,''
+in \textit{Proc. Eur. Conf. Comput. Vis. (ECCV)}, 2024.
+
+\bibitem{timesformer}
+G.~Bertasius, H.~Wang, and L.~Torresani,
+``Is Space-Time Attention All You Need for Video Understanding?''
+in \textit{Proc. Int. Conf. Mach. Learn. (ICML)}, 2021.
+
+\bibitem{poseguided}
+R.~Pizarro, R.~Valle, J.~M.~Buenaposada, L.~M.~Bergasa, and L.~Baumela,
+``Pose-Guided Token Selection for the Recognition of Activities of Daily Living,''
+\textit{Image and Vision Computing}, vol.~162, p.~105686, 2025.
+
+\bibitem{facenet}
+F.~Schroff, D.~Kalenichenko, and J.~Philbin,
+``FaceNet: A Unified Embedding for Face Recognition and Clustering,''
+in \textit{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2015.
+
+\bibitem{arcface}
+J.~Deng, J.~Guo, N.~Xue, and S.~Zafeiriou,
+``ArcFace: Additive Angular Margin Loss for Deep Face Recognition,''
+in \textit{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2019.
+
+\bibitem{retinaface}
+J.~Deng, J.~Guo, E.~Ververas, I.~Kotsia, and S.~Zafeiriou,
+``RetinaFace: Single-Shot Multi-Level Face Localisation in the Wild,''
+in \textit{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2020.
+
+\bibitem{faceantispoofonnx}
+sillycroisant,
+``face-antispoof-onnx,''
+GitHub repository, 2024.
+[Online]. Available: \url{https://github.com/sillycroisant/face-antispoof-onnx}
+
+\bibitem{celebaspoof}
+Y.~Zhang, Z.~Yin, Y.~Li, G.~Yin, J.~Yan, J.~Shao, and Z.~Liu,
+``CelebA-Spoof: Large-Scale Face Anti-Spoofing Dataset with Rich Annotations,''
+in \textit{Proc. Eur. Conf. Comput. Vis. (ECCV)}, 2020.
+
+\bibitem{osnet}
+K.~Zhou, Y.~Yang, A.~Cavallaro, and T.~Xiang,
+``Omni-Scale Feature Learning for Person Re-Identification,''
+in \textit{Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV)}, 2019.
+
+\bibitem{transreid}
+S.~He, H.~Luo, P.~Wang, F.~Wang, H.~Li, and W.~Jiang,
+``TransReID: Transformer-Based Object Re-Identification,''
+in \textit{Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV)}, 2021.
+
+\bibitem{market1501}
+L.~Zheng, L.~Shen, L.~Tian, S.~Wang, J.~Wang, and Q.~Tian,
+``Scalable Person Re-identification: A Benchmark,''
+in \textit{Proc. IEEE Int. Conf. Comput. Vis. (ICCV)}, 2015.
+
+\bibitem{mars}
+L.~Zheng, Z.~Bie, Y.~Sun, J.~Wang, C.~Su, S.~Wang, and Q.~Tian,
+``MARS: A Video Benchmark for Large-Scale Person Re-Identification,''
+in \textit{Proc. Eur. Conf. Comput. Vis. Workshops (ECCVW)}, 2016.
+
+\bibitem{deepsort}
+N.~Wojke, A.~Bewley, and D.~Paulus,
+``Simple Online and Realtime Tracking with a Deep Association Metric,''
+in \textit{Proc. IEEE Int. Conf. Image Process. (ICIP)}, 2017.
+
+\bibitem{bytetrack}
+Y.~Zhang, P.~Sun, Y.~Jiang, D.~Yu, F.~Weng, Z.~Yuan, P.~Luo, W.~Liu, and X.~Wang,
+``ByteTrack: Multi-Object Tracking by Associating Every Detection Box,''
+in \textit{Proc. Eur. Conf. Comput. Vis. (ECCV)}, 2022.
+
+\bibitem{botsort}
+N.~Aharon, R.~Orfaig, and B.-Z.~Bobrovsky,
+``BoT-SORT: Robust Associations Multi-Pedestrian Tracking,''
+\textit{arXiv preprint arXiv:2206.14651}, 2022.
+
+\bibitem{ocsort}
+J.~Cao, X.~Weng, R.~Khirodkar, J.~Pang, and K.~Kitani,
+``Observation-Centric SORT: Rethinking SORT for Robust Multi-Object Tracking,''
+in \textit{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2023.
+
+\bibitem{faiss}
+J.~Johnson, M.~Douze, and H.~J{\'e}gou,
+``Billion-Scale Similarity Search with GPUs,''
+\textit{IEEE Trans. Big Data}, vol.~7, no.~3, pp.~535--547, 2019.
+
+\bibitem{coco}
+T.-Y.~Lin, M.~Maire, S.~Belongie, J.~Hays, P.~Perona, D.~Ramanan, P.~Doll{\'a}r, and C.~L.~Zitnick,
+``Microsoft COCO: Common Objects in Context,''
+in \textit{Proc. Eur. Conf. Comput. Vis. (ECCV)}, 2014.
+
+\bibitem{mota}
+K.~Bernardin and R.~Stiefelhagen,
+``Evaluating Multiple Object Tracking Performance: The CLEAR MOT Metrics,''
+\textit{EURASIP J. Image Video Process.}, vol.~2008, pp.~1--10, 2008.
+
+\bibitem{rtsp}
+H.~Schulzrinne, A.~Rao, and R.~Lanphier,
+``Real Time Streaming Protocol,''
+RFC~2326, 1998.
+[Online]. Available: \url{https://www.rfc-editor.org/rfc/rfc2326}
+
+\bibitem{onnxruntime}
+Microsoft,
+``ONNX Runtime,''
+2024.
+[Online]. Available: \url{https://onnxruntime.ai/}
+
+\bibitem{tensorrt}
+NVIDIA,
+``NVIDIA TensorRT,''
+2024.
+[Online]. Available: \url{https://developer.nvidia.com/tensorrt}
+
+\end{thebibliography}
+\end{multicols}
+
+\end{document}

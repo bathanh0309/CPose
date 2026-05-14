@@ -1,0 +1,129 @@
+from collections import deque
+from pathlib import Path
+
+import numpy as np
+
+from src.utils.io import ensure_dir, save_pickle
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+class PoseSequenceBuffer:
+    def __init__(
+        self,
+        seq_len=48,
+        stride=12,
+        output_dir="data/output/clips_pkl",
+        default_label=0,
+        max_idle_frames=150,
+    ):
+        self.seq_len = int(seq_len)
+        self.stride = int(stride)
+        self.output_dir = Path(output_dir)
+        self.default_label = int(default_label)
+        self.max_idle_frames = int(max_idle_frames)
+        self.states = {}
+        self.last_seen = {}
+        ensure_dir(self.output_dir)
+
+    def _get_state(self, camera_id, local_track_id):
+        key = (str(camera_id), int(local_track_id))
+        if key not in self.states:
+            self.states[key] = {
+                "frame_idx": deque(maxlen=self.seq_len),
+                "keypoints": deque(maxlen=self.seq_len),
+                "scores": deque(maxlen=self.seq_len),
+                "img_shape": None,
+                "last_export_end": -10**9,
+                "export_count": 0
+            }
+        return self.states[key]
+
+    def update(self, camera_id, local_track_id, global_id, frame_idx, keypoints_xy, keypoint_scores, img_shape):
+        key = (str(camera_id), int(local_track_id))
+        self.last_seen[key] = int(frame_idx)
+        self._gc(int(frame_idx))
+
+        if keypoints_xy is None:
+            return None
+
+        keypoints_xy = np.asarray(keypoints_xy, dtype=np.float32)
+        if keypoints_xy.ndim != 2 or keypoints_xy.shape[1] != 2:
+            return None
+
+        num_kp = keypoints_xy.shape[0]
+        if keypoint_scores is None:
+            keypoint_scores = np.ones((num_kp,), dtype=np.float32)
+        else:
+            keypoint_scores = np.asarray(keypoint_scores, dtype=np.float32)
+
+        state = self._get_state(camera_id, local_track_id)
+        state["frame_idx"].append(int(frame_idx))
+        state["keypoints"].append(keypoints_xy)
+        state["scores"].append(keypoint_scores)
+        state["img_shape"] = tuple(map(int, img_shape))
+
+        if len(state["keypoints"]) < self.seq_len:
+            return None
+
+        end_idx = state["frame_idx"][-1]
+        if end_idx - state["last_export_end"] < self.stride:
+            return None
+
+        state["export_count"] += 1
+        state["last_export_end"] = end_idx
+
+        return self._export_current_window(
+            camera_id=camera_id,
+            local_track_id=local_track_id,
+            global_id=global_id,
+            state=state
+        )
+
+    def _gc(self, current_frame_idx):
+        dead = [
+            key for key, last_seen in self.last_seen.items()
+            if current_frame_idx - last_seen > self.max_idle_frames
+        ]
+        for key in dead:
+            self.states.pop(key, None)
+            self.last_seen.pop(key, None)
+
+    def _export_current_window(self, camera_id, local_track_id, global_id, state):
+        frame_idx = list(state["frame_idx"])
+        keypoints = np.stack(list(state["keypoints"]), axis=0)          # [T, V, 2]
+        scores = np.stack(list(state["scores"]), axis=0)                # [T, V]
+        h, w = state["img_shape"]
+
+        sample_id = (
+            f"cam_{camera_id}"
+            f"__track_{int(local_track_id):04d}"
+            f"__gid_{global_id}"
+            f"__f_{frame_idx[0]:06d}_{frame_idx[-1]:06d}"
+            f"__n_{state['export_count']:03d}"
+        )
+
+        ann = {
+            "frame_dir": sample_id,
+            "total_frames": int(keypoints.shape[0]),
+            "img_shape": (int(h), int(w)),
+            "original_shape": (int(h), int(w)),
+            "label": int(self.default_label),
+            "keypoint": keypoints[None, ...].astype(np.float32),        # [M, T, V, C], M=1
+            "keypoint_score": scores[None, ...].astype(np.float32)      # [M, T, V]
+        }
+
+        dataset_pkl = {
+            "split": {"test": [sample_id]},
+            "annotations": [ann]
+        }
+
+        out_path = self.output_dir / f"{sample_id}.pkl"
+        save_pickle(dataset_pkl, out_path)
+        logger.info(f"Exported pose clip: {out_path}")
+        return out_path
+
+    def reset_track(self, camera_id, local_track_id):
+        key = (str(camera_id), int(local_track_id))
+        if key in self.states:
+            del self.states[key]
+        self.last_seen.pop(key, None)

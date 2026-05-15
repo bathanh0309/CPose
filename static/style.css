@@ -30,9 +30,15 @@ body {
   padding: 15px 24px;
   border-bottom: 1px solid var(--border-color);
   box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 .brand .logo { font-size: 20px; font-weight: 700; color: var(--primary); margin-right: 10px;}
 .brand .subtitle { font-size: 13px; color: var(--text-muted); }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.config-upload { min-width: 120px; }
 
 /* ── Layout ── */
 .layout {
@@ -76,6 +82,12 @@ body {
   padding: 12px 16px;
   border-bottom: 1px solid #e2e8f0;
 }
+.camera-select {
+  min-width: 0;
+  width: 100%;
+  text-overflow: ellipsis;
+}
+.btn-rtsp { min-width: 105px; }
 .text-input {
   flex: 1;
   padding: 8px 12px;
@@ -176,3 +188,5 @@ body {
 .log-system { color: #3b82f6; }
 .log-ai { color: #10b981; font-weight: bold; }
 .log-error { color: #ef4444; font-weight: bold; }
+.log-metric { color: #2563eb; font-weight: 600; }
+.log-warning { color: #d97706; font-weight: 600; }

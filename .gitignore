@@ -11,7 +11,9 @@ dist/
 *.egg-info/
 .eggs/
 
-data/config/
+data/config/*
+!data/config/
+!data/config/resources.example.txt
 data/config/resources.txt
 
 # ===========================

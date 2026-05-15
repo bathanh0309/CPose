@@ -1,6 +1,5 @@
 benchmark:
   enabled: false
-  output_dir: "data/output/benchmark"
   report_formats:
     - "json"
     - "csv"
@@ -56,7 +55,6 @@ modules:
   pedestrian_tracking:
     name: "Custom YOLO Pedestrian + ByteTrack"
     enabled: true
-    predictions_path: "data/output/track_results.json"
     ground_truth_path: ""
     metrics:
       - "fps"
@@ -96,7 +94,6 @@ modules:
   adl:
     name: "PoseC3D ADL"
     enabled: true
-    predictions_path: "data/output/adl_results.json"
     ground_truth_path: ""
     label_map_path: ""
     metrics:
@@ -110,13 +107,10 @@ modules:
       - "per_class_accuracy"
     confusion_matrix:
       normalize: true
-      output_image: "data/output/benchmark/adl_confusion_matrix.png"
-      output_csv: "data/output/benchmark/adl_confusion_matrix.csv"
 
   full_pipeline:
     name: "Full CPose Pipeline"
     enabled: true
-    event_log_path: "data/output/events/pipeline.jsonl"
     metrics:
       - "fps"
       - "latency"
@@ -125,8 +119,3 @@ modules:
       - "persons_per_frame"
       - "reid_match_rate"
       - "adl_clip_export_rate"
-
-export:
-  summary_json: "data/output/benchmark/summary.json"
-  summary_csv: "data/output/benchmark/summary.csv"
-  raw_samples_jsonl: "data/output/benchmark/raw_samples.jsonl"

@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>CPose Control Panel - Pro Dashboard</title>
-  <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="/style.css?v=20260515"/>
 </head>
 <body>
   <header class="topbar">
@@ -16,49 +16,55 @@
 
   <main class="layout">
     <section class="cameras-container">
-      
       <div class="cam-card">
         <div class="cam-header">
           <span class="cam-label">CAMERA 1</span>
-          <span class="cam-status status-offline" id="status-1">Chờ kết nối</span>
+          <span class="cam-status status-offline" id="status-1">Cho ket noi</span>
         </div>
-        
+
         <div class="cam-source">
-          <input type="text" id="cam1-source" class="text-input" placeholder="Nhập link RTSP hoặc chọn file upload..."/>
-          <label class="btn btn-outline" title="Tải video lên">
-            📁 Upload
-            <input type="file" id="file-upload-1" accept="video/*" hidden onchange="handleCamUpload(event, 1)"/>
+          <input type="hidden" id="cam1-source"/>
+          <select id="cam1-display" class="text-input camera-select">
+            <option value="">Chon luong RTSP...</option>
+          </select>
+          <label class="btn btn-outline btn-rtsp" title="Nap file resources.txt">
+            Upload RTSP
+            <input type="file" id="rtsp-upload-1" accept=".txt" hidden/>
+          </label>
+          <label class="btn btn-outline" title="Tai video len">
+            Upload
+            <input type="file" id="file-upload-1" accept="video/*" hidden/>
           </label>
         </div>
 
         <div class="cam-controls">
           <div class="control-row modules-row">
             <span class="row-title">Modules:</span>
-            <button id="btn-track-1" class="btn-module active" onclick="toggleModule(1, 'track')">Tracking</button>
-            <button id="btn-pose-1" class="btn-module active" onclick="toggleModule(1, 'pose')">Pose</button>
-            <button id="btn-reid-1" class="btn-module" onclick="toggleModule(1, 'reid')">ReID</button>
-            <button id="btn-adl-1" class="btn-module" onclick="toggleModule(1, 'adl')">ADL</button>
+            <button id="btn-track-1" class="btn-module" data-cam="1" data-module="track">Tracking</button>
+            <button id="btn-pose-1" class="btn-module" data-cam="1" data-module="pose">Pose</button>
+            <button id="btn-reid-1" class="btn-module" data-cam="1" data-module="reid">ReID</button>
+            <button id="btn-adl-1" class="btn-module" data-cam="1" data-module="adl">ADL</button>
           </div>
 
           <div class="control-row actions-row">
-            <button class="btn btn-on" onclick="startStream(1)">▶ ON</button>
-            <button class="btn btn-off" onclick="stopStream(1)">⏹ OFF</button>
-            <button id="save-btn-1" class="btn btn-action" onclick="saveVideo(1)" disabled>💾 Lưu Video</button>
-            <button id="save-excel-btn-1" class="btn btn-action" onclick="saveExcel(1)" disabled>📊 Lưu Excel</button>
+            <button class="btn btn-on" id="btn-on-1">ON</button>
+            <button class="btn btn-off" id="btn-off-1">OFF</button>
+            <button id="save-btn-1" class="btn btn-action" disabled>Luu Video</button>
+            <button id="save-excel-btn-1" class="btn btn-action" disabled>Luu Excel</button>
           </div>
         </div>
 
         <div class="cam-view">
           <img id="frame-1" class="cam-frame" alt="Camera 1 stream"/>
           <div class="cam-placeholder" id="placeholder-1">
-            <span>Nhập link và nhấn ON để bắt đầu luồng Cam 1</span>
+            <span>Nap RTSP config, chon luong va nhan ON de bat dau Cam 1</span>
           </div>
         </div>
 
         <div class="cam-log">
           <div class="log-header">
             <span>Log Camera 1</span>
-            <button class="btn-clear" onclick="clearLog(1)">Xóa</button>
+            <button class="btn-clear" id="clear-log-1">Xoa</button>
           </div>
           <div class="log-box" id="log-box-1"></div>
         </div>
@@ -67,53 +73,59 @@
       <div class="cam-card">
         <div class="cam-header">
           <span class="cam-label">CAMERA 2</span>
-          <span class="cam-status status-offline" id="status-2">Chờ kết nối</span>
+          <span class="cam-status status-offline" id="status-2">Cho ket noi</span>
         </div>
-        
+
         <div class="cam-source">
-          <input type="text" id="cam2-source" class="text-input" placeholder="Nhập link RTSP hoặc chọn file upload..."/>
-          <label class="btn btn-outline" title="Tải video lên">
-            📁 Upload
-            <input type="file" id="file-upload-2" accept="video/*" hidden onchange="handleCamUpload(event, 2)"/>
+          <input type="hidden" id="cam2-source"/>
+          <select id="cam2-display" class="text-input camera-select">
+            <option value="">Chon luong RTSP...</option>
+          </select>
+          <label class="btn btn-outline btn-rtsp" title="Nap file resources.txt">
+            Upload RTSP
+            <input type="file" id="rtsp-upload-2" accept=".txt" hidden/>
+          </label>
+          <label class="btn btn-outline" title="Tai video len">
+            Upload
+            <input type="file" id="file-upload-2" accept="video/*" hidden/>
           </label>
         </div>
 
         <div class="cam-controls">
           <div class="control-row modules-row">
             <span class="row-title">Modules:</span>
-            <button id="btn-track-2" class="btn-module active" onclick="toggleModule(2, 'track')">Tracking</button>
-            <button id="btn-pose-2" class="btn-module active" onclick="toggleModule(2, 'pose')">Pose</button>
-            <button id="btn-reid-2" class="btn-module" onclick="toggleModule(2, 'reid')">ReID</button>
-            <button id="btn-adl-2" class="btn-module" onclick="toggleModule(2, 'adl')">ADL</button>
+            <button id="btn-track-2" class="btn-module" data-cam="2" data-module="track">Tracking</button>
+            <button id="btn-pose-2" class="btn-module" data-cam="2" data-module="pose">Pose</button>
+            <button id="btn-reid-2" class="btn-module" data-cam="2" data-module="reid">ReID</button>
+            <button id="btn-adl-2" class="btn-module" data-cam="2" data-module="adl">ADL</button>
           </div>
 
           <div class="control-row actions-row">
-            <button class="btn btn-on" onclick="startStream(2)">▶ ON</button>
-            <button class="btn btn-off" onclick="stopStream(2)">⏹ OFF</button>
-            <button id="save-btn-2" class="btn btn-action" onclick="saveVideo(2)" disabled>💾 Lưu Video</button>
-            <button id="save-excel-btn-2" class="btn btn-action" onclick="saveExcel(2)" disabled>📊 Lưu Excel</button>
+            <button class="btn btn-on" id="btn-on-2">ON</button>
+            <button class="btn btn-off" id="btn-off-2">OFF</button>
+            <button id="save-btn-2" class="btn btn-action" disabled>Luu Video</button>
+            <button id="save-excel-btn-2" class="btn btn-action" disabled>Luu Excel</button>
           </div>
         </div>
 
         <div class="cam-view">
           <img id="frame-2" class="cam-frame" alt="Camera 2 stream"/>
           <div class="cam-placeholder" id="placeholder-2">
-            <span>Nhập link và nhấn ON để bắt đầu luồng Cam 2</span>
+            <span>Nap RTSP config, chon luong va nhan ON de bat dau Cam 2</span>
           </div>
         </div>
 
         <div class="cam-log">
           <div class="log-header">
             <span>Log Camera 2</span>
-            <button class="btn-clear" onclick="clearLog(2)">Xóa</button>
+            <button class="btn-clear" id="clear-log-2">Xoa</button>
           </div>
           <div class="log-box" id="log-box-2"></div>
         </div>
       </div>
-
     </section>
   </main>
 
-  <script src="scripts.js"></script>
+  <script src="/scripts.js?v=20260515"></script>
 </body>
 </html>

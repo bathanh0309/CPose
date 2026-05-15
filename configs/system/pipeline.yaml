@@ -1,7 +1,6 @@
 system:
   device: "auto"
   event_log: "data/output/events/pipeline.jsonl"
-  vis_dir: "data/output/vis"
   default_source: "data/input/cam2_2026-01-29_16-26-40.mp4"
   save_video: true
 
@@ -18,8 +17,8 @@ output:
 pose:
   enabled: true
   weights: "models/yolo11n-pose.pt"
-  conf: 0.6
-  iou: 0.5
+  conf: 0.7
+  iou: 0.7
   min_keypoints: 5
   min_keypoint_score: 0.35
 
@@ -41,7 +40,7 @@ object:
   weights: "models/yolo11n.pt"
   conf: 0.7
   iou: 0.7
-  classes: [pickleball, ]
+  classes: [pickleball]
 
 ui:
   enabled: true
@@ -52,7 +51,6 @@ ui:
 reid:
   weights: "models/fastreid_market_R50.pth"
   fastreid_root: ".github/fast-reid"
-  output_dir: "data/output/fastreid"
   gallery_dir: "data/gallery"
   embedding_dirs:
     - "data/face"

@@ -161,6 +161,20 @@ function toggleModule(camId, mod) {
     activeModules[camId].add(mod);
     btn.classList.add("active");
   }
+
+  const mods = [...activeModules[camId]].join(",");
+  addLog(
+    camId,
+    mods ? `Modules cap nhat: ${mods}` : "Chua chon module AI nao, dang phat raw stream.",
+    mods ? "system" : "warning"
+  );
+
+  if (sockets[camId] && sockets[camId].readyState === WebSocket.OPEN) {
+    sockets[camId].send(JSON.stringify({
+      type: "set_modules",
+      modules: mods
+    }));
+  }
 }
 
 function startStream(camId) {
@@ -208,9 +222,10 @@ function startStream(camId) {
       img.src = "data:image/jpeg;base64," + data.data;
     } else if (data.type === "metric") {
       const m = data.metrics || {};
+      const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
       addLog(
         camId,
-        `METRIC ${m.module || ""}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}`,
+        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}`,
         "metric"
       );
     } else if (data.type === "ai") {
@@ -266,9 +281,10 @@ async function saveVideo(camId) {
   try {
     const res = await fetch(`${API_BASE}/api/save-video/${sid}`, { method: "POST" });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Save Video failed");
     addLog(camId, `Da luu Video: ${data.path || data.saved || data.message || ""}`, "ai");
   } catch (err) {
-    addLog(camId, `Loi luu video: ${err}`, "error");
+    addLog(camId, `Loi luu video: ${err.message || err}`, "error");
   }
 }
 
@@ -280,9 +296,10 @@ async function saveExcel(camId) {
   try {
     const res = await fetch(`${API_BASE}/api/save-excel/${sid}`, { method: "POST" });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Save Excel failed");
     addLog(camId, `Da luu Excel: ${data.file_path || data.message || ""}`, "ai");
   } catch (err) {
-    addLog(camId, `Loi luu Excel: ${err}`, "error");
+    addLog(camId, `Loi luu Excel: ${err.message || err}`, "error");
   }
 }
 

@@ -1,8 +1,9 @@
 system:
   device: "auto"
   event_log: "data/output/events/pipeline.jsonl"
+  vis_dir: "data/output/vis"
   default_source: "data/input/cam2_2026-01-29_16-26-40.mp4"
-  save_video: true
+  save_video: false
 
 logging:
   enabled: false
@@ -12,7 +13,10 @@ logging:
 output:
   short_names: true
   save_json: false
-  save_video: true
+  save_video: false
+  auto_save_video: false
+  auto_save_excel: false
+  save_on_demand: true
 
 pose:
   enabled: true
@@ -47,6 +51,11 @@ ui:
   log_metrics: true
   max_log_lines: 300
   metrics_interval_frames: 5
+
+web:
+  metrics_interval_frames: 5
+  jpeg_quality: 60
+  loop_local_video: true
 
 reid:
   weights: "models/fastreid_market_R50.pth"

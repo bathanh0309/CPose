@@ -26,9 +26,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from src.core.ui_logger import ui_logger
+from src.core.web_runtime import WebAIProcessor
+from src.utils.config import load_pipeline_cfg
 
 BASE_DIR   = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "data" / "config" / "resources.txt"
+PIPELINE_CONFIG = BASE_DIR / "configs" / "system" / "pipeline.yaml"
 UPLOAD_DIR  = BASE_DIR / "data" / "uploads"
 OUTPUT_DIR  = BASE_DIR / "data" / "output" / "vis"
 STATIC_DIR  = BASE_DIR / "static"
@@ -39,6 +42,7 @@ STATIC_DIR  = BASE_DIR / "static"
 BUFFER_MAX   = 9000
 _frame_buffers: Dict[str, deque] = {}   # session_id → deque[bytes]
 _session_meta: Dict[str, dict]   = {}   # session_id → {width, height, fps}
+_pipeline_cfg: Optional[dict] = None
 
 # ---------------------------------------------------------------------------
 # (Optional) Pipeline import — uncomment khi model weights đã sẵn sàng
@@ -70,6 +74,20 @@ def parse_modules(raw: Optional[str]) -> Set[str]:
     if not raw:
         return set()
     return {m.strip().lower() for m in raw.split(",") if m.strip().lower() in VALID_MODULES}
+
+
+def get_pipeline_cfg() -> dict:
+    global _pipeline_cfg
+    if _pipeline_cfg is None:
+        _pipeline_cfg = load_pipeline_cfg(PIPELINE_CONFIG, BASE_DIR)
+    return _pipeline_cfg
+
+
+def format_terminal_ai_log(cam_id: str, msg: str) -> str:
+    if ":" in msg:
+        module, rest = msg.split(":", 1)
+        return f"[cam={cam_id}][{module.strip()}] {rest.strip()}"
+    return f"[cam={cam_id}] {msg}"
 
 
 def mask_rtsp_credentials(value: str) -> str:
@@ -201,47 +219,6 @@ def open_video_capture(video_source: str) -> cv2.VideoCapture:
         return cv2.VideoCapture(video_source)
 
 
-def process_frame_with_modules(frame: np.ndarray, modules: Set[str]) -> tuple[np.ndarray, list[str]]:
-    """
-    Hook chạy pipeline theo modules được bật.
-    Hiện tại trả nguyên frame + log trống.
-    Uncomment từng khối khi model weights sẵn sàng.
-    """
-    logs: list[str] = []
-
-    # ── Pose detection ──────────────────────────────────────────────────────
-    if "pose" in modules:
-        # from src.detectors.yolo_pose import YoloPoseTracker
-        # results = pose_tracker.run(frame)
-        # frame = draw_pose(frame, results)
-        # logs.append(f"[POSE] {len(results)} người phát hiện")
-        pass
-
-    # ── ByteTrack ────────────────────────────────────────────────────────────
-    if "track" in modules:
-        # tracks = byte_tracker.update(results)
-        # frame = draw_tracks(frame, tracks)
-        # logs.append(f"[TRACK] {len(tracks)} track đang theo dõi")
-        pass
-
-    # ── FastReID ─────────────────────────────────────────────────────────────
-    if "reid" in modules:
-        # embeddings = reid.extract(frame, tracks)
-        # person_ids = gallery.query(embeddings)
-        # frame = draw_reid(frame, person_ids)
-        # logs.append(f"[ReID] Gán ID: {person_ids}")
-        pass
-
-    # ── PoseC3D / ADL ────────────────────────────────────────────────────────
-    if "adl" in modules:
-        # action = posec3d.classify(pose_buffer)
-        # frame = draw_adl(frame, action)
-        # logs.append(f"[ADL] Hành động: {action}")
-        pass
-
-    return frame, logs
-
-
 # ---------------------------------------------------------------------------
 # Routes — static
 # ---------------------------------------------------------------------------
@@ -368,6 +345,14 @@ async def save_video(session_id: str):
     return {"saved": out_name.name, "frames": len(frames), "path": str(out_name)}
 
 
+@app.post("/api/save-excel/{session_id}")
+async def save_excel(session_id: str):
+    return JSONResponse(
+        status_code=501,
+        content={"error": "Save Excel is not implemented yet", "session_id": session_id},
+    )
+
+
 @app.get("/api/sessions")
 def list_sessions():
     return {
@@ -421,6 +406,12 @@ async def stream_video(
 
     # Parse modules
     active_modules = parse_modules(modules)
+    cfg = get_pipeline_cfg()
+    web_cfg = cfg.get("web", {})
+    metrics_interval = int(web_cfg.get("metrics_interval_frames", cfg.get("ui", {}).get("metrics_interval_frames", 5)))
+    jpeg_quality = int(web_cfg.get("jpeg_quality", 60))
+    loop_local_video = bool(web_cfg.get("loop_local_video", True))
+    processor = WebAIProcessor(camera_id=cam_id, modules=active_modules, cfg=cfg)
 
     # Tạo session_id nếu chưa có
     if not session_id:
@@ -485,6 +476,7 @@ async def stream_video(
                 msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.001)
                 if msg.get("type") == "set_modules":
                     active_modules = parse_modules(msg.get("modules", ""))
+                    processor.set_modules(active_modules)
                     if not await safe_send_json(websocket, {
                         "type": "log",
                         "msg": f"Modules cập nhật: {', '.join(active_modules) or 'none'}",
@@ -504,7 +496,7 @@ async def stream_video(
 
             ret, frame = cap.read()
             if not ret:
-                if is_local_file_source(video_source):
+                if is_local_file_source(video_source) and loop_local_video:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
                 if not await safe_send_json(websocket, {
@@ -515,18 +507,21 @@ async def stream_video(
                     connected = False
                 break
 
-            # FIX #6 — chạy pipeline theo module flag
-            frame, ai_logs = process_frame_with_modules(frame, active_modules)
+            frame, ai_logs, metrics = processor.process(frame)
 
-            # FIX #4 — chỉ emit log thật từ pipeline (không fake)
-            for log_msg in ai_logs:
-                if not await safe_send_json(websocket, {"type": "log", "msg": log_msg, "level": "ai"}):
+            for level, log_msg in ai_logs:
+                print(format_terminal_ai_log(cam_id, log_msg))
+                if not await safe_send_json(websocket, {"type": "log", "msg": log_msg, "level": level}):
                     connected = False
                     break
             if not connected:
                 break
 
-            ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            if metrics_interval > 0 and processor.frame_idx % metrics_interval == 0:
+                if not await safe_send_json(websocket, {"type": "metric", "metrics": metrics}):
+                    break
+
+            ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
             if not ok:
                 await asyncio.sleep(0.03)
                 continue

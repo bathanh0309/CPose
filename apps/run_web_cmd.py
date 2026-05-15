@@ -3,11 +3,49 @@ import subprocess
 import sys
 import time
 import webbrowser
+from pathlib import Path
 
 
 HOST = "127.0.0.1"
 PORT = "8000"
 URL = f"http://{HOST}:{PORT}"
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def detect_openvino() -> tuple[list[str], str | None]:
+    try:
+        try:
+            from openvino.runtime import Core
+        except ModuleNotFoundError:
+            from openvino import Core
+
+        ie = Core()
+        devices = list(ie.available_devices)
+        device = "GPU" if "GPU" in devices else "CPU" if "CPU" in devices else None
+        return devices, device
+    except Exception as exc:
+        print(f"[OpenVINO] unavailable: {type(exc).__name__}: {exc}")
+        return [], None
+
+
+def build_server_env() -> dict[str, str]:
+    env = os.environ.copy()
+    devices, device = detect_openvino()
+    ultralytics_device = f"intel:{device.lower()}" if device else None
+
+    env.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+    env["CPOSE_OPENVINO_ENABLED"] = "1" if device else "0"
+    if ultralytics_device:
+        env["CPOSE_OPENVINO_DEVICE"] = ultralytics_device
+
+    print(f"[Python] {sys.executable}")
+    print(f"[OpenVINO] devices: {devices or 'none'}")
+    if device:
+        print(f"[OpenVINO] CPose will prefer device: {device} ({ultralytics_device})")
+    else:
+        print("[OpenVINO] CPose will fall back to the configured PyTorch/CPU runtime.")
+    print(f"[OpenCV] OPENCV_FFMPEG_CAPTURE_OPTIONS={env['OPENCV_FFMPEG_CAPTURE_OPTIONS']}")
+    return env
 
 
 def stop_process_tree(process: subprocess.Popen) -> None:
@@ -23,6 +61,7 @@ def stop_process_tree(process: subprocess.Popen) -> None:
 
 
 def main() -> int:
+    env = build_server_env()
     command = [
         sys.executable,
         "-m",
@@ -35,7 +74,7 @@ def main() -> int:
         "--reload",
     ]
 
-    process = subprocess.Popen(command, cwd=os.getcwd())
+    process = subprocess.Popen(command, cwd=str(ROOT), env=env)
     time.sleep(2)
     webbrowser.open(URL)
 

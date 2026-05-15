@@ -60,6 +60,12 @@ web:
   loop_local_video: true
   frame_skip_lag_multiplier: 2.0
   recording_buffer_max: 300
+  openvino_enabled: true
+  openvino_device: "GPU"
+  openvino_fallback_device: "CPU"
+  openvino_pose_weights: "models/yolo11n-pose_openvino_model"
+  openvino_tracking_weights: "models/tracking_openvino_model"
+  openvino_detect_weights: "models/yolo11n_openvino_model"
 
 reid:
   weights: "models/fastreid_market_R50.pth"

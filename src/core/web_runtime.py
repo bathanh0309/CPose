@@ -5,11 +5,24 @@ from typing import Any
 
 import cv2
 import numpy as np
+import os
 
 from src.action.pose_buffer import PoseSequenceBuffer
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.filters import bbox_area, keypoint_quality
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
+
+
+def available_openvino_devices() -> list[str]:
+    try:
+        try:
+            from openvino.runtime import Core
+        except ModuleNotFoundError:
+            from openvino import Core
+
+        return list(Core().available_devices)
+    except Exception:
+        return []
 
 
 def clipped_crop(frame: np.ndarray, bbox: list[float]):
@@ -32,6 +45,9 @@ class WebAIProcessor:
 
         self.pose_tracker = None
         self.pose_tracker_error = None
+        self.openvino_devices = available_openvino_devices()
+        self.openvino_device = self._select_openvino_device()
+        self.openvino_enabled = bool(self.openvino_device)
 
         self.reid_extractor = None
         self.reid_gallery = None
@@ -47,6 +63,39 @@ class WebAIProcessor:
     def set_modules(self, modules: set[str]):
         self.modules = set(modules)
 
+    def _select_openvino_device(self) -> str | None:
+        web_cfg = self.cfg.get("web", {})
+        env_enabled = os.environ.get("CPOSE_OPENVINO_ENABLED")
+        if env_enabled is not None and env_enabled.strip() in {"0", "false", "False"}:
+            return None
+        if env_enabled is None and not web_cfg.get("openvino_enabled", False):
+            return None
+        if not self.openvino_devices:
+            return None
+
+        preferred_raw = str(os.environ.get("CPOSE_OPENVINO_DEVICE") or web_cfg.get("openvino_device", "GPU"))
+        preferred = preferred_raw.replace("intel:", "").upper()
+        fallback = str(web_cfg.get("openvino_fallback_device", "CPU")).upper()
+        if preferred in self.openvino_devices:
+            return preferred
+        if fallback in self.openvino_devices:
+            return fallback
+        return None
+
+    def _select_yolo_pose_runtime(self) -> tuple[str, str | None, str]:
+        pose_cfg = self.cfg.get("pose", {})
+        web_cfg = self.cfg.get("web", {})
+        pt_weights = str(pose_cfg["weights"])
+
+        if self.openvino_enabled:
+            ov_weights = web_cfg.get("openvino_pose_weights")
+            if ov_weights and Path(str(ov_weights)).exists():
+                device = self.openvino_device
+                yolo_device = device if str(device).lower().startswith("intel:") else f"intel:{str(device).lower()}"
+                return str(ov_weights), yolo_device, "OpenVINO"
+
+        return pt_weights, self.cfg.get("system", {}).get("device"), "PyTorch"
+
     def _ensure_pose_tracker(self):
         if self.pose_tracker is not None:
             return True
@@ -55,12 +104,17 @@ class WebAIProcessor:
         try:
             pose_cfg = self.cfg.get("pose", {})
             tracking_cfg = self.cfg.get("tracking", {})
+            weights, device, runtime = self._select_yolo_pose_runtime()
+            print(
+                f"[WebAIProcessor] cam={self.camera_id} YOLO runtime={runtime} "
+                f"weights={weights} device={device}"
+            )
             self.pose_tracker = YoloPoseTracker(
-                weights=pose_cfg["weights"],
+                weights=weights,
                 conf=tracking_cfg.get("person_conf", pose_cfg.get("conf", 0.6)),
                 iou=tracking_cfg.get("iou", pose_cfg.get("iou", 0.5)),
                 tracker=tracking_cfg.get("tracker_yaml", "bytetrack.yaml"),
-                device=self.cfg.get("system", {}).get("device"),
+                device=device,
                 classes=tracking_cfg.get("classes", [0]),
                 tracking_cfg=tracking_cfg,
             )

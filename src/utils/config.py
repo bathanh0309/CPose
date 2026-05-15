@@ -18,6 +18,9 @@ PATH_FIELDS = {
     ("adl", "export_dir"),
     ("adl", "work_dir"),
     ("object", "weights"),
+    ("web", "openvino_pose_weights"),
+    ("web", "openvino_tracking_weights"),
+    ("web", "openvino_detect_weights"),
 }
 
 ULTRALYTICS_BUILTIN_TRACKERS = {"bytetrack.yaml", "botsort.yaml"}

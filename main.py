@@ -1,31 +1,13 @@
 ﻿"""
-CPose â€” FastAPI backend (fixed)
-
-Fixes applied:
-  #1/#3  Module routing: WS nháº­n query param ?modules=pose,track,reid,adl
-  #2/#5  Save-on-demand: POST /api/save-video/{cam_id} ghi buffer ra file
-  #4     XÃ³a fake log (frame % 90)
-  #6     Pipeline hook sáºµn sÃ ng uncomment khi model weights cÃ³ máº·t
-  #7     Frame buffer per session (deque) Ä‘á»ƒ save-on-demand hoáº¡t Ä‘á»™ng
+CPose — FastAPI backend (fixed + performance optimized)
 """
 
-# Performance fixes:
-# FIX #8  Adaptive sleep theo target_fps.
-# FIX #9  Binary WebSocket JPEG frames, JSON chỉ cho control/log/metric.
-# FIX #10 Receive command task riêng, hot loop không wait_for.
-# FIX #11 Skip AI overlay khi loop lag, vẫn gửi frame raw.
-# FIX #12 Recording buffer 300 frame, opt-in qua recording flag.
-# FIX #13 POST /api/recording/start|stop/{session_id}.
-# FIX #14 CAP_PROP_BUFFERSIZE=1 cho OpenCV capture.
-# FIX #15 JPEG quality adaptive 75 -> 50 -> 75.
-# FIX #16 Frontend render ArrayBuffer binary frames.
-# FIX #17 Frontend FPS badge.
-# FIX #18 Frontend stale-frame overlay.
-
 import asyncio
+import os
 import socket
 import time
 import uuid
+import threading
 from collections import deque
 from pathlib import Path
 from typing import Annotated, Dict, Optional, Set
@@ -42,6 +24,8 @@ from src.core.ui_logger import ui_logger
 from src.core.web_runtime import WebAIProcessor
 from src.utils.config import load_pipeline_cfg
 
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+
 BASE_DIR   = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "data" / "config" / "resources.txt"
 PIPELINE_CONFIG = BASE_DIR / "configs" / "system" / "pipeline.yaml"
@@ -49,20 +33,11 @@ UPLOAD_DIR  = BASE_DIR / "data" / "uploads"
 OUTPUT_DIR  = BASE_DIR / "data" / "output" / "vis"
 STATIC_DIR  = BASE_DIR / "static"
 
-# ---------------------------------------------------------------------------
-# Frame buffer: session_id â†’ deque of encoded JPEG bytes (giá»¯ tá»‘i Ä‘a 9000 frame ~ 5 phÃºt @30fps)
-# ---------------------------------------------------------------------------
 BUFFER_MAX   = 300
-_frame_buffers: Dict[str, deque] = {}   # session_id â†’ deque[bytes]
-_session_meta: Dict[str, dict]   = {}   # session_id â†’ {width, height, fps}
+_frame_buffers: Dict[str, deque] = {}   
+_session_meta: Dict[str, dict]   = {}   
 _recording_flags: Dict[str, bool] = {}
 _pipeline_cfg: Optional[dict] = None
-
-# ---------------------------------------------------------------------------
-# (Optional) Pipeline import â€” uncomment khi model weights Ä‘Ã£ sáºµn sÃ ng
-# ---------------------------------------------------------------------------
-# from src.core.pipeline import CPosePipeline
-# _pipeline: Optional[CPosePipeline] = None
 
 app = FastAPI(title="CPose Control Panel")
 app.add_middleware(
@@ -82,13 +57,10 @@ if STATIC_DIR.exists():
 
 VALID_MODULES: Set[str] = {"pose", "track", "reid", "adl"}
 
-
 def parse_modules(raw: Optional[str]) -> Set[str]:
-    """'pose,track,reid' â†’ {'pose', 'track', 'reid'}"""
     if not raw:
         return set()
     return {m.strip().lower() for m in raw.split(",") if m.strip().lower() in VALID_MODULES}
-
 
 def get_pipeline_cfg() -> dict:
     global _pipeline_cfg
@@ -96,13 +68,11 @@ def get_pipeline_cfg() -> dict:
         _pipeline_cfg = load_pipeline_cfg(PIPELINE_CONFIG, BASE_DIR)
     return _pipeline_cfg
 
-
 def format_terminal_ai_log(cam_id: str, msg: str) -> str:
     if ":" in msg:
         module, rest = msg.split(":", 1)
         return f"[cam={cam_id}][{module.strip()}] {rest.strip()}"
     return f"[cam={cam_id}] {msg}"
-
 
 def mask_rtsp_credentials(value: str) -> str:
     parsed = urlparse(value)
@@ -121,7 +91,6 @@ def mask_rtsp_credentials(value: str) -> str:
         netloc = f"{username}:***@{host}"
     return parsed._replace(netloc=netloc).geturl()
 
-
 def camera_to_payload(camera: dict, index: int) -> dict:
     url_masked = mask_rtsp_credentials(camera["url"])
     name = camera["name"]
@@ -129,53 +98,36 @@ def camera_to_payload(camera: dict, index: int) -> dict:
         "id": f"camera:{index}",
         "name": name,
         "url_masked": url_masked,
-        "display": f"{name} â€” {url_masked}",
+        "display": f"{name} — {url_masked}",
     }
 
-
 async def safe_send_json(websocket: WebSocket, payload: dict) -> bool:
-    """
-    Send JSON only while the websocket is connected.
-    Return False when the client disconnected or a close was already sent.
-    """
     try:
-        if (
-            websocket.client_state != WebSocketState.CONNECTED
-            or websocket.application_state != WebSocketState.CONNECTED
-        ):
+        if websocket.client_state != WebSocketState.CONNECTED or websocket.application_state != WebSocketState.CONNECTED:
             return False
         await websocket.send_json(payload)
         return True
     except WebSocketDisconnect:
         return False
-    except RuntimeError as exc:
-        if "Cannot call" not in str(exc) and "close message" not in str(exc):
-            print(f"[WS] send runtime warning: {exc}")
+    except RuntimeError:
         return False
     except Exception as exc:
         print(f"[WS] send warning: {exc}")
         return False
 
-
 async def safe_send_bytes(websocket: WebSocket, payload: bytes) -> bool:
     try:
-        if (
-            websocket.client_state != WebSocketState.CONNECTED
-            or websocket.application_state != WebSocketState.CONNECTED
-        ):
+        if websocket.client_state != WebSocketState.CONNECTED or websocket.application_state != WebSocketState.CONNECTED:
             return False
         await websocket.send_bytes(payload)
         return True
     except WebSocketDisconnect:
         return False
-    except RuntimeError as exc:
-        if "Cannot call" not in str(exc) and "close message" not in str(exc):
-            print(f"[WS] send bytes runtime warning: {exc}")
+    except RuntimeError:
         return False
     except Exception as exc:
         print(f"[WS] send bytes warning: {exc}")
         return False
-
 
 async def safe_close_websocket(websocket: WebSocket) -> None:
     try:
@@ -184,41 +136,25 @@ async def safe_close_websocket(websocket: WebSocket) -> None:
     except (WebSocketDisconnect, RuntimeError):
         pass
 
-
-async def receive_commands(
-    websocket: WebSocket,
-    processor: WebAIProcessor,
-    stop_event: asyncio.Event,
-    log_queue: asyncio.Queue,
-) -> None:
+async def receive_commands(websocket: WebSocket, processor: WebAIProcessor, stop_event: asyncio.Event, log_queue: asyncio.Queue) -> None:
     while not stop_event.is_set():
         try:
             msg = await websocket.receive_json()
             if msg.get("type") == "set_modules":
                 active_modules = parse_modules(msg.get("modules", ""))
                 processor.set_modules(active_modules)
-                await log_queue.put((
-                    "system",
-                    f"Modules cáº­p nháº­t: {', '.join(active_modules) or 'none'}",
-                ))
+                await log_queue.put(("system", f"Modules updated: {', '.join(active_modules) or 'none'}"))
             elif msg.get("type") == "stop":
                 stop_event.set()
                 break
-        except WebSocketDisconnect:
+        except Exception:
             stop_event.set()
             break
-        except RuntimeError:
-            stop_event.set()
-            break
-        except Exception as exc:
-            print(f"[WS] receive warning cam={processor.camera_id}: {exc}")
-
 
 def is_local_file_source(source: str) -> bool:
     if "://" in source:
         return False
     return Path(source).exists()
-
 
 def read_camera_sources():
     cameras = []
@@ -235,23 +171,21 @@ def read_camera_sources():
                     cameras.append({"name": name, "url": url})
     return cameras
 
-
 def resolve_video_source(source: Optional[str], url: Optional[str]) -> tuple[Optional[str], str]:
     if source and source.startswith("camera:"):
         try:
             camera_index = int(source.split(":", 1)[1])
         except ValueError:
-            return None, "Camera khÃ´ng há»£p lá»‡"
+            return None, "Invalid camera"
         cameras = read_camera_sources()
         if camera_index < 0 or camera_index >= len(cameras):
-            return None, "Camera khÃ´ng tá»“n táº¡i"
+            return None, "Camera does not exist"
         return cameras[camera_index]["url"], cameras[camera_index]["name"]
     if source:
         return source, "File upload"
     if url:
-        return url, "Nguá»“n RTSP"
-    return None, "ChÆ°a chá»n nguá»“n video"
-
+        return url, "RTSP Source"
+    return None, "No video source selected"
 
 def describe_rtsp_tcp_status(video_source: str, timeout: float = 3.0) -> Optional[str]:
     parsed = urlparse(video_source)
@@ -263,11 +197,7 @@ def describe_rtsp_tcp_status(video_source: str, timeout: float = 3.0) -> Optiona
         with socket.create_connection((parsed.hostname, port), timeout=timeout):
             return None
     except OSError as exc:
-        return (
-            f"RTSP TCP check failed: cannot connect to "
-            f"{mask_rtsp_credentials(video_source)} ({exc})"
-        )
-
+        return f"RTSP TCP check failed: cannot connect to {mask_rtsp_credentials(video_source)} ({exc})"
 
 def open_video_capture(video_source: str) -> cv2.VideoCapture:
     params = [
@@ -280,14 +210,156 @@ def open_video_capture(video_source: str) -> cv2.VideoCapture:
         cap = cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, params)
     except Exception:
         cap = cv2.VideoCapture(video_source)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
+
     return cap
 
 
-# ---------------------------------------------------------------------------
-# Routes â€” static
-# ---------------------------------------------------------------------------
+class ThreadedCamera:
+    """
+    Non-blocking OpenCV camera reader.
 
+    cv2.VideoCapture.read() blocks on slow RTSP/network sources. This class
+    moves capture.read() into a background daemon thread and keeps only the
+    latest frame. The async WebSocket loop reads the latest frame immediately.
+    """
+
+    def __init__(
+        self,
+        source: str,
+        loop_local_video: bool = True,
+        name: str = "camera",
+        sleep_sec: float = 0.005,
+    ):
+        self.source = source
+        self.loop_local_video = bool(loop_local_video)
+        self.name = name
+        self.sleep_sec = float(sleep_sec)
+
+        self.cap: Optional[cv2.VideoCapture] = None
+        self.frame: Optional[np.ndarray] = None
+        self.last_frame_ts: float = 0.0
+
+        self.width: int = 640
+        self.height: int = 480
+        self.fps: float = 25.0
+
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._opened_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+        self._opened = False
+        self._error: Optional[str] = None
+
+    def start(self) -> "ThreadedCamera":
+        if self._thread and self._thread.is_alive():
+            return self
+
+        self._thread = threading.Thread(
+            target=self._reader_loop,
+            name=f"ThreadedCamera-{self.name}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def _reader_loop(self) -> None:
+        try:
+            self.cap = open_video_capture(self.source)
+
+            if not self.cap or not self.cap.isOpened():
+                self._error = f"OpenCV cannot open source: {mask_rtsp_credentials(self.source)}"
+                self._opened = False
+                self._opened_event.set()
+                return
+
+            self._opened = True
+
+            fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 25.0)
+            if fps <= 1 or fps > 240:
+                fps = 25.0
+
+            self.fps = fps
+            self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
+            self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
+
+            self._opened_event.set()
+
+            while not self._stop_event.is_set():
+                ok, frame = self.cap.read()
+
+                if not ok or frame is None:
+                    if is_local_file_source(self.source) and self.loop_local_video:
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        time.sleep(self.sleep_sec)
+                        continue
+
+                    self._error = "Lost signal or cannot read frame."
+                    time.sleep(0.05)
+                    continue
+
+                with self._lock:
+                    self.frame = frame
+                    self.last_frame_ts = time.monotonic()
+
+                time.sleep(self.sleep_sec)
+
+        except Exception as exc:
+            self._error = f"ThreadedCamera error: {exc}"
+            self._opened = False
+            self._opened_event.set()
+
+        finally:
+            try:
+                if self.cap is not None:
+                    self.cap.release()
+            except Exception:
+                pass
+
+    def wait_opened(self, timeout: float = 5.0) -> bool:
+        self._opened_event.wait(timeout=timeout)
+        return self._opened
+
+    def read(self, copy: bool = True) -> Optional[np.ndarray]:
+        with self._lock:
+            if self.frame is None:
+                return None
+            return self.frame.copy() if copy else self.frame
+
+    def get_meta(self) -> dict:
+        return {"fps": self.fps, "width": self.width, "height": self.height}
+
+    def age(self) -> float:
+        if self.last_frame_ts <= 0:
+            return float("inf")
+        return time.monotonic() - self.last_frame_ts
+
+    def error(self) -> Optional[str]:
+        return self._error
+
+    def release(self, join_timeout: float = 2.0) -> None:
+        self._stop_event.set()
+
+        try:
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=join_timeout)
+        except RuntimeError:
+            pass
+
+        try:
+            if self.cap is not None:
+                self.cap.release()
+        except Exception:
+            pass
+
+# ---------------------------------------------------------------------------
+# Routes — static
+# ---------------------------------------------------------------------------
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -295,69 +367,20 @@ def index():
 @app.get("/style.css")
 def stylesheet():
     content = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
-    return Response(
-        content=content,
-        media_type="text/css",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return Response(content=content, media_type="text/css")
 
 @app.get("/scripts.js")
 def scripts():
     content = (STATIC_DIR / "scripts.js").read_text(encoding="utf-8")
-    return Response(
-        content=content,
-        media_type="application/javascript",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return Response(content=content, media_type="application/javascript")
 
 # ---------------------------------------------------------------------------
-# Routes â€” cameras & upload
+# Routes — cameras & upload
 # ---------------------------------------------------------------------------
-
 @app.get("/api/cameras")
 def get_cameras():
     cameras = [camera_to_payload(c, i) for i, c in enumerate(read_camera_sources())]
     return JSONResponse(content=cameras)
-
-
-@app.post("/api/cameras/config")
-async def upload_camera_config(file: Annotated[UploadFile, File(...)]):
-    if not file.filename or not file.filename.lower().endswith(".txt"):
-        return JSONResponse(status_code=400, content={"error": "Only .txt camera config files are supported"})
-
-    content = (await file.read()).decode("utf-8-sig")
-    cameras = []
-    lines = []
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "__" not in line:
-            return JSONResponse(status_code=400, content={"error": f"Invalid camera line: {line}"})
-
-        name, url = line.split("__", 1)
-        name = name.strip()
-        url = url.strip()
-        if not name:
-            return JSONResponse(status_code=400, content={"error": f"Invalid camera line: {line}"})
-        if not url.lower().startswith("rtsp://"):
-            return JSONResponse(status_code=400, content={"error": f"Invalid camera line: {line}"})
-
-        cameras.append({"name": name, "url": url})
-        lines.append(f"{name}__{url}")
-
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"cameras": [camera_to_payload(camera, i) for i, camera in enumerate(cameras)]}
-
 
 @app.post("/api/upload")
 async def upload_video(file: Annotated[UploadFile, File(...)]):
@@ -373,20 +396,13 @@ async def upload_video(file: Annotated[UploadFile, File(...)]):
             f.write(chunk)
     return {"name": target.name, "source": str(target)}
 
-
 # ---------------------------------------------------------------------------
-# FIX #2 / #5 â€” Save-on-demand endpoint
+# Save-on-demand endpoint
 # ---------------------------------------------------------------------------
-
 @app.post("/api/save-video/{session_id}")
 async def save_video(session_id: str):
-    """
-    Ghi frame buffer cá»§a session ra file MP4.
-    Frontend gá»i endpoint nÃ y khi ngÆ°á»i dÃ¹ng nháº¥n nÃºt "LÆ°u video".
-    KhÃ´ng cÃ³ auto-save nÃ o xáº£y ra náº¿u khÃ´ng gá»i endpoint nÃ y.
-    """
     if session_id not in _frame_buffers or not _frame_buffers[session_id]:
-        return JSONResponse(status_code=404, content={"error": "KhÃ´ng cÃ³ frame nÃ o trong buffer"})
+        return JSONResponse(status_code=404, content={"error": "No frames in buffer"})
 
     meta = _session_meta.get(session_id, {})
     fps    = meta.get("fps", 25)
@@ -409,7 +425,6 @@ async def save_video(session_id: str):
 
     return {"saved": out_name.name, "frames": len(frames), "path": str(out_name)}
 
-
 @app.post("/api/recording/start/{session_id}")
 async def start_recording(session_id: str):
     maxlen = int(get_pipeline_cfg().get("web", {}).get("recording_buffer_max", BUFFER_MAX))
@@ -417,77 +432,46 @@ async def start_recording(session_id: str):
     _recording_flags[session_id] = True
     return {"session_id": session_id, "recording": True, "buffer_max": maxlen}
 
-
 @app.post("/api/recording/stop/{session_id}")
 async def stop_recording(session_id: str):
     _recording_flags[session_id] = False
-    return {
-        "session_id": session_id,
-        "recording": False,
-        "buffered_frames": len(_frame_buffers.get(session_id, [])),
-    }
-
+    return {"session_id": session_id, "recording": False, "buffered_frames": len(_frame_buffers.get(session_id, []))}
 
 @app.post("/api/save-excel/{session_id}")
 async def save_excel(session_id: str):
-    return JSONResponse(
-        status_code=501,
-        content={"error": "Save Excel is not implemented yet", "session_id": session_id},
-    )
-
+    return JSONResponse(status_code=501, content={"error": "Save Excel is not implemented yet", "session_id": session_id})
 
 @app.get("/api/sessions")
 def list_sessions():
-    return {
-        sid: {
-            "buffered_frames": len(buf),
-            **_session_meta.get(sid, {}),
-        }
-        for sid, buf in _frame_buffers.items()
-    }
-
+    return {sid: {"buffered_frames": len(buf), **_session_meta.get(sid, {})} for sid, buf in _frame_buffers.items()}
 
 @app.get("/api/logs/{camera_id}")
 def get_logs(camera_id: str):
     return {"camera_id": camera_id, "logs": ui_logger.get_logs(camera_id)}
 
-
 @app.get("/api/metrics/{camera_id}")
 def get_metrics(camera_id: str):
     return {"camera_id": camera_id, "metrics": ui_logger.get_metrics(camera_id)}
 
-
 @app.get("/api/status")
 def get_status():
     return {
-        "sessions": {
-            sid: {
-                "buffered_frames": len(buf),
-                **_session_meta.get(sid, {}),
-            }
-            for sid, buf in _frame_buffers.items()
-        },
+        "sessions": {sid: {"buffered_frames": len(buf), **_session_meta.get(sid, {})} for sid, buf in _frame_buffers.items()},
         "ui_logger": ui_logger.status(),
     }
 
-
 # ---------------------------------------------------------------------------
-# FIX #1 / #3 â€” WebSocket vá»›i module routing + frame buffer
+# WebSocket
 # ---------------------------------------------------------------------------
-
 @app.websocket("/ws/stream/{cam_id}")
 async def stream_video(
-    websocket: WebSocket,
-    cam_id: str,
-    source: Optional[str] = None,
-    url: Optional[str] = None,
-    modules: Optional[str] = None,   # â† FIX #3: nháº­n danh sÃ¡ch module tá»« UI
-    session_id: Optional[str] = None,
+    websocket: WebSocket, cam_id: str, source: Optional[str] = None, url: Optional[str] = None,
+    modules: Optional[str] = None, session_id: Optional[str] = None,
 ):
     await websocket.accept()
     connected = True
+    camera: Optional[ThreadedCamera] = None
 
-    # Parse modules
     active_modules = parse_modules(modules)
     cfg = get_pipeline_cfg()
     web_cfg = cfg.get("web", {})
@@ -502,20 +486,13 @@ async def stream_video(
     recording_buffer_max = int(web_cfg.get("recording_buffer_max", BUFFER_MAX))
     processor = WebAIProcessor(camera_id=cam_id, modules=active_modules, cfg=cfg)
 
-    # Táº¡o session_id náº¿u chÆ°a cÃ³
     if not session_id:
         session_id = str(uuid.uuid4())
 
-    # Khá»Ÿi táº¡o buffer cho session nÃ y
     _frame_buffers[session_id] = deque(maxlen=recording_buffer_max)
     _recording_flags[session_id] = False
 
-    # Gá»­i session_id vá» client Ä‘á»ƒ sau nÃ y gá»i /api/save-video/{session_id}
-    if not await safe_send_json(websocket, {
-        "type": "session",
-        "session_id": session_id,
-        "active_modules": list(active_modules),
-    }):
+    if not await safe_send_json(websocket, {"type": "session", "session_id": session_id, "active_modules": list(active_modules)}):
         return
 
     video_source, source_label = resolve_video_source(source, url)
@@ -527,37 +504,38 @@ async def stream_video(
     rtsp_tcp_error = describe_rtsp_tcp_status(video_source)
     if rtsp_tcp_error:
         print(f"[RTSP] TCP check failed for {mask_rtsp_credentials(video_source)}")
-        if await safe_send_json(websocket, {
-            "type": "log",
-            "msg": "RTSP endpoint unreachable. Kiem tra camera/port trong config.",
-            "level": "error",
-        }):
+        if await safe_send_json(websocket, {"type": "log", "msg": "RTSP endpoint unreachable. Please check camera/port in config.", "level": "error"}):
             await safe_close_websocket(websocket)
         return
 
-    if not await safe_send_json(websocket, {
-        "type": "log",
-        "msg": f"Káº¿t ná»‘i: {source_label} | Modules: {', '.join(active_modules) or 'none'}",
-        "level": "system",
-    }):
+    if not await safe_send_json(websocket, {"type": "log", "msg": f"Connected to: {source_label} | Modules: {', '.join(active_modules) or 'none'}", "level": "system"}):
         return
 
-    cap = open_video_capture(video_source)
-    if not cap.isOpened():
-        print(f"[RTSP] OpenCV cannot open video source: {mask_rtsp_credentials(video_source)}")
+    camera = ThreadedCamera(
+        source=video_source,
+        loop_local_video=loop_local_video,
+        name=f"cam-{cam_id}",
+        sleep_sec=0.005,
+    ).start()
+
+    if not camera.wait_opened(timeout=5.0):
+        err_msg = camera.error() or "OpenCV/FFmpeg cannot open source."
+        print(f"[RTSP] {err_msg}")
         if await safe_send_json(websocket, {
             "type": "log",
-            "msg": f"Lá»—i: KhÃ´ng thá»ƒ má»Ÿ nguá»“n video {source_label}. OpenCV/FFmpeg cannot open source.",
+            "msg": f"Error: Cannot open video source {source_label}. {err_msg}",
             "level": "error",
         }):
             await safe_close_websocket(websocket)
+        camera.release()
         return
 
-    # LÆ°u metadata cho session (dÃ¹ng khi save)
-    fps    = cap.get(cv2.CAP_PROP_FPS) or 25
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    _session_meta[session_id] = {"fps": fps, "width": width, "height": height}
+    meta = camera.get_meta()
+    _session_meta[session_id] = {
+        "fps": meta["fps"],
+        "width": meta["width"],
+        "height": meta["height"],
+    }
 
     stop_event = asyncio.Event()
     log_queue: asyncio.Queue = asyncio.Queue()
@@ -568,18 +546,28 @@ async def stream_video(
         while connected and not stop_event.is_set():
             frame_start = time.monotonic()
 
-            ret, frame = cap.read()
-            if not ret:
-                if is_local_file_source(video_source) and loop_local_video:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
+            frame = camera.read(copy=True)
+            if frame is None:
+                if camera.error() and not is_local_file_source(video_source):
+                    if not await safe_send_json(websocket, {
+                        "type": "log",
+                        "msg": camera.error(),
+                        "level": "error",
+                    }):
+                        connected = False
+                    break
+                await asyncio.sleep(0.005)
+                continue
+
+            if camera.age() > 2.0:
                 if not await safe_send_json(websocket, {
                     "type": "log",
-                    "msg": "Mat tin hieu hoac khong doc duoc frame.",
-                    "level": "error",
+                    "msg": "Warning: camera stream is stale. Waiting for fresh frames...",
+                    "level": "warning",
                 }):
                     connected = False
-                break
+                await asyncio.sleep(0.02)
+                continue
 
             while not log_queue.empty():
                 level, msg = await log_queue.get()
@@ -594,14 +582,8 @@ async def stream_video(
                 processor.frame_idx += 1
                 fps_actual = round(1.0 / max(last_loop_elapsed, 1e-6), 2)
                 metrics = {
-                    "camera_id": cam_id,
-                    "frame_idx": processor.frame_idx,
-                    "fps": fps_actual,
-                    "modules": sorted(processor.modules),
-                    "detections": 0,
-                    "tracked": 0,
-                    "filtered": 0,
-                    "skip_ai": True,
+                    "camera_id": cam_id, "frame_idx": processor.frame_idx, "fps": fps_actual,
+                    "modules": sorted(processor.modules), "detections": 0, "tracked": 0, "filtered": 0, "skip_ai": True,
                 }
                 ai_logs = []
             else:
@@ -645,16 +627,17 @@ async def stream_video(
             await asyncio.sleep(max(0.0, target_interval - elapsed))
 
     except WebSocketDisconnect:
-        print(f"[System] Client ngat ket noi {cam_id}")
+        print(f"[System] Client disconnected: {cam_id}")
     finally:
         stop_event.set()
         command_task.cancel()
         try:
             await command_task
-        except (asyncio.CancelledError, RuntimeError, WebSocketDisconnect):
+        except Exception:
             pass
         try:
-            cap.release()
+            if camera is not None:
+                camera.release()
         except Exception as exc:
-            print(f"[System] cap.release warning cam={cam_id}: {exc}")
+            print(f"[System] camera.release warning cam={cam_id}: {exc}")
         print(f"[System] Stream closed cam={cam_id}, session={session_id}")

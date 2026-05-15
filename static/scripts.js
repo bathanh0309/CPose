@@ -1,4 +1,4 @@
-const FASTAPI_PORT = 8000;
+﻿const FASTAPI_PORT = 8000;
 const IS_LIVE_SERVER = location.port !== String(FASTAPI_PORT) && location.port !== "";
 const API_BASE = IS_LIVE_SERVER ? `http://${location.hostname}:${FASTAPI_PORT}` : "";
 const WS_BASE = IS_LIVE_SERVER ? `ws://${location.hostname}:${FASTAPI_PORT}` : `ws://${location.host}`;
@@ -21,20 +21,20 @@ async function handleRtspUpload(event, camId) {
   const formData = new FormData();
   formData.append("file", file);
 
-  addLog(camId, "Dang nap file RTSP config...", "system");
+  addLog(camId, "Loading RTSP config file...", "system");
   try {
     const res = await fetch(`${API_BASE}/api/cameras/config`, {
       method: "POST",
       body: formData
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Khong the nap RTSP config");
+    if (!res.ok) throw new Error(data.error || "Unable to load RTSP config");
 
     applyCameraList(data.cameras || []);
     selectDefaultCamera(camId);
-    addLog(camId, "Da nap RTSP config. Chon luong trong danh sach roi nhan ON.", "system");
+    addLog(camId, "RTSP config loaded. Select a stream from the list, then press ON.", "system");
   } catch (err) {
-    addLog(camId, `Loi nap RTSP config: ${err.message || err}`, "error");
+    addLog(camId, `RTSP config load error: ${err.message || err}`, "error");
   } finally {
     event.target.value = "";
   }
@@ -46,8 +46,8 @@ async function loadConfiguredCameras() {
     const cameras = await res.json();
     applyCameraList(cameras || []);
   } catch (err) {
-    addLog(1, "Khong the doc danh sach camera tu server.", "error");
-    addLog(2, "Khong the doc danh sach camera tu server.", "error");
+    addLog(1, "Unable to read camera list from server.", "error");
+    addLog(2, "Unable to read camera list from server.", "error");
   }
 }
 
@@ -59,7 +59,7 @@ function applyCameraList(cameras) {
     if (!selectEl) return;
 
     const previousValue = selectEl.value;
-    selectEl.innerHTML = '<option value="">Chon luong RTSP...</option>';
+    selectEl.innerHTML = '<option value="">Select RTSP stream...</option>';
 
     cameras.forEach((camera) => {
       const option = document.createElement("option");
@@ -99,7 +99,7 @@ function selectRtspCamera(camId, options = {}) {
   cameraSlots[camId] = rtspCameras.find((camera) => camera.id === selectedId) || null;
 
   if (cameraSlots[camId] && !options.silent) {
-    addLog(camId, `Da chon luong: ${cameraSlots[camId].display || cameraSlots[camId].name}`, "system");
+    addLog(camId, `Selected stream: ${cameraSlots[camId].display || cameraSlots[camId].name}`, "system");
   }
 
   if (sockets[camId] && cameraSlots[camId]) {
@@ -114,7 +114,7 @@ async function handleCamUpload(event, camId) {
   const formData = new FormData();
   formData.append("file", file);
 
-  addLog(camId, `Dang tai len video: ${file.name}...`, "system");
+  addLog(camId, `Uploading video: ${file.name}...`, "system");
   try {
     const res = await fetch(`${API_BASE}/api/upload`, {
       method: "POST",
@@ -128,9 +128,9 @@ async function handleCamUpload(event, camId) {
     setSelectToUploadedFile(camId, file.name);
     cameraSlots[camId] = null;
 
-    addLog(camId, "Upload thanh cong. San sang xu ly tu file noi bo.", "system");
+    addLog(camId, "Upload completed. Ready to process the local file.", "system");
   } catch (e) {
-    addLog(camId, `Loi upload: ${e.message || e}`, "error");
+    addLog(camId, `Upload error: ${e.message || e}`, "error");
   } finally {
     event.target.value = "";
   }
@@ -166,7 +166,7 @@ function toggleModule(camId, mod) {
   const mods = [...activeModules[camId]].join(",");
   addLog(
     camId,
-    mods ? `Modules cap nhat: ${mods}` : "Chua chon module AI nao, dang phat raw stream.",
+    mods ? `Modules updated: ${mods}` : "No AI module selected, playing raw stream.",
     mods ? "system" : "warning"
   );
 
@@ -183,7 +183,7 @@ function startStream(camId) {
   const videoSource = sourceEl.value.trim();
 
   if (!videoSource) {
-    alert(`Vui long chon luong RTSP hoac upload video cho Camera ${camId}`);
+    alert(`Please select an RTSP stream or upload a video for Camera ${camId}`);
     return;
   }
 
@@ -191,7 +191,7 @@ function startStream(camId) {
     sockets[camId].close();
   }
 
-  setStatus(camId, "Dang ket noi...", "offline");
+  setStatus(camId, "Connecting...", "offline");
   document.getElementById(`placeholder-${camId}`).style.display = "none";
   const img = document.getElementById(`frame-${camId}`);
   img.style.display = "block";
@@ -203,12 +203,12 @@ function startStream(camId) {
 
   const mods = [...activeModules[camId]].join(",");
   if (!mods) {
-    addLog(camId, "Chua chon module AI nao, dang phat raw stream.", "warning");
+    addLog(camId, "No AI module selected, playing raw stream.", "warning");
   }
   const wsUrl = `${WS_BASE}/ws/stream/${camId}?source=${encodeURIComponent(videoSource)}&modules=${mods}`;
   const displayName = getSelectedDisplayName(camId);
-  addLog(camId, `Bat dau tiep nhan luong: ${displayName}`, "system");
-  addLog(camId, `Phan tich cac module: [${mods}]`, "system");
+  addLog(camId, `Starting stream: ${displayName}`, "system");
+  addLog(camId, `Analyzing modules: [${mods}]`, "system");
 
   const ws = new WebSocket(wsUrl);
   ws.binaryType = "arraybuffer";
@@ -216,7 +216,7 @@ function startStream(camId) {
   initFrameStats(camId);
 
   ws.onopen = () => {
-    setStatus(camId, "Dang Live", "online");
+    setStatus(camId, "Live", "online");
   };
 
   ws.onmessage = (evt) => {
@@ -228,11 +228,11 @@ function startStream(camId) {
   };
 
   ws.onerror = () => {
-    addLog(camId, "Loi ket noi WebSocket toi Server AI.", "error");
+    addLog(camId, "WebSocket connection to AI server failed.", "error");
   };
 
   ws.onclose = () => {
-    setStatus(camId, "Mat ket noi", "offline");
+    setStatus(camId, "Disconnected", "offline");
     img.style.display = "none";
     document.getElementById(`placeholder-${camId}`).style.display = "flex";
     toggleSaveButtons(camId, false);
@@ -284,7 +284,7 @@ function ensureVideoOverlays(camId) {
     stale = document.createElement("div");
     stale.id = `stale-overlay-${camId}`;
     stale.className = "stale-overlay";
-    stale.textContent = "Yeu tin hieu";
+    stale.textContent = "Weak signal";
     view.appendChild(stale);
   }
 
@@ -368,7 +368,7 @@ function stopStream(camId) {
       // ignore close races
     }
     sockets[camId].close();
-    addLog(camId, "Da ngat ket noi Camera.", "system");
+    addLog(camId, "Camera disconnected.", "system");
   }
 }
 
@@ -383,14 +383,14 @@ async function saveVideo(camId) {
   const sid = sessionIds[camId];
   if (!sid) return;
 
-  addLog(camId, "Dang dong goi va luu video...", "system");
+  addLog(camId, "Packaging and saving video...", "system");
   try {
     const res = await fetch(`${API_BASE}/api/save-video/${sid}`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.message || "Save Video failed");
-    addLog(camId, `Da luu Video: ${data.path || data.saved || data.message || ""}`, "ai");
+    addLog(camId, `Video saved: ${data.path || data.saved || data.message || ""}`, "ai");
   } catch (err) {
-    addLog(camId, `Loi luu video: ${err.message || err}`, "error");
+    addLog(camId, `Save video error: ${err.message || err}`, "error");
   }
 }
 
@@ -398,14 +398,14 @@ async function saveExcel(camId) {
   const sid = sessionIds[camId];
   if (!sid) return;
 
-  addLog(camId, "Dang trich xuat du lieu ra file Excel...", "system");
+  addLog(camId, "Exporting data to Excel...", "system");
   try {
     const res = await fetch(`${API_BASE}/api/save-excel/${sid}`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.message || "Save Excel failed");
-    addLog(camId, `Da luu Excel: ${data.file_path || data.message || ""}`, "ai");
+    addLog(camId, `Excel saved: ${data.file_path || data.message || ""}`, "ai");
   } catch (err) {
-    addLog(camId, `Loi luu Excel: ${err.message || err}`, "error");
+    addLog(camId, `Save Excel error: ${err.message || err}`, "error");
   }
 }
 
@@ -528,3 +528,4 @@ window.addEventListener("DOMContentLoaded", () => {
   bindUIEvents();
   loadConfiguredCameras();
 });
+

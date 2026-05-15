@@ -1,5 +1,5 @@
-<!DOCTYPE html>
-<html lang="vi">
+﻿<!DOCTYPE html>
+<html lang="en">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -19,19 +19,19 @@
       <div class="cam-card">
         <div class="cam-header">
           <span class="cam-label">CAMERA 1</span>
-          <span class="cam-status status-offline" id="status-1">Cho ket noi</span>
+          <span class="cam-status status-offline" id="status-1">Waiting for connection</span>
         </div>
 
         <div class="cam-source">
           <input type="hidden" id="cam1-source"/>
           <select id="cam1-display" class="text-input camera-select">
-            <option value="">Chon luong RTSP...</option>
+            <option value="">Select RTSP stream...</option>
           </select>
-          <label class="btn btn-outline btn-rtsp" title="Nap file resources.txt">
+          <label class="btn btn-outline btn-rtsp" title="Load resources.txt file">
             Upload RTSP
             <input type="file" id="rtsp-upload-1" accept=".txt" hidden/>
           </label>
-          <label class="btn btn-outline" title="Tai video len">
+          <label class="btn btn-outline" title="Upload video">
             Upload
             <input type="file" id="file-upload-1" accept="video/*" hidden/>
           </label>
@@ -57,14 +57,14 @@
         <div class="cam-view">
           <img id="frame-1" class="cam-frame" alt="Camera 1 stream"/>
           <div class="cam-placeholder" id="placeholder-1">
-            <span>Nap RTSP config, chon luong va nhan ON de bat dau Cam 1</span>
+            <span>Load RTSP config, select a stream, then press ON to start Cam 1</span>
           </div>
         </div>
 
         <div class="cam-log">
           <div class="log-header">
             <span>Log Camera 1</span>
-            <button class="btn-clear" id="clear-log-1">Xoa</button>
+            <button class="btn-clear" id="clear-log-1">Clear</button>
           </div>
           <div class="log-box" id="log-box-1"></div>
         </div>
@@ -73,19 +73,19 @@
       <div class="cam-card">
         <div class="cam-header">
           <span class="cam-label">CAMERA 2</span>
-          <span class="cam-status status-offline" id="status-2">Cho ket noi</span>
+          <span class="cam-status status-offline" id="status-2">Waiting for connection</span>
         </div>
 
         <div class="cam-source">
           <input type="hidden" id="cam2-source"/>
           <select id="cam2-display" class="text-input camera-select">
-            <option value="">Chon luong RTSP...</option>
+            <option value="">Select RTSP stream...</option>
           </select>
-          <label class="btn btn-outline btn-rtsp" title="Nap file resources.txt">
+          <label class="btn btn-outline btn-rtsp" title="Load resources.txt file">
             Upload RTSP
             <input type="file" id="rtsp-upload-2" accept=".txt" hidden/>
           </label>
-          <label class="btn btn-outline" title="Tai video len">
+          <label class="btn btn-outline" title="Upload video">
             Upload
             <input type="file" id="file-upload-2" accept="video/*" hidden/>
           </label>
@@ -111,14 +111,14 @@
         <div class="cam-view">
           <img id="frame-2" class="cam-frame" alt="Camera 2 stream"/>
           <div class="cam-placeholder" id="placeholder-2">
-            <span>Nap RTSP config, chon luong va nhan ON de bat dau Cam 2</span>
+            <span>Load RTSP config, select a stream, then press ON to start Cam 2</span>
           </div>
         </div>
 
         <div class="cam-log">
           <div class="log-header">
             <span>Log Camera 2</span>
-            <button class="btn-clear" id="clear-log-2">Xoa</button>
+            <button class="btn-clear" id="clear-log-2">Clear</button>
           </div>
           <div class="log-box" id="log-box-2"></div>
         </div>
@@ -129,3 +129,4 @@
   <script src="/scripts.js?v=20260515"></script>
 </body>
 </html>
+

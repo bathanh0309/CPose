@@ -25,7 +25,7 @@ class PedestrianYoloTracker:
         if not self.weights.exists():
             raise FileNotFoundError(
                 f"Pedestrian tracking weights not found: {self.weights}\n"
-                "Place the custom YOLO weight at models/tracking.pt or update [pedestrian].weights."
+                "Place the custom YOLO weight at models/tracking.pt or update [tracking].weights."
             )
 
         self.conf = float(conf)

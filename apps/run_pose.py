@@ -10,9 +10,9 @@ if str(ROOT) not in sys.path:
 
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.config import load_pipeline_cfg
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
-from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
+from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
 from src.utils.vis import FPSCounter, draw_detection, draw_info_panel
 
 logger = get_logger(__name__)
@@ -48,18 +48,18 @@ def main():
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = bool(args.show and not args.no_show)
+    logger.info(f"Opening video source: {source}")
+    show = not args.no_show
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
+    out_path = Path(args.output) if args.output else resolve_output_path(
+        cfg["system"]["vis_dir"],
+        make_video_output_name("pose", args.camera_id),
+    )
     writer = None
-    save_video = bool(args.save_video)
-    if save_video:
-        out_path = Path(args.output) if args.output else resolve_output_path(
-            cfg["system"]["vis_dir"],
-            make_video_output_name("pose", args.camera_id),
-        )
+    if args.save_video:
         writer = create_video_writer(out_path, fps, width, height)
-        logger.info(f"Saving video to: {out_path}")
+        logger.info(f"Recording started: {out_path}")
 
     if not cfg.get("output", {}).get("save_json", False):
         logger.info("Pose JSON disabled by config")
@@ -91,6 +91,7 @@ def main():
             ]
             avg_kpt = sum(keypoint_scores) / len(keypoint_scores) if keypoint_scores else 0.0
             valid_skeletons = sum(1 for det in detections if det.get("keypoints") is not None)
+            fps_value = fps_counter.tick()
             draw_info_panel(frame, {
                 "Module": "YOLO11-Pose",
                 "Camera": args.camera_id,
@@ -99,13 +100,27 @@ def main():
                 "Valid skeletons": valid_skeletons,
                 "Avg kpt": f"{avg_kpt:.2f}",
                 "Device": cfg["system"]["device"],
-                "FPS": f"{fps_counter.tick():.1f}",
+                "FPS": f"{fps_value:.1f}",
             })
+            log_frame_metrics(
+                logger,
+                "pose",
+                args.camera_id,
+                frame_idx,
+                fps_value,
+                interval=int(cfg.get("ui", {}).get("metrics_interval_frames", 5)),
+                persons=len(detections),
+                valid_skeletons=valid_skeletons,
+                invalid_skeletons=max(0, len(detections) - valid_skeletons),
+                avg_keypoint_score=f"{avg_kpt:.2f}",
+            )
 
             if writer is not None:
                 writer.write(frame)
             if show:
                 key = safe_imshow("CPose - Pose Estimation", frame)
+                if key in (ord("g"), ord("G")):
+                    writer = toggle_video_recording(writer, out_path, fps, width, height, logger)
                 if key in (27, ord("q"), ord("Q")):
                     break
     finally:

@@ -10,9 +10,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.utils.config import load_pipeline_cfg
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
-from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
+from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
 from src.utils.vis import FPSCounter, draw_info_panel
 
 logger = get_logger(__name__)
@@ -55,14 +55,14 @@ def main():
     show = not args.no_show
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
+    out_path = Path(args.output) if args.output else resolve_output_path(
+        cfg["system"]["vis_dir"],
+        make_video_output_name("object", args.camera_id),
+    )
     writer = None
     if args.save_video:
-        out_path = Path(args.output) if args.output else resolve_output_path(
-            cfg["system"]["vis_dir"],
-            make_video_output_name("object", args.camera_id),
-        )
         writer = create_video_writer(out_path, fps, width, height)
-        logger.info(f"Saving video to: {out_path}")
+        logger.info(f"Recording started: {out_path}")
 
     fps_counter = FPSCounter()
     frame_idx = -1
@@ -92,19 +92,31 @@ def main():
                     count += 1
                     draw_object(frame, box.xyxy[0].cpu().numpy().tolist(), f"{name} {score:.2f}")
 
+            fps_value = fps_counter.tick()
             draw_info_panel(frame, {
                 "Module": "Custom Object Detector",
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Objects": count,
                 "Device": cfg["system"]["device"],
-                "FPS": f"{fps_counter.tick():.1f}",
+                "FPS": f"{fps_value:.1f}",
             })
+            log_frame_metrics(
+                logger,
+                "object",
+                args.camera_id,
+                frame_idx,
+                fps_value,
+                interval=int(cfg.get("ui", {}).get("metrics_interval_frames", 5)),
+                objects=count,
+            )
 
             if writer is not None:
                 writer.write(frame)
             if show:
                 key = safe_imshow("CPose - Object Detector", frame)
+                if key in (ord("g"), ord("G")):
+                    writer = toggle_video_recording(writer, out_path, fps, width, height, logger)
                 if key in (27, ord("q"), ord("Q")):
                     break
     finally:

@@ -25,7 +25,7 @@ pose:
 
 tracking:
   enabled: true
-  model_type: "pose"
+  model_type: "pedestrian"
   weights: "models/tracking.pt"
   person_conf: 0.60
   iou: 0.5
@@ -39,9 +39,9 @@ tracking:
 object:
   enabled: false
   weights: "models/yolo11n.pt"
-  conf: 0.45
-  iou: 0.5
-  classes: [pickleball, paddle, ball]
+  conf: 0.7
+  iou: 0.7
+  classes: [pickleball, ]
 
 ui:
   enabled: true
@@ -51,12 +51,16 @@ ui:
 
 reid:
   weights: "models/fastreid_market_R50.pth"
+  fastreid_root: ".github/fast-reid"
   output_dir: "data/output/fastreid"
   gallery_dir: "data/gallery"
   embedding_dirs:
     - "data/face"
+    - "data/body"
+  id_aliases:
+    person01: APhu
   threshold: 0.55
-  reid_interval: 10
+  reid_interval: 20
   fastreid_config:
     MODEL:
       META_ARCHITECTURE: "Baseline"

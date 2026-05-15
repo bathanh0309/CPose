@@ -13,6 +13,7 @@ PATH_FIELDS = {
     ("reid", "weights"),
     ("reid", "output_dir"),
     ("reid", "gallery_dir"),
+    ("reid", "fastreid_root"),
     ("adl", "weights"),
     ("adl", "export_dir"),
     ("adl", "work_dir"),
@@ -129,7 +130,7 @@ def normalize_cfg(cfg: dict) -> dict:
 
     tracking_defaults = {
         "enabled": True,
-        "model_type": "pose",
+        "model_type": "pedestrian",
         "person_conf": 0.60,
         "iou": 0.5,
         "min_box_area": 2500,

@@ -11,9 +11,9 @@ if str(ROOT) not in sys.path:
 from src.action.pose_buffer import PoseSequenceBuffer
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.config import load_pipeline_cfg
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
-from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow
+from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
 
 logger = get_logger(__name__)
@@ -91,18 +91,18 @@ def main():
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = bool(args.show and not args.no_show)
+    logger.info(f"Opening video source: {source}")
+    show = not args.no_show
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
-    save_video = bool(args.save_video)
-    if save_video:
-        out_path = Path(args.output) if args.output else resolve_output_path(
-            cfg["system"]["vis_dir"],
-            make_video_output_name("adl", args.camera_id),
-        )
+    out_path = Path(args.output) if args.output else resolve_output_path(
+        cfg["system"]["vis_dir"],
+        make_video_output_name("adl", args.camera_id),
+    )
+    if args.save_video:
         writer = create_video_writer(out_path, fps, width, height)
-        logger.info(f"Saving video to: {out_path}")
+        logger.info(f"Recording started: {out_path}")
 
     if not cfg.get("output", {}).get("save_json", False):
         logger.info("ADL JSON disabled by config")
@@ -149,20 +149,35 @@ def main():
                 draw_detection(frame, det, label=f"track={tid} {adl_text(status)}")
 
             first_status = next(iter(track_status.values()), {"status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"]})
+            fps_value = fps_counter.tick()
             draw_info_panel(frame, {
                 "Module": "YOLO+Pose Buffer+PoseC3D",
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
                 "Device": cfg["system"]["device"],
-                "FPS": f"{fps_counter.tick():.1f}",
+                "FPS": f"{fps_value:.1f}",
             })
+            log_frame_metrics(
+                logger,
+                "adl",
+                args.camera_id,
+                frame_idx,
+                fps_value,
+                interval=int(cfg.get("ui", {}).get("metrics_interval_frames", 5)),
+                persons=len(detections),
+                adl_status=first_status.get("status", "waiting"),
+                sequence_len=first_status.get("current_len", 0),
+                seq_len_required=first_status.get("seq_len", cfg["adl"]["seq_len"]),
+            )
             draw_adl_status(frame, first_status, pos=(10, 150))
 
             if writer is not None:
                 writer.write(frame)
             if show:
                 key = safe_imshow("CPose - ADL", frame)
+                if key in (ord("g"), ord("G")):
+                    writer = toggle_video_recording(writer, out_path, fps, width, height, logger)
                 if key in (27, ord("q"), ord("Q")):
                     break
     finally:

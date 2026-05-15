@@ -32,7 +32,7 @@ Dự án này đã được chốt cấu trúc nghiêm ngặt. Khi đọc hoặc
 | Module | Models | Link GitHub | Link Paper |
 |---|---|---|---|
 | **Pose (YOLO11-Pose)** | `models/yolo11n-pose.pt` | [Ultralytics YOLO11 Pose](https://huggingface.co/Ultralytics/YOLO11/blob/main/yolo11n-pose.pt) | [YOLO11 paper](https://arxiv.org/abs/2506.00915v1) |
-| **Tracking (ByteTrack)** | `models/bytetrack_s_mot17.pth.tar`, `models/tracking.pt` | [FoundationVision/ByteTrack](https://github.com/FoundationVision/ByteTrack), [pedestrian-tracking](https://github.com/ErAkhileshSingh/pedestrian-tracking) | [ByteTrack paper](https://arxiv.org/abs/2110.06864) |
+| **Tracking (Pedestrian + ByteTrack)** | `models/tracking.pt` | [pedestrian-tracking](https://github.com/ErAkhileshSingh/pedestrian-tracking) + Ultralytics ByteTrack (`bytetrack.yaml`) | [ByteTrack paper](https://arxiv.org/abs/2110.06864) |
 | **ReID (FastReID)** | `models/fastreid_market_R50.pth` | [JDAI-CV FastReID Model Zoo](https://github.com/JDAI-CV/fast-reid/blob/master/MODEL_ZOO.md) | [FastReID paper](https://arxiv.org/abs/2006.02631) |
 | **ADL (PoseC3D)** | `models/posec3d_r50_ntu60.pth` | [MMAction2 PoseC3D configs](https://github.com/open-mmlab/mmaction2/tree/main/configs/skeleton/posec3d) | [PoseC3D paper](https://arxiv.org/abs/2104.13586) |
 

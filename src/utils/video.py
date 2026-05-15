@@ -56,6 +56,19 @@ def create_video_writer(output_path, fps, width, height):
     return writer
 
 
+def toggle_video_recording(writer, output_path, fps, width, height, logger=None):
+    if writer is None:
+        writer = create_video_writer(output_path, fps, width, height)
+        if logger is not None:
+            logger.info(f"Recording started: {output_path}")
+        return writer
+
+    writer.release()
+    if logger is not None:
+        logger.info(f"Recording saved: {output_path}")
+    return None
+
+
 def safe_imshow(window_name, frame, delay=1):
     cv2.imshow(window_name, frame)
     return cv2.waitKey(delay) & 0xFF

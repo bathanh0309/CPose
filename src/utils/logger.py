@@ -13,3 +13,22 @@ def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
         logger.addHandler(handler)
     logger.setLevel(level)
     return logger
+
+
+def log_frame_metrics(
+    logger: logging.Logger,
+    module: str,
+    camera_id: str,
+    frame_idx: int,
+    fps: float,
+    interval: int = 1,
+    **metrics,
+):
+    interval = max(1, int(interval))
+    if int(frame_idx) % interval != 0:
+        return
+    metric_text = " ".join(f"{key}={value}" for key, value in metrics.items())
+    logger.info(
+        f"[METRIC] module={module} camera={camera_id} frame={int(frame_idx)} fps={float(fps):.1f}"
+        + (f" {metric_text}" if metric_text else "")
+    )

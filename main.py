@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Annotated, Dict, Optional, Set
 from urllib.parse import urlparse
 
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;15000000|max_delay;500000"
+
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
@@ -23,8 +25,6 @@ from starlette.websockets import WebSocketState
 from src.core.ui_logger import ui_logger
 from src.core.web_runtime import WebAIProcessor
 from src.utils.config import load_pipeline_cfg
-
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
 BASE_DIR   = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "data" / "config" / "resources.txt"
@@ -202,9 +202,9 @@ def describe_rtsp_tcp_status(video_source: str, timeout: float = 3.0) -> Optiona
 def open_video_capture(video_source: str) -> cv2.VideoCapture:
     params = [
         cv2.CAP_PROP_OPEN_TIMEOUT_MSEC,
-        5000,
+        15000,
         cv2.CAP_PROP_READ_TIMEOUT_MSEC,
-        5000,
+        15000,
     ]
     try:
         cap = cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, params)
@@ -234,11 +234,15 @@ class ThreadedCamera:
         loop_local_video: bool = True,
         name: str = "camera",
         sleep_sec: float = 0.005,
+        max_read_failures: int = 30,
+        reconnect_delay: float = 2.0,
     ):
         self.source = source
         self.loop_local_video = bool(loop_local_video)
         self.name = name
         self.sleep_sec = float(sleep_sec)
+        self.max_read_failures = max(1, int(max_read_failures))
+        self.reconnect_delay = max(0.1, float(reconnect_delay))
 
         self.cap: Optional[cv2.VideoCapture] = None
         self.frame: Optional[np.ndarray] = None
@@ -255,6 +259,7 @@ class ThreadedCamera:
 
         self._opened = False
         self._error: Optional[str] = None
+        self._read_failures = 0
 
     def start(self) -> "ThreadedCamera":
         if self._thread and self._thread.is_alive():
@@ -268,29 +273,55 @@ class ThreadedCamera:
         self._thread.start()
         return self
 
-    def _reader_loop(self) -> None:
+    def _release_capture(self) -> None:
         try:
-            self.cap = open_video_capture(self.source)
+            if self.cap is not None:
+                self.cap.release()
+        except Exception:
+            pass
+        finally:
+            self.cap = None
 
-            if not self.cap or not self.cap.isOpened():
-                self._error = f"OpenCV cannot open source: {mask_rtsp_credentials(self.source)}"
-                self._opened = False
-                self._opened_event.set()
-                return
+    def _open_capture(self) -> bool:
+        self._release_capture()
+        cap = open_video_capture(self.source)
 
-            self._opened = True
-
-            fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 25.0)
-            if fps <= 1 or fps > 240:
-                fps = 25.0
-
-            self.fps = fps
-            self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
-            self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
-
+        if not cap or not cap.isOpened():
+            self._error = f"OpenCV cannot open source: {mask_rtsp_credentials(self.source)}"
+            self._opened = False
             self._opened_event.set()
+            try:
+                if cap is not None:
+                    cap.release()
+            except Exception:
+                pass
+            self._release_capture()
+            return False
 
-            while not self._stop_event.is_set():
+        self.cap = cap
+        self._opened = True
+        self._error = None
+        self._read_failures = 0
+
+        fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        if fps <= 1 or fps > 240:
+            fps = 25.0
+
+        self.fps = fps
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
+        self._opened_event.set()
+        print(f"[RTSP] Camera opened {self.name}: {mask_rtsp_credentials(self.source)}")
+        return True
+
+    def _reader_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                if self.cap is None or not self.cap.isOpened():
+                    if not self._open_capture():
+                        time.sleep(self.reconnect_delay)
+                    continue
+
                 ok, frame = self.cap.read()
 
                 if not ok or frame is None:
@@ -299,27 +330,39 @@ class ThreadedCamera:
                         time.sleep(self.sleep_sec)
                         continue
 
-                    self._error = "Lost signal or cannot read frame."
-                    time.sleep(0.05)
+                    self._read_failures += 1
+                    self._error = (
+                        f"Lost signal or cannot read frame "
+                        f"({self._read_failures}/{self.max_read_failures}). Reconnecting..."
+                    )
+                    if self._read_failures >= self.max_read_failures:
+                        print(f"[RTSP] Reconnecting {self.name}: {mask_rtsp_credentials(self.source)}")
+                        self._opened = False
+                        self._release_capture()
+                        time.sleep(self.reconnect_delay)
+                    else:
+                        time.sleep(0.05)
                     continue
 
                 with self._lock:
                     self.frame = frame
                     self.last_frame_ts = time.monotonic()
 
+                self._opened = True
+                self._error = None
+                self._read_failures = 0
+
                 time.sleep(self.sleep_sec)
 
-        except Exception as exc:
-            self._error = f"ThreadedCamera error: {exc}"
-            self._opened = False
-            self._opened_event.set()
+            except Exception as exc:
+                self._error = f"ThreadedCamera error: {exc}. Reconnecting..."
+                self._opened = False
+                self._opened_event.set()
+                print(f"[RTSP] {self.name} reader warning: {exc}")
+                self._release_capture()
+                time.sleep(self.reconnect_delay)
 
-        finally:
-            try:
-                if self.cap is not None:
-                    self.cap.release()
-            except Exception:
-                pass
+        self._release_capture()
 
     def wait_opened(self, timeout: float = 5.0) -> bool:
         self._opened_event.wait(timeout=timeout)
@@ -351,11 +394,7 @@ class ThreadedCamera:
         except RuntimeError:
             pass
 
-        try:
-            if self.cap is not None:
-                self.cap.release()
-        except Exception:
-            pass
+        self._release_capture()
 
 # ---------------------------------------------------------------------------
 # Routes — static
@@ -405,17 +444,25 @@ async def save_video(session_id: str):
         return JSONResponse(status_code=404, content={"error": "No frames in buffer"})
 
     meta = _session_meta.get(session_id, {})
-    fps    = meta.get("fps", 25)
-    width  = meta.get("width", 640)
-    height = meta.get("height", 480)
+    fps = meta.get("fps", 25)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_name = OUTPUT_DIR / f"session_{session_id[:8]}.mp4"
 
+    frames = list(_frame_buffers[session_id])
+    first_frame = None
+    for jpeg_bytes in frames:
+        arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+        first_frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if first_frame is not None:
+            break
+    if first_frame is None:
+        return JSONResponse(status_code=404, content={"error": "No decodable frames in buffer"})
+
+    height, width = first_frame.shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(out_name), fourcc, fps, (width, height))
 
-    frames = list(_frame_buffers[session_id])
     for jpeg_bytes in frames:
         arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -481,6 +528,9 @@ async def stream_video(
     jpeg_quality_base = int(web_cfg.get("jpeg_quality", 75))
     jpeg_quality_min = int(web_cfg.get("jpeg_quality_min", 50))
     jpeg_quality = jpeg_quality_base
+    threaded_camera = bool(web_cfg.get("threaded_camera", True))
+    stream_width = int(web_cfg.get("stream_width", 0) or 0)
+    infer_every_n_frames = max(1, int(web_cfg.get("infer_every_n_frames", 1) or 1))
     loop_local_video = bool(web_cfg.get("loop_local_video", True))
     lag_threshold = float(web_cfg.get("frame_skip_lag_multiplier", 2.0)) * target_interval
     recording_buffer_max = int(web_cfg.get("recording_buffer_max", BUFFER_MAX))
@@ -511,6 +561,9 @@ async def stream_video(
     if not await safe_send_json(websocket, {"type": "log", "msg": f"Connected to: {source_label} | Modules: {', '.join(active_modules) or 'none'}", "level": "system"}):
         return
 
+    if not threaded_camera:
+        print("[System] web.threaded_camera=false ignored; non-blocking streaming requires ThreadedCamera.")
+
     camera = ThreadedCamera(
         source=video_source,
         loop_local_video=loop_local_video,
@@ -521,14 +574,13 @@ async def stream_video(
     if not camera.wait_opened(timeout=5.0):
         err_msg = camera.error() or "OpenCV/FFmpeg cannot open source."
         print(f"[RTSP] {err_msg}")
-        if await safe_send_json(websocket, {
+        if not await safe_send_json(websocket, {
             "type": "log",
-            "msg": f"Error: Cannot open video source {source_label}. {err_msg}",
-            "level": "error",
+            "msg": f"Warning: camera is not ready yet. Waiting for reconnect... {err_msg}",
+            "level": "warning",
         }):
-            await safe_close_websocket(websocket)
-        camera.release()
-        return
+            camera.release()
+            return
 
     meta = camera.get_meta()
     _session_meta[session_id] = {
@@ -541,6 +593,7 @@ async def stream_video(
     log_queue: asyncio.Queue = asyncio.Queue()
     command_task = asyncio.create_task(receive_commands(websocket, processor, stop_event, log_queue))
     last_loop_elapsed = 0.0
+    last_stale_log_ts = 0.0
 
     try:
         while connected and not stop_event.is_set():
@@ -548,24 +601,27 @@ async def stream_video(
 
             frame = camera.read(copy=True)
             if frame is None:
-                if camera.error() and not is_local_file_source(video_source):
-                    if not await safe_send_json(websocket, {
-                        "type": "log",
-                        "msg": camera.error(),
-                        "level": "error",
-                    }):
+                now = time.monotonic()
+                if now - last_stale_log_ts >= 3.0:
+                    last_stale_log_ts = now
+                    msg = camera.error() or "Camera stream is stale. Waiting for reconnect..."
+                    if not await safe_send_json(websocket, {"type": "log", "msg": msg, "level": "warning"}):
                         connected = False
-                    break
-                await asyncio.sleep(0.005)
+                        break
+                await asyncio.sleep(0.01)
                 continue
 
-            if camera.age() > 2.0:
-                if not await safe_send_json(websocket, {
-                    "type": "log",
-                    "msg": "Warning: camera stream is stale. Waiting for fresh frames...",
-                    "level": "warning",
-                }):
-                    connected = False
+            if camera.age() > 3.0:
+                now = time.monotonic()
+                if now - last_stale_log_ts >= 3.0:
+                    last_stale_log_ts = now
+                    if not await safe_send_json(websocket, {
+                        "type": "log",
+                        "msg": "Camera stream is stale. Waiting for reconnect...",
+                        "level": "warning",
+                    }):
+                        connected = False
+                        break
                 await asyncio.sleep(0.02)
                 continue
 
@@ -577,13 +633,17 @@ async def stream_video(
             if not connected:
                 break
 
-            skip_ai = bool(processor.modules) and last_loop_elapsed > lag_threshold
+            next_frame_idx = processor.frame_idx + 1
+            skip_for_interval = bool(processor.modules) and (next_frame_idx % infer_every_n_frames != 0)
+            skip_for_lag = bool(processor.modules) and last_loop_elapsed > lag_threshold
+            skip_ai = skip_for_interval or skip_for_lag
             if skip_ai:
                 processor.frame_idx += 1
                 fps_actual = round(1.0 / max(last_loop_elapsed, 1e-6), 2)
                 metrics = {
                     "camera_id": cam_id, "frame_idx": processor.frame_idx, "fps": fps_actual,
-                    "modules": sorted(processor.modules), "detections": 0, "tracked": 0, "filtered": 0, "skip_ai": True,
+                    "modules": sorted(processor.modules), "detections": 0, "tracked": 0, "filtered": 0,
+                    "skip_ai": True, "skip_reason": "lag" if skip_for_lag else "interval",
                 }
                 ai_logs = []
             else:
@@ -606,6 +666,12 @@ async def stream_video(
                 jpeg_quality = jpeg_quality_min
             elif fps_actual > target_fps * 0.9:
                 jpeg_quality = jpeg_quality_base
+
+            if stream_width > 0:
+                h, w = frame.shape[:2]
+                if w > stream_width:
+                    scale = stream_width / float(w)
+                    frame = cv2.resize(frame, (stream_width, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
 
             ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
             if not ok:

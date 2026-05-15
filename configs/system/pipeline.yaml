@@ -46,6 +46,20 @@ object:
   iou: 0.7
   classes: [pickleball]
 
+person_gate:
+  enabled: true
+  weights: "models/yolo11n_openvino_model"
+  fallback_weights: "models/yolo11n.pt"
+  conf: 0.25
+  iou: 0.5
+  imgsz: 640
+  classes: [0]
+  min_box_area: 600
+  interval_frames: 2
+  lost_grace_frames: 15
+  log_interval_frames: 10
+  draw_gate_box: true
+
 ui:
   enabled: true
   log_metrics: true
@@ -53,15 +67,23 @@ ui:
   metrics_interval_frames: 5
 
 web:
-  target_fps: 25
-  jpeg_quality: 75
+  threaded_camera: true
+  stream_width: 960
+  infer_every_n_frames: 2
+  target_fps: 15
+  jpeg_quality: 55
   jpeg_quality_min: 50
   metrics_interval_frames: 10
   loop_local_video: true
   frame_skip_lag_multiplier: 2.0
   recording_buffer_max: 300
+  start_ai_on_person_only: true
+  person_gate_interval_frames: 3
+  no_person_log_interval_frames: 30
+  lost_person_grace_frames: 15
+  draw_waiting_panel: true
   openvino_enabled: true
-  openvino_device: "GPU"
+  openvino_device: "CPU"
   openvino_fallback_device: "CPU"
   openvino_pose_weights: "models/yolo11n-pose_openvino_model"
   openvino_tracking_weights: "models/tracking_openvino_model"

@@ -8,6 +8,7 @@ import numpy as np
 import os
 
 from src.action.pose_buffer import PoseSequenceBuffer
+from src.detectors.person_gate import PersonGateDetector
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.filters import bbox_area, keypoint_quality
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
@@ -49,6 +50,9 @@ class WebAIProcessor:
         self.openvino_device = self._select_openvino_device()
         self.openvino_enabled = bool(self.openvino_device)
 
+        self.person_gate = None
+        self.person_gate_error = None
+
         self.reid_extractor = None
         self.reid_gallery = None
         self.reid_error = None
@@ -60,8 +64,23 @@ class WebAIProcessor:
         self.adl_error = None
         self.adl_status_by_track: dict[int, dict[str, Any]] = {}
 
+        self.person_active = False
+        self.no_person_frames = 0
+        self.last_wait_log_frame = -999999
+        self.last_gate_log_frame = -999999
+        self.last_person_count = 0
+        self.last_gate_detections: list[dict[str, Any]] = []
+        self.last_gate_best_conf: float = 0.0
+        self.last_gate_status = "disabled"
+
     def set_modules(self, modules: set[str]):
         self.modules = set(modules)
+        if not self.modules:
+            self.person_active = False
+            self.no_person_frames = 0
+            self.last_person_count = 0
+            self.last_gate_detections = []
+            self.last_gate_status = "disabled"
 
     def _select_openvino_device(self) -> str | None:
         web_cfg = self.cfg.get("web", {})
@@ -81,6 +100,30 @@ class WebAIProcessor:
         if fallback in self.openvino_devices:
             return fallback
         return None
+
+    def _is_openvino_gpu_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(token in text for token in ("igc_check", "cisa", "gpu compiler", "openvino", "cldnn"))
+
+    def _fallback_openvino_cpu(self, exc: Exception) -> bool:
+        if not self.openvino_enabled or str(self.openvino_device).upper() != "GPU":
+            return False
+        if not self._is_openvino_gpu_error(exc):
+            return False
+
+        fallback = str(self.cfg.get("web", {}).get("openvino_fallback_device", "CPU")).upper()
+        if fallback != "CPU" or "CPU" not in self.openvino_devices:
+            return False
+
+        print(
+            f"[WebAIProcessor] cam={self.camera_id} Warning: OpenVINO GPU failed "
+            f"({type(exc).__name__}: {exc}); falling back to CPU"
+        )
+        self.openvino_device = "CPU"
+        self.openvino_enabled = True
+        self.pose_tracker = None
+        self.pose_tracker_error = None
+        return True
 
     def _select_yolo_pose_runtime(self) -> tuple[str, str | None, str]:
         pose_cfg = self.cfg.get("pose", {})
@@ -121,6 +164,49 @@ class WebAIProcessor:
             return True
         except Exception as exc:
             self.pose_tracker_error = f"{type(exc).__name__}: {exc}"
+            return False
+
+    def _select_person_gate_runtime(self) -> tuple[str, str | None]:
+        gate_cfg = self.cfg.get("person_gate", {})
+        web_cfg = self.cfg.get("web", {})
+
+        weights = gate_cfg.get("weights") or web_cfg.get("openvino_detect_weights")
+        fallback = gate_cfg.get("fallback_weights") or self.cfg.get("object", {}).get("weights")
+        weights = weights or fallback
+
+        if self.openvino_enabled and weights and "openvino_model" in str(weights):
+            device = self.openvino_device
+            if device and not str(device).lower().startswith("intel:"):
+                device = f"intel:{str(device).lower()}"
+        else:
+            device = self.cfg.get("system", {}).get("device")
+
+        return str(weights), device
+
+    def _ensure_person_gate(self) -> bool:
+        if self.person_gate is not None:
+            return True
+        if self.person_gate_error:
+            return False
+
+        try:
+            gate_cfg = self.cfg.get("person_gate", {})
+            weights, device = self._select_person_gate_runtime()
+            print(f"[PersonGate] cam={self.camera_id} weights={weights} device={device}")
+            self.person_gate = PersonGateDetector(
+                weights=weights,
+                fallback_weights=gate_cfg.get("fallback_weights"),
+                conf=gate_cfg.get("conf", 0.25),
+                iou=gate_cfg.get("iou", 0.5),
+                imgsz=gate_cfg.get("imgsz", 640),
+                classes=gate_cfg.get("classes", [0]),
+                min_box_area=gate_cfg.get("min_box_area", 800),
+                device=device,
+            )
+            return True
+        except Exception as exc:
+            self.person_gate_error = f"{type(exc).__name__}: {exc}"
+            print(f"[PersonGate] unavailable cam={self.camera_id}: {self.person_gate_error}")
             return False
 
     def _ensure_reid(self):
@@ -185,6 +271,84 @@ class WebAIProcessor:
             return det
         return {**det, "keypoints": None, "keypoint_scores": None}
 
+    def _draw_waiting_panel(self, frame: np.ndarray, fps: float, metrics: dict[str, Any]) -> None:
+        web_cfg = self.cfg.get("web", {})
+        if not web_cfg.get("draw_waiting_panel", True):
+            return
+
+        draw_info_panel(frame, {
+            "Camera": self.camera_id,
+            "Frame": self.frame_idx,
+            "Status": "Waiting for person",
+            "Selected": ",".join(sorted(self.modules)) or "none",
+            "AI Active": "no",
+            "Gate det": metrics.get("gate_detections", 0),
+            "Gate conf": metrics.get("gate_best_conf", 0.0),
+            "FPS": f"{fps:.1f}",
+        })
+
+    def _handle_person_detected(self, logs: list[tuple[str, str]], person_count: int) -> None:
+        # Mark that a person was detected and reset grace counters.
+        self.person_active = True
+        self.no_person_frames = 0
+        self.last_person_count = person_count
+
+    def _run_person_gate(self, frame: np.ndarray, logs: list[tuple[str, str]]) -> bool:
+        gate_cfg = self.cfg.get("person_gate", {})
+        interval = int(gate_cfg.get("interval_frames", 2))
+        lost_grace = int(gate_cfg.get("lost_grace_frames", 15))
+        log_interval = int(gate_cfg.get("log_interval_frames", 10))
+        draw_gate_box = bool(gate_cfg.get("draw_gate_box", True))
+
+        should_check = self.person_active or self.frame_idx % max(interval, 1) == 0
+        if not should_check:
+            self.last_gate_status = "idle_wait"
+            return False
+
+        if not self._ensure_person_gate():
+            logs.append(("warning", f"PERSON_GATE: unavailable ({self.person_gate_error}); allowing selected AI modules"))
+            self.last_gate_status = "unavailable_allow"
+            return True
+
+        try:
+            detected, gate_dets = self.person_gate.detect(frame)
+            self.last_gate_detections = gate_dets
+        except Exception as exc:
+            logs.append(("warning", f"PERSON_GATE: failed {type(exc).__name__}: {exc}; allowing selected AI modules"))
+            self.last_gate_status = "failed_allow"
+            return True
+
+        best_conf = max([float(d.get("score", 0.0)) for d in gate_dets], default=0.0)
+        self.last_gate_best_conf = round(float(best_conf), 3)
+
+        if detected:
+            self._handle_person_detected(logs, len(gate_dets))
+            self.person_active = True
+            self.no_person_frames = 0
+            self.last_gate_status = "person_detected"
+
+            if draw_gate_box:
+                self.person_gate.draw_gate_detections(frame, gate_dets)
+
+            # Log to UI/terminal at most once per `log_interval` frames
+            if self.frame_idx - self.last_gate_log_frame >= log_interval:
+                logs.append(("ai", f"PERSON_GATE: detected={len(gate_dets)} best_conf={best_conf:.2f}"))
+                self.last_gate_log_frame = self.frame_idx
+
+            return True
+
+        # No detection
+        self.no_person_frames += 1
+        if self.no_person_frames >= lost_grace:
+            self.person_active = False
+
+        if self.frame_idx - self.last_wait_log_frame >= log_interval:
+            logs.append(("warning", "PERSON_GATE: waiting for person"))
+            self.last_wait_log_frame = self.frame_idx
+
+        self.last_gate_status = "grace_wait" if self.person_active else "waiting"
+        return self.person_active
+
     def process(self, frame: np.ndarray):
         self.frame_idx += 1
         fps = round(float(self.fps_counter.tick()), 2)
@@ -205,11 +369,38 @@ class WebAIProcessor:
         }
 
         if not self.modules:
+            metrics.update({
+                "ai_active": False,
+                "person_gate": "disabled",
+            })
             return frame, [], metrics
 
+        web_cfg = self.cfg.get("web", {})
+        gate_cfg = self.cfg.get("person_gate", {})
+        start_ai_on_person_only = bool(web_cfg.get("start_ai_on_person_only", True))
+        person_gate_enabled = bool(gate_cfg.get("enabled", True))
         need_pose_model = bool({"track", "pose", "reid", "adl"} & self.modules)
         detections: list[dict[str, Any]] = []
         filter_stats = {}
+
+        if start_ai_on_person_only and person_gate_enabled and need_pose_model:
+            ai_allowed = self._run_person_gate(frame, logs)
+            metrics.update({
+                "ai_active": bool(ai_allowed),
+                "person_gate_detected": bool(ai_allowed),
+                "gate_detections": len(self.last_gate_detections),
+                "gate_best_conf": float(self.last_gate_best_conf),
+                "selected_modules": sorted(self.modules),
+            })
+            if not ai_allowed:
+                metrics.update({
+                    "detections": 0,
+                    "tracked": 0,
+                    "persons": 0,
+                    "ai_active": False,
+                })
+                self._draw_waiting_panel(frame, fps, metrics)
+                return frame, logs, metrics
 
         if need_pose_model:
             if not self._ensure_pose_tracker():
@@ -219,8 +410,17 @@ class WebAIProcessor:
                 detections, _ = self.pose_tracker.infer(frame, persist=True)
                 filter_stats = self.pose_tracker.last_filter_stats.as_dict()
             except Exception as exc:
-                logs.append(("warning", f"AI inference failed: {type(exc).__name__}: {exc}"))
-                return frame, logs, metrics
+                retry_ok = False
+                if self._fallback_openvino_cpu(exc) and self._ensure_pose_tracker():
+                    try:
+                        detections, _ = self.pose_tracker.infer(frame, persist=True)
+                        filter_stats = self.pose_tracker.last_filter_stats.as_dict()
+                        retry_ok = True
+                    except Exception as retry_exc:
+                        exc = retry_exc
+                if not retry_ok:
+                    logs.append(("warning", f"AI inference failed: {type(exc).__name__}: {exc}"))
+                    return frame, logs, metrics
 
         filtered = int(sum(filter_stats.values())) if filter_stats else 0
         tracked = sum(1 for det in detections if int(det.get("track_id", -1)) >= 0)
@@ -239,7 +439,25 @@ class WebAIProcessor:
             "persons": len(detections),
             "valid_skeletons": valid_skeletons,
             "avg_kpt": round(avg_kpt, 2),
+            "selected_modules": sorted(self.modules),
         })
+
+        if not (start_ai_on_person_only and person_gate_enabled) and len(detections) > 0:
+            self._handle_person_detected(logs, len(detections))
+            best_conf = max([float(d.get("score", 0.0)) for d in detections], default=0.0)
+            metrics.update({
+                "ai_active": True,
+                "person_gate_detected": True,
+                "gate_detections": len(detections),
+                "gate_best_conf": round(float(best_conf), 3),
+            })
+        elif start_ai_on_person_only and person_gate_enabled:
+            metrics.update({
+                "ai_active": True,
+                "person_gate_detected": (self.last_gate_status == "person_detected"),
+                "gate_detections": len(self.last_gate_detections),
+                "gate_best_conf": float(self.last_gate_best_conf),
+            })
 
         if "track" in self.modules:
             for det in detections:

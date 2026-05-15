@@ -18,6 +18,8 @@ PATH_FIELDS = {
     ("adl", "export_dir"),
     ("adl", "work_dir"),
     ("object", "weights"),
+    ("person_gate", "weights"),
+    ("person_gate", "fallback_weights"),
     ("web", "openvino_pose_weights"),
     ("web", "openvino_tracking_weights"),
     ("web", "openvino_detect_weights"),

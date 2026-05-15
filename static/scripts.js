@@ -12,33 +12,6 @@ const activeModules = {
   2: new Set(["track", "pose"])
 };              
 
-window.addEventListener("DOMContentLoaded", async () => {
-  await loadCameras();
-});
-
-async function loadCameras() {
-  try {
-    const res = await fetch(`${API_BASE}/api/cameras`);
-    if (!res.ok) throw new Error("API error");
-    const cameras = await res.json();
-    
-    [1, 2].forEach(id => {
-      const select = document.getElementById(`cam${id}-source`);
-      cameras.forEach(cam => {
-        const opt = document.createElement("option");
-        opt.value = cam.url;
-        opt.textContent = `${cam.name} (${cam.url})`;
-        select.appendChild(opt);
-      });
-    });
-    addLog(1, "Đã tải danh sách nguồn video.", "system");
-    addLog(2, "Đã tải danh sách nguồn video.", "system");
-  } catch (err) {
-    addLog(1, "Chưa kết nối được Backend FastAPI.", "error");
-    addLog(2, "Chưa kết nối được Backend FastAPI.", "error");
-  }
-}
-
 async function handleCamUpload(event, camId) {
   const file = event.target.files[0];
   if (!file) return;
@@ -46,25 +19,24 @@ async function handleCamUpload(event, camId) {
   const formData = new FormData();
   formData.append("file", file);
   
-  addLog(camId, `Đang tải lên: ${file.name}...`, "system");
+  addLog(camId, `Đang tải lên video: ${file.name}...`, "system");
   try {
     const res = await fetch(`${API_BASE}/api/upload`, {
       method: "POST",
       body: formData
     });
     const data = await res.json();
+    
+    // Server trả về đường dẫn file sau khi upload (ví dụ: uploads/video.mp4)
     const uploadedPath = data.file_path || data.filename;
 
-    const select = document.getElementById(`cam${camId}-source`);
-    const opt = document.createElement("option");
-    opt.value = uploadedPath;
-    opt.textContent = `[Đã Upload] ${file.name}`;
-    select.appendChild(opt);
-    select.value = uploadedPath;
+    // Tự động điền đường dẫn vừa upload vào ô Input Text
+    const inputEl = document.getElementById(`cam${camId}-source`);
+    inputEl.value = uploadedPath;
     
-    addLog(camId, `Upload thành công. File sẵn sàng để phân tích.`, "system");
+    addLog(camId, `Upload thành công. Sẵn sàng luồng xử lý từ file nội bộ.`, "system");
   } catch (e) {
-    addLog(camId, `Lỗi upload: ${e.message}`, "error");
+    addLog(camId, `Lỗi upload: Không thể kết nối tới server xử lý file.`, "error");
   }
 }
 
@@ -82,9 +54,11 @@ function toggleModule(camId, mod) {
 }
 
 function startStream(camId) {
-  const select = document.getElementById(`cam${camId}-source`);
-  const url = select.value;
-  if (!url) { alert(`Vui lòng chọn nguồn phát cho Camera ${camId}`); return; }
+  // Lấy text người dùng nhập (link RTSP hoặc đường dẫn file đã upload)
+  const inputEl = document.getElementById(`cam${camId}-source`);
+  const url = inputEl.value.trim();
+  
+  if (!url) { alert(`Vui lòng nhập link RTSP hoặc Upload Video cho Camera ${camId}`); return; }
 
   if (sockets[camId]) {
     sockets[camId].close();
@@ -98,8 +72,8 @@ function startStream(camId) {
 
   const mods = [...activeModules[camId]].join(",");
   const wsUrl = `${WS_BASE}/ws/stream/${camId}?url=${encodeURIComponent(url)}&modules=${mods}`;
-  addLog(camId, `Tiếp nhận luồng: ${url}`, "system");
-  addLog(camId, `Bắt đầu phân tích các module: [${mods}]`, "system");
+  addLog(camId, `Bắt đầu tiếp nhận luồng: ${url}`, "system");
+  addLog(camId, `Phân tích các module: [${mods}]`, "system");
 
   const ws = new WebSocket(wsUrl);
   sockets[camId] = ws;
@@ -113,6 +87,7 @@ function startStream(camId) {
 
     if (data.type === "session") {
       sessionIds[camId] = data.session_id;
+      // Bật nút lưu Excel/Video
       toggleSaveButtons(camId, true);
     } 
     else if (data.type === "image") {
@@ -127,7 +102,7 @@ function startStream(camId) {
   };
 
   ws.onerror = () => {
-    addLog(camId, `Lỗi kết nối WebSocket.`, "error");
+    addLog(camId, `Lỗi kết nối WebSocket tới Server AI.`, "error");
   };
 
   ws.onclose = () => {
@@ -143,7 +118,7 @@ function startStream(camId) {
 function stopStream(camId) {
   if (sockets[camId]) {
     sockets[camId].close();
-    addLog(camId, `Đã ngắt kết nối Camera.`, "system");
+    addLog(camId, `Đã ngắt kết nối Camera (Dừng xử lý buffer).`, "system");
   }
 }
 
@@ -172,7 +147,7 @@ async function saveExcel(camId) {
   const sid = sessionIds[camId];
   if (!sid) return;
 
-  addLog(camId, `Đang trích xuất dữ liệu ra Excel...`, "system");
+  addLog(camId, `Đang trích xuất dữ liệu ra file Excel...`, "system");
   try {
     const res = await fetch(`${API_BASE}/api/save-excel/${sid}`, { method: "POST" });
     const data = await res.json();

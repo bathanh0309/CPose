@@ -24,9 +24,7 @@
         </div>
         
         <div class="cam-source">
-          <select id="cam1-source" class="select-input">
-            <option value="">-- Chọn nguồn RTSP / File (resources.txt) --</option>
-          </select>
+          <input type="text" id="cam1-source" class="text-input" placeholder="Nhập link RTSP hoặc chọn file upload..."/>
           <label class="btn btn-outline" title="Tải video lên">
             📁 Upload
             <input type="file" id="file-upload-1" accept="video/*" hidden onchange="handleCamUpload(event, 1)"/>
@@ -53,7 +51,7 @@
         <div class="cam-view">
           <img id="frame-1" class="cam-frame" alt="Camera 1 stream"/>
           <div class="cam-placeholder" id="placeholder-1">
-            <span>Nhấn ON để bắt đầu luồng Cam 1</span>
+            <span>Nhập link và nhấn ON để bắt đầu luồng Cam 1</span>
           </div>
         </div>
 
@@ -73,9 +71,7 @@
         </div>
         
         <div class="cam-source">
-          <select id="cam2-source" class="select-input">
-            <option value="">-- Chọn nguồn RTSP / File (resources.txt) --</option>
-          </select>
+          <input type="text" id="cam2-source" class="text-input" placeholder="Nhập link RTSP hoặc chọn file upload..."/>
           <label class="btn btn-outline" title="Tải video lên">
             📁 Upload
             <input type="file" id="file-upload-2" accept="video/*" hidden onchange="handleCamUpload(event, 2)"/>
@@ -102,7 +98,7 @@
         <div class="cam-view">
           <img id="frame-2" class="cam-frame" alt="Camera 2 stream"/>
           <div class="cam-placeholder" id="placeholder-2">
-            <span>Nhấn ON để bắt đầu luồng Cam 2</span>
+            <span>Nhập link và nhấn ON để bắt đầu luồng Cam 2</span>
           </div>
         </div>
 

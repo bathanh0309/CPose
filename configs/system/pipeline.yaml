@@ -21,20 +21,24 @@ output:
 pose:
   enabled: true
   weights: "models/yolo11n-pose.pt"
-  conf: 0.7
-  iou: 0.7
+  conf: 0.60
+  iou: 0.5
   min_keypoints: 5
   min_keypoint_score: 0.35
 
 tracking:
   enabled: true
   model_type: "pedestrian"
-  weights: "models/tracking.pt"
-  person_conf: 0.60
+  weights: "models/tracking_openvino_model"
+  fallback_weights: "models/yolo11n_openvino_model"
+  conf: 0.35
   iou: 0.5
-  min_box_area: 2500
+  imgsz: 416
+  min_box_area: 600
   min_keypoints: 5
   min_keypoint_score: 0.35
+  infer_every_n_frames: 2
+  track_ttl_frames: 25
   tracker_yaml: "bytetrack.yaml"
   classes:
     - 0
@@ -52,12 +56,12 @@ person_gate:
   fallback_weights: "models/yolo11n.pt"
   conf: 0.25
   iou: 0.5
-  imgsz: 640
+  imgsz: 416
   classes: [0]
   min_box_area: 600
-  interval_frames: 2
+  interval_frames: 5
   lost_grace_frames: 15
-  log_interval_frames: 10
+  log_interval_frames: 15
   draw_gate_box: true
 
 ui:
@@ -72,7 +76,7 @@ web:
   infer_every_n_frames: 2
   target_fps: 15
   jpeg_quality: 55
-  jpeg_quality_min: 50
+  jpeg_quality_min: 45
   metrics_interval_frames: 10
   loop_local_video: true
   frame_skip_lag_multiplier: 2.0
@@ -80,7 +84,7 @@ web:
   start_ai_on_person_only: true
   person_gate_interval_frames: 3
   no_person_log_interval_frames: 30
-  lost_person_grace_frames: 15
+  lost_person_grace_frames: 30
   draw_waiting_panel: true
   openvino_enabled: true
   openvino_device: "CPU"
@@ -88,6 +92,9 @@ web:
   openvino_pose_weights: "models/yolo11n-pose_openvino_model"
   openvino_tracking_weights: "models/tracking_openvino_model"
   openvino_detect_weights: "models/yolo11n_openvino_model"
+  gallery_enabled: true
+  gallery_interval_frames: 20
+  max_gallery_items: 20
 
 reid:
   weights: "models/fastreid_market_R50.pth"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import time
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +10,9 @@ import numpy as np
 import os
 
 from src.action.pose_buffer import PoseSequenceBuffer
+from src.core.track_cache import TrackCache
 from src.detectors.person_gate import PersonGateDetector
+from src.detectors.pedestrian_yolo import PedestrianYoloTracker
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.filters import bbox_area, keypoint_quality
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
@@ -44,6 +48,9 @@ class WebAIProcessor:
         self.frame_idx = -1
         self.fps_counter = FPSCounter()
 
+        # Separate trackers for tracking-only vs pose
+        self.tracking_tracker = None
+        self.tracking_tracker_error = None
         self.pose_tracker = None
         self.pose_tracker_error = None
         self.openvino_devices = available_openvino_devices()
@@ -72,6 +79,14 @@ class WebAIProcessor:
         self.last_gate_detections: list[dict[str, Any]] = []
         self.last_gate_best_conf: float = 0.0
         self.last_gate_status = "disabled"
+
+        # TrackCache for anti-flicker
+        track_ttl = int(cfg.get("tracking", {}).get("track_ttl_frames", 25))
+        self.track_cache = TrackCache(ttl_frames=track_ttl)
+
+        # Gallery event support
+        self.gallery_events: list[dict[str, Any]] = []
+        self.last_gallery_frame_by_track: dict[int, int] = {}
 
     def set_modules(self, modules: set[str]):
         self.modules = set(modules)
@@ -125,7 +140,26 @@ class WebAIProcessor:
         self.pose_tracker_error = None
         return True
 
-    def _select_yolo_pose_runtime(self) -> tuple[str, str | None, str]:
+    def _select_tracking_runtime(self) -> tuple[str, str | None, str]:
+        """Select lightweight detection-only model for tracking (NOT pose model)."""
+        tracking_cfg = self.cfg.get("tracking", {})
+        web_cfg = self.cfg.get("web", {})
+        pt_weights = str(tracking_cfg.get("weights", "models/tracking.pt"))
+
+        if self.openvino_enabled:
+            ov_weights = web_cfg.get("openvino_tracking_weights")
+            if ov_weights and Path(str(ov_weights)).exists():
+                device = self.openvino_device
+                yolo_device = device if str(device).lower().startswith("intel:") else f"intel:{str(device).lower()}"
+                return str(ov_weights), yolo_device, "OpenVINO"
+
+        fallback = str(tracking_cfg.get("fallback_weights", pt_weights))
+        if Path(fallback).exists():
+            return fallback, self.cfg.get("system", {}).get("device"), "PyTorch-fallback"
+        return pt_weights, self.cfg.get("system", {}).get("device"), "PyTorch"
+
+    def _select_pose_runtime(self) -> tuple[str, str | None, str]:
+        """Select pose model — only used when Pose module is active."""
         pose_cfg = self.cfg.get("pose", {})
         web_cfg = self.cfg.get("web", {})
         pt_weights = str(pose_cfg["weights"])
@@ -139,7 +173,36 @@ class WebAIProcessor:
 
         return pt_weights, self.cfg.get("system", {}).get("device"), "PyTorch"
 
+    def _ensure_tracking_tracker(self):
+        """Ensure the lightweight tracking-only detector is loaded."""
+        if self.tracking_tracker is not None:
+            return True
+        if self.tracking_tracker_error:
+            return False
+        try:
+            tracking_cfg = self.cfg.get("tracking", {})
+            weights, device, runtime = self._select_tracking_runtime()
+            print(
+                f"[WebAIProcessor] cam={self.camera_id} TRACKING runtime={runtime} "
+                f"weights={weights} device={device}"
+            )
+            self.tracking_tracker = PedestrianYoloTracker(
+                weights=weights,
+                conf=tracking_cfg.get("conf", tracking_cfg.get("person_conf", 0.35)),
+                iou=tracking_cfg.get("iou", 0.5),
+                tracker=tracking_cfg.get("tracker_yaml", "bytetrack.yaml"),
+                device=device,
+                classes=tracking_cfg.get("classes", [0]),
+                tracking_cfg=tracking_cfg,
+            )
+            return True
+        except Exception as exc:
+            self.tracking_tracker_error = f"{type(exc).__name__}: {exc}"
+            print(f"[WebAIProcessor] tracking_tracker failed cam={self.camera_id}: {self.tracking_tracker_error}")
+            return False
+
     def _ensure_pose_tracker(self):
+        """Ensure the pose model is loaded — only when Pose module is active."""
         if self.pose_tracker is not None:
             return True
         if self.pose_tracker_error:
@@ -147,15 +210,15 @@ class WebAIProcessor:
         try:
             pose_cfg = self.cfg.get("pose", {})
             tracking_cfg = self.cfg.get("tracking", {})
-            weights, device, runtime = self._select_yolo_pose_runtime()
+            weights, device, runtime = self._select_pose_runtime()
             print(
-                f"[WebAIProcessor] cam={self.camera_id} YOLO runtime={runtime} "
+                f"[WebAIProcessor] cam={self.camera_id} POSE runtime={runtime} "
                 f"weights={weights} device={device}"
             )
             self.pose_tracker = YoloPoseTracker(
                 weights=weights,
-                conf=tracking_cfg.get("person_conf", pose_cfg.get("conf", 0.6)),
-                iou=tracking_cfg.get("iou", pose_cfg.get("iou", 0.5)),
+                conf=pose_cfg.get("conf", 0.6),
+                iou=pose_cfg.get("iou", 0.5),
                 tracker=tracking_cfg.get("tracker_yaml", "bytetrack.yaml"),
                 device=device,
                 classes=tracking_cfg.get("classes", [0]),
@@ -342,10 +405,6 @@ class WebAIProcessor:
         if self.no_person_frames >= lost_grace:
             self.person_active = False
 
-        if self.frame_idx - self.last_wait_log_frame >= log_interval:
-            logs.append(("warning", "PERSON_GATE: waiting for person"))
-            self.last_wait_log_frame = self.frame_idx
-
         self.last_gate_status = "grace_wait" if self.person_active else "waiting"
         return self.person_active
 
@@ -403,30 +462,59 @@ class WebAIProcessor:
                 return frame, logs, metrics
 
         if need_pose_model:
-            if not self._ensure_pose_tracker():
-                logs.append(("warning", f"AI runtime unavailable: {self.pose_tracker_error}"))
-                return frame, logs, metrics
-            try:
-                detections, _ = self.pose_tracker.infer(frame, persist=True)
-                filter_stats = self.pose_tracker.last_filter_stats.as_dict()
-            except Exception as exc:
-                retry_ok = False
-                if self._fallback_openvino_cpu(exc) and self._ensure_pose_tracker():
-                    try:
-                        detections, _ = self.pose_tracker.infer(frame, persist=True)
-                        filter_stats = self.pose_tracker.last_filter_stats.as_dict()
-                        retry_ok = True
-                    except Exception as retry_exc:
-                        exc = retry_exc
-                if not retry_ok:
-                    logs.append(("warning", f"AI inference failed: {type(exc).__name__}: {exc}"))
+            need_pose = bool({"pose", "adl"} & self.modules)
+            need_track = "track" in self.modules
+
+            if need_pose:
+                # Use pose model (heavier, has keypoints)
+                if not self._ensure_pose_tracker():
+                    logs.append(("warning", f"Pose runtime unavailable: {self.pose_tracker_error}"))
                     return frame, logs, metrics
+                try:
+                    detections, _ = self.pose_tracker.infer(frame, persist=True)
+                    filter_stats = self.pose_tracker.last_filter_stats.as_dict()
+                except Exception as exc:
+                    retry_ok = False
+                    if self._fallback_openvino_cpu(exc) and self._ensure_pose_tracker():
+                        try:
+                            detections, _ = self.pose_tracker.infer(frame, persist=True)
+                            filter_stats = self.pose_tracker.last_filter_stats.as_dict()
+                            retry_ok = True
+                        except Exception as retry_exc:
+                            exc = retry_exc
+                    if not retry_ok:
+                        logs.append(("warning", f"Pose inference failed: {type(exc).__name__}: {exc}"))
+                        return frame, logs, metrics
+            elif need_track or "reid" in self.modules:
+                # Use lightweight tracking-only model (no keypoints, faster)
+                if not self._ensure_tracking_tracker():
+                    logs.append(("warning", f"Tracking runtime unavailable: {self.tracking_tracker_error}"))
+                    return frame, logs, metrics
+                try:
+                    detections, _ = self.tracking_tracker.infer(frame, persist=True)
+                    filter_stats = self.tracking_tracker.last_filter_stats.as_dict()
+                except Exception as exc:
+                    retry_ok = False
+                    if self._fallback_openvino_cpu(exc) and self._ensure_tracking_tracker():
+                        try:
+                            detections, _ = self.tracking_tracker.infer(frame, persist=True)
+                            filter_stats = self.tracking_tracker.last_filter_stats.as_dict()
+                            retry_ok = True
+                        except Exception as retry_exc:
+                            exc = retry_exc
+                    if not retry_ok:
+                        logs.append(("warning", f"Tracking inference failed: {type(exc).__name__}: {exc}"))
+                        return frame, logs, metrics
+
+        # --- TrackCache anti-flicker ---
+        self.track_cache.update(detections, self.frame_idx)
+        display_dets = self.track_cache.active(self.frame_idx)
 
         filtered = int(sum(filter_stats.values())) if filter_stats else 0
-        tracked = sum(1 for det in detections if int(det.get("track_id", -1)) >= 0)
+        tracked = sum(1 for det in display_dets if int(det.get("track_id", -1)) >= 0)
         skeleton_scores = [
             keypoint_quality(det.get("keypoint_scores"), 0.0)[1]
-            for det in detections
+            for det in display_dets
             if det.get("keypoints") is not None
         ]
         valid_skeletons = len(skeleton_scores)
@@ -436,19 +524,19 @@ class WebAIProcessor:
             "detections": len(detections),
             "tracked": tracked,
             "filtered": filtered,
-            "persons": len(detections),
+            "persons": len(display_dets),
             "valid_skeletons": valid_skeletons,
             "avg_kpt": round(avg_kpt, 2),
             "selected_modules": sorted(self.modules),
         })
 
-        if not (start_ai_on_person_only and person_gate_enabled) and len(detections) > 0:
-            self._handle_person_detected(logs, len(detections))
-            best_conf = max([float(d.get("score", 0.0)) for d in detections], default=0.0)
+        if not (start_ai_on_person_only and person_gate_enabled) and len(display_dets) > 0:
+            self._handle_person_detected(logs, len(display_dets))
+            best_conf = max([float(d.get("score", 0.0)) for d in display_dets], default=0.0)
             metrics.update({
                 "ai_active": True,
                 "person_gate_detected": True,
-                "gate_detections": len(detections),
+                "gate_detections": len(display_dets),
                 "gate_best_conf": round(float(best_conf), 3),
             })
         elif start_ai_on_person_only and person_gate_enabled:
@@ -460,26 +548,32 @@ class WebAIProcessor:
             })
 
         if "track" in self.modules:
-            for det in detections:
+            for det in display_dets:
                 tid = int(det.get("track_id", -1))
+                cached = det.get("cached", False)
+                score = float(det.get("score", 0.0))
+                label = f"track={tid} {'cached ' if cached else ''}conf={score:.2f}"
                 draw_detection(
                     frame,
                     self._track_label_det(det, include_pose=("pose" in self.modules or "adl" in self.modules)),
-                    label=f"track={tid} conf={float(det.get('score', 0.0)):.2f}",
+                    label=label,
                 )
             logs.append(("ai", f"TRACK: frame={self.frame_idx} det={len(detections)} tracked={tracked} filtered={filtered} fps={fps}"))
 
         if "pose" in self.modules:
-            for det in detections:
+            for det in display_dets:
                 if "track" not in self.modules:
                     draw_detection(frame, det, label=f"pose conf={float(det.get('score', 0.0)):.2f}")
-            logs.append(("ai", f"POSE: frame={self.frame_idx} persons={len(detections)} valid={valid_skeletons} avg_kpt={avg_kpt:.2f}"))
+            logs.append(("ai", f"POSE: frame={self.frame_idx} persons={len(display_dets)} valid={valid_skeletons} avg_kpt={avg_kpt:.2f}"))
 
         if "reid" in self.modules:
-            self._process_reid(frame, detections, logs)
+            self._process_reid(frame, display_dets, logs)
 
         if "adl" in self.modules:
-            self._process_adl(frame, detections, logs, (h, w))
+            self._process_adl(frame, display_dets, logs, (h, w))
+
+        # --- Gallery events ---
+        self._generate_gallery_events(frame, display_dets)
 
         draw_info_panel(frame, {
             "Camera": self.camera_id,
@@ -573,3 +667,43 @@ class WebAIProcessor:
 
         if first_status:
             draw_adl_status(frame, first_status, pos=(10, 150))
+
+    def _make_crop_event(self, frame: np.ndarray, det: dict[str, Any]) -> dict[str, Any] | None:
+        """Create a gallery crop event from a detection."""
+        x1, y1, x2, y2 = map(int, det["bbox"])
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if not ok:
+            return None
+        return {
+            "type": "gallery",
+            "track_id": int(det.get("track_id", -1)),
+            "global_id": det.get("global_id", "unknown"),
+            "conf": round(float(det.get("score", 0.0)), 2),
+            "crop_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
+            "ts": time.strftime("%H:%M:%S"),
+        }
+
+    def _generate_gallery_events(self, frame: np.ndarray, display_dets: list[dict[str, Any]]) -> None:
+        """Generate gallery crop events at configured intervals."""
+        self.gallery_events = []
+        web_cfg = self.cfg.get("web", {})
+        if not web_cfg.get("gallery_enabled", True):
+            return
+        gallery_interval = int(web_cfg.get("gallery_interval_frames", 20))
+        for det in display_dets:
+            if det.get("cached", False):
+                continue  # Don't gallery-crop cached (stale) detections
+            tid = int(det.get("track_id", -1))
+            last = self.last_gallery_frame_by_track.get(tid, -999999)
+            if self.frame_idx - last >= gallery_interval:
+                event = self._make_crop_event(frame, det)
+                if event:
+                    self.gallery_events.append(event)
+                    self.last_gallery_frame_by_track[tid] = self.frame_idx
+

@@ -1,4 +1,4 @@
-﻿"""
+"""
 CPose — FastAPI backend (fixed + performance optimized)
 """
 
@@ -660,6 +660,14 @@ async def stream_video(
             if metrics_interval > 0 and processor.frame_idx % metrics_interval == 0:
                 if not await safe_send_json(websocket, {"type": "metric", "metrics": metrics}):
                     break
+
+            # Send gallery crop events
+            for event in getattr(processor, "gallery_events", []):
+                if not await safe_send_json(websocket, event):
+                    connected = False
+                    break
+            if not connected:
+                break
 
             fps_actual = float(metrics.get("fps", 0.0) or 0.0)
             if fps_actual and fps_actual < target_fps * 0.6:

@@ -1,4 +1,4 @@
-﻿const FASTAPI_PORT = 8000;
+const FASTAPI_PORT = 8000;
 const IS_LIVE_SERVER = location.port !== String(FASTAPI_PORT) && location.port !== "";
 const API_BASE = IS_LIVE_SERVER ? `http://${location.hostname}:${FASTAPI_PORT}` : "";
 const WS_BASE = IS_LIVE_SERVER ? `ws://${location.hostname}:${FASTAPI_PORT}` : `ws://${location.host}`;
@@ -259,6 +259,8 @@ function handleJsonMessage(camId, data) {
       `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
       "metric"
     );
+  } else if (data.type === "gallery") {
+    addGalleryItem(camId, data);
   } else if (data.type === "ai") {
     addLog(camId, `AI: ${data.msg}`, "ai");
   } else if (data.type === "log" || data.type === "system") {
@@ -436,6 +438,45 @@ function clearLog(camId) {
   if (box) box.innerHTML = "";
 }
 
+function addGalleryItem(camId, data) {
+  const box = document.getElementById(`gallery-box-${camId}`);
+  if (!box || !data.crop_jpeg) return;
+
+  const item = document.createElement("div");
+  item.className = "gallery-item";
+
+  const img = document.createElement("img");
+  img.src = `data:image/jpeg;base64,${data.crop_jpeg}`;
+
+  const meta = document.createElement("div");
+  meta.className = "gallery-meta";
+
+  const track = data.track_id ?? "-";
+  const gid = data.global_id || "unknown";
+  const conf = Number(data.conf || 0).toFixed(2);
+  const ts = data.ts || new Date().toLocaleTimeString();
+
+  meta.innerHTML = `
+    <div>track=${escapeHtml(String(track))}</div>
+    <div>gid=${escapeHtml(String(gid))}</div>
+    <div>conf=${escapeHtml(conf)}</div>
+    <div>${escapeHtml(ts)}</div>
+  `;
+
+  item.appendChild(img);
+  item.appendChild(meta);
+  box.prepend(item);
+
+  while (box.children.length > 20) {
+    box.removeChild(box.lastChild);
+  }
+}
+
+function clearGallery(camId) {
+  const box = document.getElementById(`gallery-box-${camId}`);
+  if (box) box.innerHTML = "";
+}
+
 function maskRtsp(str) {
   return String(str || "").replace(/rtsp:\/\/[^\s"'<>]+/gi, (url) => {
     try {
@@ -499,6 +540,11 @@ function bindUIEvents() {
     if (clearBtn) {
       clearBtn.addEventListener("click", () => clearLog(camId));
     }
+
+    const clearGalleryBtn = document.getElementById(`clear-gallery-${camId}`);
+    if (clearGalleryBtn) {
+      clearGalleryBtn.addEventListener("click", () => clearGallery(camId));
+    }
   });
 
   document.querySelectorAll(".btn-module").forEach((btn) => {
@@ -520,6 +566,7 @@ Object.assign(window, {
   saveVideo,
   saveExcel,
   clearLog,
+  clearGallery,
   loadConfiguredCameras,
   bindUIEvents
 });

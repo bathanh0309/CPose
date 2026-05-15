@@ -1,199 +1,218 @@
-const API_BASE = "http://localhost:8000";
-const WS_BASE = "ws://localhost:8000";
-const wsConnections = { cam1: null, cam2: null };
+const FASTAPI_PORT = 8000;
+const IS_LIVE_SERVER = location.port !== String(FASTAPI_PORT) && location.port !== "";
+const API_BASE = IS_LIVE_SERVER ? `http://${location.hostname}:${FASTAPI_PORT}` : "";
+const WS_BASE  = IS_LIVE_SERVER ? `ws://${location.hostname}:${FASTAPI_PORT}` : `ws://${location.host}`;
 
-document.addEventListener("DOMContentLoaded", () => {
-    loadCameras();
-    setupUploads();
+const sockets = { 1: null, 2: null };        
+const sessionIds = { 1: null, 2: null };      
+
+// Modules được bật riêng biệt cho mỗi Cam (Mặc định bật track, pose)
+const activeModules = {
+  1: new Set(["track", "pose"]),
+  2: new Set(["track", "pose"])
+};              
+
+window.addEventListener("DOMContentLoaded", async () => {
+  await loadCameras();
 });
 
 async function loadCameras() {
-    try {
-        const response = await fetch(`${API_BASE}/api/cameras`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-
-        const cameras = await response.json();
-        ["cam1", "cam2"].forEach(camId => {
-            const selectEl = document.getElementById(`input-${camId}`);
-            selectEl.innerHTML = '<option value="">-- Chọn Camera --</option>';
-
-            cameras.forEach(cam => {
-                const option = document.createElement("option");
-                option.value = cam.id;
-                option.textContent = cam.display || cam.name;
-                option.dataset.label = cam.name;
-                selectEl.appendChild(option);
-            });
-        });
-    } catch (error) {
-        console.error("Khong the load resources.txt. Hay chac chan backend dang chay.", error);
-        ["cam1", "cam2"].forEach(camId => {
-            writeLog(camId, "Không thể tải resources.txt. Hãy chạy backend FastAPI.", "error");
-        });
-    }
-}
-
-function getSelectedSourceLabel(camId) {
-    const selectEl = document.getElementById(`input-${camId}`);
-    const selectedOption = selectEl.options[selectEl.selectedIndex];
-    return selectedOption?.dataset.label || selectedOption?.textContent || "Nguồn đã chọn";
-}
-
-function maskRtspUrl(value) {
-    if (!value || !value.startsWith("rtsp://")) {
-        return value;
-    }
-
-    return value.replace(/\/\/([^@/]+@)?([^:/]+)(:\d+)?/i, (_, auth = "", host = "", port = "") => {
-        const maskedHost = host.replace(/(\d+)(?=\.\d+$)/, "xxx");
-        return `//${auth ? "***:***@" : ""}${maskedHost}${port ? ":xxx" : ""}`;
+  try {
+    const res = await fetch(`${API_BASE}/api/cameras`);
+    if (!res.ok) throw new Error("API error");
+    const cameras = await res.json();
+    
+    [1, 2].forEach(id => {
+      const select = document.getElementById(`cam${id}-source`);
+      cameras.forEach(cam => {
+        const opt = document.createElement("option");
+        opt.value = cam.url;
+        opt.textContent = `${cam.name} (${cam.url})`;
+        select.appendChild(opt);
+      });
     });
+    addLog(1, "Đã tải danh sách nguồn video.", "system");
+    addLog(2, "Đã tải danh sách nguồn video.", "system");
+  } catch (err) {
+    addLog(1, "Chưa kết nối được Backend FastAPI.", "error");
+    addLog(2, "Chưa kết nối được Backend FastAPI.", "error");
+  }
 }
 
-function writeLog(camId, message, type = "system") {
-    const logOutput = document.getElementById(`log-${camId}`);
-    if (!logOutput) return;
+async function handleCamUpload(event, camId) {
+  const file = event.target.files[0];
+  if (!file) return;
 
-    const time = new Date().toLocaleTimeString();
-    const p = document.createElement("p");
-    p.className = `log-msg ${type}`;
-    p.textContent = `[${time}] ${message}`;
-
-    logOutput.appendChild(p);
-    logOutput.scrollTop = logOutput.scrollHeight;
-}
-
-function getActiveModules(camId) {
-    const modules = ["track", "pose", "reid", "adl"];
-    const active = modules.filter(mod => document.getElementById(`${mod}-${camId}`).checked);
-    return active.length > 0 ? active.map(mod => mod.toUpperCase()).join(", ") : "None";
-}
-
-function toggleCamera(camId, isOn) {
-    const inputSource = document.getElementById(`input-${camId}`).value;
-    const stream = document.getElementById(`stream-${camId}`);
-    const placeholder = document.getElementById(`placeholder-${camId}`);
-    const status = document.getElementById(`status-${camId}`);
-    const btnOn = document.getElementById(`btn-on-${camId}`);
-    const btnOff = document.getElementById(`btn-off-${camId}`);
-
-    if (isOn) {
-        if (!inputSource) {
-            alert("Vui lòng chọn Camera từ danh sách hoặc tải file lên.");
-            return;
-        }
-
-        if (wsConnections[camId]) {
-            wsConnections[camId].close();
-            wsConnections[camId] = null;
-        }
-
-        const sourceLabel = getSelectedSourceLabel(camId);
-
-        btnOn.className = "btn btn-on-active";
-        btnOff.className = "btn btn-default";
-        placeholder.style.display = "none";
-        stream.style.display = "block";
-        status.textContent = "CONNECTING...";
-        status.style.color = "var(--mod-yellow)";
-
-        writeLog(camId, `Đang kết nối tới: ${sourceLabel}`, "system");
-        writeLog(camId, `Các module AI kích hoạt: [${getActiveModules(camId)}]`, "system");
-
-        const wsUrl = `${WS_BASE}/ws/stream/${camId}?source=${encodeURIComponent(inputSource)}`;
-        const ws = new WebSocket(wsUrl);
-        wsConnections[camId] = ws;
-
-        ws.onopen = () => {
-            status.textContent = "LIVE";
-            status.style.color = "var(--mod-green)";
-        };
-
-        ws.onmessage = event => {
-            const data = JSON.parse(event.data);
-            if (data.type === "image") {
-                stream.src = `data:image/jpeg;base64,${data.data}`;
-            } else if (data.type === "log") {
-                writeLog(camId, data.msg, data.level);
-            }
-        };
-
-        ws.onerror = () => {
-            writeLog(camId, "Lỗi kết nối WebSocket.", "error");
-        };
-
-        ws.onclose = () => {
-            if (wsConnections[camId] === ws) {
-                wsConnections[camId] = null;
-            }
-            if (status.textContent !== "OFFLINE") {
-                writeLog(camId, "WebSocket đã ngắt kết nối.", "error");
-                setCameraOffUi(camId);
-            }
-        };
-
-        return;
-    }
-
-    if (wsConnections[camId]) {
-        wsConnections[camId].close();
-        wsConnections[camId] = null;
-    }
-
-    setCameraOffUi(camId);
-    writeLog(camId, "Đã ngắt luồng video và giải phóng buffer.", "error");
-}
-
-function setCameraOffUi(camId) {
-    const stream = document.getElementById(`stream-${camId}`);
-    const placeholder = document.getElementById(`placeholder-${camId}`);
-    const status = document.getElementById(`status-${camId}`);
-    const btnOn = document.getElementById(`btn-on-${camId}`);
-    const btnOff = document.getElementById(`btn-off-${camId}`);
-
-    btnOff.className = "btn btn-off-active";
-    btnOn.className = "btn btn-default";
-    stream.src = "";
-    stream.style.display = "none";
-    placeholder.style.display = "block";
-    status.textContent = "OFFLINE";
-    status.style.color = "var(--text-dark)";
-}
-
-function setupUploads() {
-    ["cam1", "cam2"].forEach(camId => {
-        document.getElementById(`upload-${camId}`).addEventListener("change", async function() {
-            if (!this.files[0]) return;
-
-            const formData = new FormData();
-            formData.append("file", this.files[0]);
-            writeLog(camId, `Đang tải file lên backend: ${this.files[0].name}`, "system");
-
-            try {
-                const response = await fetch(`${API_BASE}/api/upload`, {
-                    method: "POST",
-                    body: formData,
-                });
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-
-                const uploaded = await response.json();
-                const selectEl = document.getElementById(`input-${camId}`);
-                const option = document.createElement("option");
-                option.value = uploaded.source;
-                option.textContent = `[Upload] ${uploaded.name}`;
-                option.dataset.label = `[Upload] ${uploaded.name}`;
-                selectEl.appendChild(option);
-                selectEl.value = uploaded.source;
-
-                writeLog(camId, `Đã chọn file: ${uploaded.name}`, "system");
-            } catch (error) {
-                console.error(error);
-                writeLog(camId, "Không thể tải file lên backend.", "error");
-            }
-        });
+  const formData = new FormData();
+  formData.append("file", file);
+  
+  addLog(camId, `Đang tải lên: ${file.name}...`, "system");
+  try {
+    const res = await fetch(`${API_BASE}/api/upload`, {
+      method: "POST",
+      body: formData
     });
+    const data = await res.json();
+    const uploadedPath = data.file_path || data.filename;
+
+    const select = document.getElementById(`cam${camId}-source`);
+    const opt = document.createElement("option");
+    opt.value = uploadedPath;
+    opt.textContent = `[Đã Upload] ${file.name}`;
+    select.appendChild(opt);
+    select.value = uploadedPath;
+    
+    addLog(camId, `Upload thành công. File sẵn sàng để phân tích.`, "system");
+  } catch (e) {
+    addLog(camId, `Lỗi upload: ${e.message}`, "error");
+  }
+}
+
+function toggleModule(camId, mod) {
+  const btn = document.getElementById(`btn-${mod}-${camId}`);
+  if (!btn) return;
+
+  if (activeModules[camId].has(mod)) {
+    activeModules[camId].delete(mod);
+    btn.classList.remove("active");
+  } else {
+    activeModules[camId].add(mod);
+    btn.classList.add("active");
+  }
+}
+
+function startStream(camId) {
+  const select = document.getElementById(`cam${camId}-source`);
+  const url = select.value;
+  if (!url) { alert(`Vui lòng chọn nguồn phát cho Camera ${camId}`); return; }
+
+  if (sockets[camId]) {
+    sockets[camId].close();
+  }
+
+  setStatus(camId, "Đang kết nối...", "offline");
+  document.getElementById(`placeholder-${camId}`).style.display = "none";
+  const img = document.getElementById(`frame-${camId}`);
+  img.style.display = "block";
+  img.src = "";
+
+  const mods = [...activeModules[camId]].join(",");
+  const wsUrl = `${WS_BASE}/ws/stream/${camId}?url=${encodeURIComponent(url)}&modules=${mods}`;
+  addLog(camId, `Tiếp nhận luồng: ${url}`, "system");
+  addLog(camId, `Bắt đầu phân tích các module: [${mods}]`, "system");
+
+  const ws = new WebSocket(wsUrl);
+  sockets[camId] = ws;
+
+  ws.onopen = () => {
+    setStatus(camId, "Đang Live", "online");
+  };
+
+  ws.onmessage = (evt) => {
+    const data = JSON.parse(evt.data);
+
+    if (data.type === "session") {
+      sessionIds[camId] = data.session_id;
+      toggleSaveButtons(camId, true);
+    } 
+    else if (data.type === "image") {
+      img.src = "data:image/jpeg;base64," + data.data;
+    } 
+    else if (data.type === "ai") {
+      addLog(camId, `AI: ${data.msg}`, "ai");
+    }
+    else if (data.type === "log" || data.type === "system") {
+      addLog(camId, data.msg, data.level || "system");
+    }
+  };
+
+  ws.onerror = () => {
+    addLog(camId, `Lỗi kết nối WebSocket.`, "error");
+  };
+
+  ws.onclose = () => {
+    setStatus(camId, "Mất kết nối", "offline");
+    img.style.display = "none";
+    document.getElementById(`placeholder-${camId}`).style.display = "flex";
+    toggleSaveButtons(camId, false);
+    sessionIds[camId] = null;
+    sockets[camId] = null;
+  };
+}
+
+function stopStream(camId) {
+  if (sockets[camId]) {
+    sockets[camId].close();
+    addLog(camId, `Đã ngắt kết nối Camera.`, "system");
+  }
+}
+
+function toggleSaveButtons(camId, enabled) {
+  const btnVideo = document.getElementById(`save-btn-${camId}`);
+  const btnExcel = document.getElementById(`save-excel-btn-${camId}`);
+  if (btnVideo) btnVideo.disabled = !enabled;
+  if (btnExcel) btnExcel.disabled = !enabled;
+}
+
+async function saveVideo(camId) {
+  const sid = sessionIds[camId];
+  if (!sid) return;
+
+  addLog(camId, `Đang xử lý đóng gói và lưu video...`, "system");
+  try {
+    const res = await fetch(`${API_BASE}/api/save-video/${sid}`, { method: "POST" });
+    const data = await res.json();
+    addLog(camId, `Đã lưu Video: ${data.file_path || data.message}`, "ai");
+  } catch (err) {
+    addLog(camId, `Lỗi lưu video: ${err}`, "error");
+  }
+}
+
+async function saveExcel(camId) {
+  const sid = sessionIds[camId];
+  if (!sid) return;
+
+  addLog(camId, `Đang trích xuất dữ liệu ra Excel...`, "system");
+  try {
+    const res = await fetch(`${API_BASE}/api/save-excel/${sid}`, { method: "POST" });
+    const data = await res.json();
+    addLog(camId, `Đã lưu Excel: ${data.file_path || data.message}`, "ai");
+  } catch (err) {
+    addLog(camId, `Lỗi lưu Excel: ${err}`, "error");
+  }
+}
+
+/* Utils: Thêm Log & Clear Log cho TỪNG Camera riêng biệt */
+function setStatus(camId, text, type) {
+  const el = document.getElementById(`status-${camId}`);
+  if (!el) return;
+  el.textContent = text;
+  el.className = `cam-status status-${type}`;
+}
+
+function addLog(camId, msg, level = "system") {
+  const box = document.getElementById(`log-box-${camId}`);
+  if (!box) return;
+
+  const entry = document.createElement("div");
+  const time  = new Date().toLocaleTimeString("vi-VN");
+
+  entry.className = `log-entry log-${level}`;
+  entry.innerHTML = `<span class="log-time">${time}</span> ${escapeHtml(msg)}`;
+  box.appendChild(entry);
+  box.scrollTop = box.scrollHeight;
+
+  while (box.children.length > 500) box.removeChild(box.firstChild);
+}
+
+function clearLog(camId) {
+  const box = document.getElementById(`log-box-${camId}`);
+  if(box) box.innerHTML = "";
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.replace(/[&<>"']/g, function(m) {
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m];
+  });
 }

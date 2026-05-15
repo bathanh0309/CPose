@@ -1,130 +1,123 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPose - Control Panel</title>
-    <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CPose Control Panel - Pro Dashboard</title>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-    <header class="top-nav">
-        <div class="logo">
-            <span class="logo-accent"></span>
-            <h1>CPose</h1>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">CPose</span>
+      <span class="subtitle">Realtime AI Analytics Panel</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="cameras-container">
+      
+      <div class="cam-card">
+        <div class="cam-header">
+          <span class="cam-label">CAMERA 1</span>
+          <span class="cam-status status-offline" id="status-1">Chờ kết nối</span>
         </div>
-    </header>
+        
+        <div class="cam-source">
+          <select id="cam1-source" class="select-input">
+            <option value="">-- Chọn nguồn RTSP / File (resources.txt) --</option>
+          </select>
+          <label class="btn btn-outline" title="Tải video lên">
+            📁 Upload
+            <input type="file" id="file-upload-1" accept="video/*" hidden onchange="handleCamUpload(event, 1)"/>
+          </label>
+        </div>
 
-    <main class="main-dashboard">
-        <section class="camera-block">
-            <div class="camera-header">
-                <div class="cam-info">
-                    <span class="cam-id">CAM 01</span>
-                    <select id="input-cam1" class="camera-select">
-                        <option value="">-- Tải dữ liệu từ resources.txt --</option>
-                    </select>
-                    <label class="btn-icon">
-                        Chọn File
-                        <input type="file" id="upload-cam1" accept="video/*" hidden>
-                    </label>
-                </div>
-                <div class="cam-actions">
-                    <button id="btn-on-cam1" class="btn btn-default" onclick="toggleCamera('cam1', true)">ON</button>
-                    <button id="btn-off-cam1" class="btn btn-default" onclick="toggleCamera('cam1', false)">OFF</button>
-                </div>
-            </div>
+        <div class="cam-controls">
+          <div class="control-row modules-row">
+            <span class="row-title">Modules:</span>
+            <button id="btn-track-1" class="btn-module active" onclick="toggleModule(1, 'track')">Tracking</button>
+            <button id="btn-pose-1" class="btn-module active" onclick="toggleModule(1, 'pose')">Pose</button>
+            <button id="btn-reid-1" class="btn-module" onclick="toggleModule(1, 'reid')">ReID</button>
+            <button id="btn-adl-1" class="btn-module" onclick="toggleModule(1, 'adl')">ADL</button>
+          </div>
 
-            <div class="cam-modules">
-                <span class="module-title">AI MODULES:</span>
-                <label class="module-toggle">
-                    <input type="checkbox" id="track-cam1" checked>
-                    <span class="module-btn">Tracking</span>
-                </label>
-                <label class="module-toggle">
-                    <input type="checkbox" id="pose-cam1" checked>
-                    <span class="module-btn">Pose</span>
-                </label>
-                <label class="module-toggle">
-                    <input type="checkbox" id="reid-cam1" checked>
-                    <span class="module-btn">ReID</span>
-                </label>
-                <label class="module-toggle">
-                    <input type="checkbox" id="adl-cam1">
-                    <span class="module-btn">ADL</span>
-                </label>
-            </div>
+          <div class="control-row actions-row">
+            <button class="btn btn-on" onclick="startStream(1)">▶ ON</button>
+            <button class="btn btn-off" onclick="stopStream(1)">⏹ OFF</button>
+            <button id="save-btn-1" class="btn btn-action" onclick="saveVideo(1)" disabled>💾 Lưu Video</button>
+            <button id="save-excel-btn-1" class="btn btn-action" onclick="saveExcel(1)" disabled>📊 Lưu Excel</button>
+          </div>
+        </div>
 
-            <div class="video-container">
-                <div class="video-wrapper">
-                    <div class="placeholder" id="placeholder-cam1">CHƯA CÓ TÍN HIỆU</div>
-                    <img id="stream-cam1" src="" class="stream-img" alt="Camera 1 stream">
-                    <div class="status-overlay" id="status-cam1">OFFLINE</div>
-                </div>
-            </div>
+        <div class="cam-view">
+          <img id="frame-1" class="cam-frame" alt="Camera 1 stream"/>
+          <div class="cam-placeholder" id="placeholder-1">
+            <span>Nhấn ON để bắt đầu luồng Cam 1</span>
+          </div>
+        </div>
 
-            <div class="log-console">
-                <div class="log-header">Log Camera 1</div>
-                <div class="log-output" id="log-cam1">
-                    <p class="log-msg system">[System] Đang chờ cấu hình...</p>
-                </div>
-            </div>
-        </section>
+        <div class="cam-log">
+          <div class="log-header">
+            <span>Log Camera 1</span>
+            <button class="btn-clear" onclick="clearLog(1)">Xóa</button>
+          </div>
+          <div class="log-box" id="log-box-1"></div>
+        </div>
+      </div>
 
-        <section class="camera-block">
-            <div class="camera-header">
-                <div class="cam-info">
-                    <span class="cam-id">CAM 02</span>
-                    <select id="input-cam2" class="camera-select">
-                        <option value="">-- Tải dữ liệu từ resources.txt --</option>
-                    </select>
-                    <label class="btn-icon">
-                        Chọn File
-                        <input type="file" id="upload-cam2" accept="video/*" hidden>
-                    </label>
-                </div>
-                <div class="cam-actions">
-                    <button id="btn-on-cam2" class="btn btn-default" onclick="toggleCamera('cam2', true)">ON</button>
-                    <button id="btn-off-cam2" class="btn btn-default" onclick="toggleCamera('cam2', false)">OFF</button>
-                </div>
-            </div>
+      <div class="cam-card">
+        <div class="cam-header">
+          <span class="cam-label">CAMERA 2</span>
+          <span class="cam-status status-offline" id="status-2">Chờ kết nối</span>
+        </div>
+        
+        <div class="cam-source">
+          <select id="cam2-source" class="select-input">
+            <option value="">-- Chọn nguồn RTSP / File (resources.txt) --</option>
+          </select>
+          <label class="btn btn-outline" title="Tải video lên">
+            📁 Upload
+            <input type="file" id="file-upload-2" accept="video/*" hidden onchange="handleCamUpload(event, 2)"/>
+          </label>
+        </div>
 
-            <div class="cam-modules">
-                <span class="module-title">AI MODULES:</span>
-                <label class="module-toggle">
-                    <input type="checkbox" id="track-cam2" checked>
-                    <span class="module-btn">Tracking</span>
-                </label>
-                <label class="module-toggle">
-                    <input type="checkbox" id="pose-cam2" checked>
-                    <span class="module-btn">Pose</span>
-                </label>
-                <label class="module-toggle">
-                    <input type="checkbox" id="reid-cam2" checked>
-                    <span class="module-btn">ReID</span>
-                </label>
-                <label class="module-toggle">
-                    <input type="checkbox" id="adl-cam2">
-                    <span class="module-btn">ADL</span>
-                </label>
-            </div>
+        <div class="cam-controls">
+          <div class="control-row modules-row">
+            <span class="row-title">Modules:</span>
+            <button id="btn-track-2" class="btn-module active" onclick="toggleModule(2, 'track')">Tracking</button>
+            <button id="btn-pose-2" class="btn-module active" onclick="toggleModule(2, 'pose')">Pose</button>
+            <button id="btn-reid-2" class="btn-module" onclick="toggleModule(2, 'reid')">ReID</button>
+            <button id="btn-adl-2" class="btn-module" onclick="toggleModule(2, 'adl')">ADL</button>
+          </div>
 
-            <div class="video-container">
-                <div class="video-wrapper">
-                    <div class="placeholder" id="placeholder-cam2">CHƯA CÓ TÍN HIỆU</div>
-                    <img id="stream-cam2" src="" class="stream-img" alt="Camera 2 stream">
-                    <div class="status-overlay" id="status-cam2">OFFLINE</div>
-                </div>
-            </div>
+          <div class="control-row actions-row">
+            <button class="btn btn-on" onclick="startStream(2)">▶ ON</button>
+            <button class="btn btn-off" onclick="stopStream(2)">⏹ OFF</button>
+            <button id="save-btn-2" class="btn btn-action" onclick="saveVideo(2)" disabled>💾 Lưu Video</button>
+            <button id="save-excel-btn-2" class="btn btn-action" onclick="saveExcel(2)" disabled>📊 Lưu Excel</button>
+          </div>
+        </div>
 
-            <div class="log-console">
-                <div class="log-header">Log Camera 2</div>
-                <div class="log-output" id="log-cam2">
-                    <p class="log-msg system">[System] Đang chờ cấu hình...</p>
-                </div>
-            </div>
-        </section>
-    </main>
+        <div class="cam-view">
+          <img id="frame-2" class="cam-frame" alt="Camera 2 stream"/>
+          <div class="cam-placeholder" id="placeholder-2">
+            <span>Nhấn ON để bắt đầu luồng Cam 2</span>
+          </div>
+        </div>
 
-    <script src="scripts.js"></script>
+        <div class="cam-log">
+          <div class="log-header">
+            <span>Log Camera 2</span>
+            <button class="btn-clear" onclick="clearLog(2)">Xóa</button>
+          </div>
+          <div class="log-box" id="log-box-2"></div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="scripts.js"></script>
 </body>
 </html>

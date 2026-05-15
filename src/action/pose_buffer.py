@@ -20,15 +20,18 @@ class PoseSequenceBuffer:
         output_dir="data/output/clips_pkl",
         default_label=0,
         max_idle_frames=150,
+        export_enabled=False,
     ):
         self.seq_len = int(seq_len)
         self.stride = int(stride)
         self.output_dir = Path(output_dir)
         self.default_label = int(default_label)
         self.max_idle_frames = int(max_idle_frames)
+        self.export_enabled = bool(export_enabled)
         self.states = {}
         self.last_seen = {}
-        ensure_dir(self.output_dir)
+        if self.export_enabled:
+            ensure_dir(self.output_dir)
 
     def _get_state(self, camera_id, local_track_id):
         key = (str(camera_id), int(local_track_id))
@@ -111,6 +114,15 @@ class PoseSequenceBuffer:
 
         state["export_count"] += 1
         state["last_export_end"] = end_idx
+
+        if not self.export_enabled:
+            return {
+                "status": "disabled",
+                "reason": "clip_export_disabled",
+                "current_len": self.seq_len,
+                "seq_len": self.seq_len,
+                "pkl_path": None,
+            }
 
         pkl_path = self._export_current_window(
             camera_id=camera_id,

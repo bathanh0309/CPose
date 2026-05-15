@@ -113,10 +113,8 @@ adl:
   seq_len: 48
   stride: 12
   max_idle_frames: 150
-  export_dir: "data/output/clips_pkl"
   default_label: 0
-  work_dir: "data/output/posec3d"
-  auto_infer: false
+  auto_infer: true
   posec3d_config:
     model:
       type: "Recognizer3D"

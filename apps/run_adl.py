@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--no-show", action="store_true")
     parser.add_argument("--save-video", action="store_true")
+    parser.add_argument("--save-clips", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
     return parser.parse_args()
@@ -61,6 +62,7 @@ def main():
         output_dir=cfg["adl"]["export_dir"],
         default_label=cfg["adl"].get("default_label", 0),
         max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
+        export_enabled=args.save_clips,
     )
 
     posec3d_runner = None

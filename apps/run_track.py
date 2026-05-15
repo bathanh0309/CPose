@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.detectors.yolo_pose import YoloPoseTracker
+from src.detectors.pedestrian_yolo import PedestrianYoloTracker
 from src.trackers.bytetrack import ByteTrackWrapper
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger
@@ -29,6 +30,7 @@ def parse_args():
     parser.add_argument("--save-video", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--ui-log", action="store_true")
     return parser.parse_args()
 
 
@@ -36,20 +38,32 @@ def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
 
-    detector = YoloPoseTracker(
-        weights=cfg["pose"]["weights"],
-        conf=cfg["pose"]["conf"],
-        iou=cfg["pose"]["iou"],
-        tracker=cfg["tracker"]["tracker_yaml"],
-        device=cfg["system"]["device"],
-    )
+    if cfg["tracking"].get("model_type") == "pedestrian":
+        detector = PedestrianYoloTracker(
+            weights=cfg["tracking"].get("weights", ROOT / "models/tracking.pt"),
+            conf=cfg["tracking"].get("person_conf", 0.60),
+            iou=cfg["tracking"].get("iou", 0.5),
+            tracker=cfg["tracking"]["tracker_yaml"],
+            device=cfg["system"]["device"],
+            classes=cfg["tracking"].get("classes", [0]),
+            tracking_cfg=cfg["tracking"],
+        )
+    else:
+        detector = YoloPoseTracker(
+            weights=cfg["pose"]["weights"],
+            conf=cfg["pose"]["conf"],
+            iou=cfg["pose"]["iou"],
+            tracker=cfg["tracking"]["tracker_yaml"],
+            device=cfg["system"]["device"],
+            tracking_cfg=cfg["tracking"],
+        )
     tracker = ByteTrackWrapper(detector)
 
     source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = not args.no_show
+    show = bool(args.show and not args.no_show)
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
@@ -83,26 +97,31 @@ def main():
                 continue
 
             tracked = 0
+            filter_stats = detector.last_filter_stats.as_dict()
             for det in detections:
                 tid = det.get("track_id", -1)
                 if tid >= 0:
                     tracked += 1
                 draw_detection(frame, det, label=f"track={tid} conf={det['score']:.2f}")
 
-            draw_info_panel(frame, {
-                "Module": "YOLO11-Pose + ByteTrack",
+            info = {
+                "Module": "Pedestrian Tracking",
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Detections": len(detections),
                 "Tracked": tracked,
+                "Filtered": sum(filter_stats.values()),
                 "Device": cfg["system"]["device"],
                 "FPS": f"{fps_counter.tick():.1f}",
-            })
+            }
+            if detector.last_filter_stats.warnings:
+                info["Warning"] = detector.last_filter_stats.warnings[-1]
+            draw_info_panel(frame, info)
 
             if writer is not None:
                 writer.write(frame)
             if show:
-                key = safe_imshow("CPose - Tracking", frame)
+                key = safe_imshow("CPose - Pedestrian Tracking", frame)
                 if key in (27, ord("q"), ord("Q")):
                     break
     finally:

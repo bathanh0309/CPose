@@ -22,6 +22,7 @@ from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from src.core.ui_logger import ui_logger
 
 BASE_DIR   = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "data" / "config" / "resources.txt"
@@ -233,6 +234,30 @@ def list_sessions():
             **_session_meta.get(sid, {}),
         }
         for sid, buf in _frame_buffers.items()
+    }
+
+
+@app.get("/api/logs/{camera_id}")
+def get_logs(camera_id: str):
+    return {"camera_id": camera_id, "logs": ui_logger.get_logs(camera_id)}
+
+
+@app.get("/api/metrics/{camera_id}")
+def get_metrics(camera_id: str):
+    return {"camera_id": camera_id, "metrics": ui_logger.get_metrics(camera_id)}
+
+
+@app.get("/api/status")
+def get_status():
+    return {
+        "sessions": {
+            sid: {
+                "buffered_frames": len(buf),
+                **_session_meta.get(sid, {}),
+            }
+            for sid, buf in _frame_buffers.items()
+        },
+        "ui_logger": ui_logger.status(),
     }
 
 

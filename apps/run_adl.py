@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--save-clips", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--ui-log", action="store_true")
     return parser.parse_args()
 
 
@@ -55,7 +56,14 @@ def adl_text(status):
 def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
-    detector = YoloPoseTracker(cfg["pose"]["weights"], cfg["pose"]["conf"], cfg["pose"]["iou"], cfg["tracker"]["tracker_yaml"], cfg["system"]["device"])
+    detector = YoloPoseTracker(
+        cfg["pose"]["weights"],
+        cfg["pose"]["conf"],
+        cfg["pose"]["iou"],
+        cfg["tracking"]["tracker_yaml"],
+        cfg["system"]["device"],
+        tracking_cfg=cfg["tracking"],
+    )
     pose_buffer = PoseSequenceBuffer(
         seq_len=cfg["adl"]["seq_len"],
         stride=cfg["adl"]["stride"],
@@ -83,7 +91,7 @@ def main():
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = not args.no_show
+    show = bool(args.show and not args.no_show)
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
@@ -143,6 +151,7 @@ def main():
             first_status = next(iter(track_status.values()), {"status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"]})
             draw_info_panel(frame, {
                 "Module": "YOLO+Pose Buffer+PoseC3D",
+                "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
                 "Device": cfg["system"]["device"],

@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--save-clips", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--ui-log", action="store_true")
     return parser.parse_args()
 
 
@@ -67,7 +68,14 @@ def adl_label(status):
 def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
-    detector = YoloPoseTracker(cfg["pose"]["weights"], cfg["pose"]["conf"], cfg["pose"]["iou"], cfg["tracker"]["tracker_yaml"], cfg["system"]["device"])
+    detector = YoloPoseTracker(
+        cfg["pose"]["weights"],
+        cfg["pose"]["conf"],
+        cfg["pose"]["iou"],
+        cfg["tracking"]["tracker_yaml"],
+        cfg["system"]["device"],
+        tracking_cfg=cfg["tracking"],
+    )
     tracker = ByteTrackWrapper(detector)
 
     extractor = None
@@ -122,7 +130,7 @@ def main():
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = not args.no_show
+    show = bool(args.show and not args.no_show)
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     panel_w = 220
@@ -141,6 +149,7 @@ def main():
 
     fps_counter = FPSCounter()
     track_status = {}
+    last_event_status = {}
     last_query_crop = None
     last_matches = []
     prev_track_ids = set()
@@ -167,6 +176,12 @@ def main():
                     gid_mgr.forget_track(args.camera_id, lost_tid)
             for lost_tid in lost_track_ids:
                 track_status.pop(lost_tid, None)
+                last_event_status.pop(lost_tid, None)
+                event_bus.emit("track_lost", {
+                    "camera_id": args.camera_id,
+                    "frame_idx": frame_idx,
+                    "local_track_id": int(lost_tid),
+                })
             prev_track_ids = curr_track_ids
 
             for det in detections:
@@ -241,16 +256,24 @@ def main():
                     adl_status = {"status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"], "pkl_path": None}
 
                 draw_detection(frame, det, label=f"t={tid} gid={gid} r={reid_score:.2f} {adl_label(adl_status)}")
-                event_bus.emit("track_update", {
-                    "camera_id": args.camera_id,
-                    "frame_idx": frame_idx,
-                    "local_track_id": int(tid),
-                    "global_id": gid,
-                    "reid_score": float(reid_score),
-                    "reid_status": reid_status,
-                    "bbox": bbox,
-                    "adl_status": adl_status.get("status") if adl_status else "waiting",
-                })
+                status_key = (
+                    gid,
+                    reid_status,
+                    adl_status.get("status") if adl_status else "waiting",
+                    adl_status.get("label") if adl_status else None,
+                )
+                if tid >= 0 and last_event_status.get(tid) != status_key:
+                    last_event_status[tid] = status_key
+                    event_bus.emit("track_update", {
+                        "camera_id": args.camera_id,
+                        "frame_idx": frame_idx,
+                        "local_track_id": int(tid),
+                        "global_id": gid,
+                        "reid_score": float(reid_score),
+                        "reid_status": reid_status,
+                        "bbox": bbox,
+                        "adl_status": adl_status.get("status") if adl_status else "waiting",
+                    })
 
             info = {
                 "Module": "Full CPose",

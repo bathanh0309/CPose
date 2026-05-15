@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--save-video", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--ui-log", action="store_true")
     return parser.parse_args()
 
 
@@ -44,7 +45,14 @@ def clipped_crop(frame, bbox):
 def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
-    detector = YoloPoseTracker(cfg["pose"]["weights"], cfg["pose"]["conf"], cfg["pose"]["iou"], cfg["tracker"]["tracker_yaml"], cfg["system"]["device"])
+    detector = YoloPoseTracker(
+        cfg["pose"]["weights"],
+        cfg["pose"]["conf"],
+        cfg["pose"]["iou"],
+        cfg["tracking"]["tracker_yaml"],
+        cfg["system"]["device"],
+        tracking_cfg=cfg["tracking"],
+    )
     extractor = None
     gallery = None
     gid_mgr = None
@@ -72,7 +80,7 @@ def main():
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = not args.no_show
+    show = bool(args.show and not args.no_show)
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
@@ -130,6 +138,7 @@ def main():
 
             info = {
                 "Module": "YOLO+ByteTrack+FastReID",
+                "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
                 "Gallery": len(gallery.prototypes) if gallery is not None else 0,

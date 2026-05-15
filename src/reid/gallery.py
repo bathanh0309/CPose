@@ -18,6 +18,8 @@ class ReIDGallery:
         self.memory = {}
         self.initial_empty = True
         self._dimension_warnings = set()
+        self.index_ids = []
+        self.index_matrix = None
 
     @staticmethod
     def cosine_similarity(a, b):
@@ -96,7 +98,17 @@ class ReIDGallery:
             self.memory[person_id] = feats
 
         self.prototypes[person_id] = self.memory[person_id].mean(axis=0).astype(np.float32)
+        self._rebuild_index()
         logger.info(f"Loaded {len(feats)} embeddings for {person_id} from {source}; dim={feats.shape[1]}")
+
+    def _rebuild_index(self):
+        self.index_ids = []
+        rows = []
+        for person_id, proto in self.prototypes.items():
+            norm = np.linalg.norm(proto) + 1e-12
+            self.index_ids.append(person_id)
+            rows.append((proto / norm).astype(np.float32))
+        self.index_matrix = np.stack(rows, axis=0) if rows else None
 
     def build(self):
         self.prototypes = {}
@@ -109,25 +121,33 @@ class ReIDGallery:
         if not self.prototypes:
             logger.warning(f"ReID gallery empty: {self.gallery_dir}")
         self.initial_empty = not bool(self.prototypes)
+        self._rebuild_index()
 
     def query(self, feat, threshold=0.55):
         if not self.prototypes:
             return "unknown", -1.0
 
-        best_id = "unknown"
-        best_score = -1.0
-        for person_id, proto in self.prototypes.items():
-            if proto.shape != feat.shape:
-                if person_id not in self._dimension_warnings:
-                    logger.warning(
-                        f"Skipping gallery id={person_id}: embedding dim {proto.shape[0]} != FastReID dim {feat.shape[0]}"
-                    )
-                    self._dimension_warnings.add(person_id)
-                continue
-            score = self.cosine_similarity(feat, proto)
-            if score > best_score:
-                best_score = score
-                best_id = person_id
+        if self.index_matrix is not None and self.index_matrix.shape[1] == feat.shape[0]:
+            query = feat.astype(np.float32) / (np.linalg.norm(feat) + 1e-12)
+            scores = self.index_matrix @ query
+            best_pos = int(np.argmax(scores))
+            best_id = self.index_ids[best_pos]
+            best_score = float(scores[best_pos])
+        else:
+            best_id = "unknown"
+            best_score = -1.0
+            for person_id, proto in self.prototypes.items():
+                if proto.shape != feat.shape:
+                    if person_id not in self._dimension_warnings:
+                        logger.warning(
+                            f"Skipping gallery id={person_id}: embedding dim {proto.shape[0]} != FastReID dim {feat.shape[0]}"
+                        )
+                        self._dimension_warnings.add(person_id)
+                    continue
+                score = self.cosine_similarity(feat, proto)
+                if score > best_score:
+                    best_score = score
+                    best_id = person_id
 
         if best_score < threshold:
             return "unknown", best_score
@@ -151,6 +171,7 @@ class ReIDGallery:
             self.memory[person_id] = np.vstack([self.memory[person_id], feat[None, ...]])
 
         self.prototypes[person_id] = self.memory[person_id].mean(axis=0).astype(np.float32)
+        self._rebuild_index()
 
     def add_crop(self, person_id, crop_bgr):
         feat = self.extractor.extract(crop_bgr)

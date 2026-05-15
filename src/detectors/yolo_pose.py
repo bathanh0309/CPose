@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ultralytics import YOLO
+from src.utils.filters import DetectionFilterStats, filter_person_detections
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -14,7 +15,8 @@ class YoloPoseTracker:
         iou=0.5,
         tracker="bytetrack.yaml",
         device=None,
-        classes=None
+        classes=None,
+        tracking_cfg=None,
     ):
         self.weights = Path(weights)
         if not self.weights.exists():
@@ -27,22 +29,34 @@ class YoloPoseTracker:
         self.tracker = tracker
         self.device = device
         self.classes = classes if classes is not None else [0]
+        self.tracking_cfg = tracking_cfg or {}
+        self.last_filter_stats = DetectionFilterStats()
         logger.info(f"Loading YOLO pose model: {self.weights}")
         logger.info(f"YOLO device: {self.device}")
         logger.info(f"YOLO tracker: {self.tracker}")
         self.model = YOLO(str(self.weights))
 
     def infer(self, frame, persist=True):
-        results = self.model.track(
-            source=frame,
-            persist=persist,
-            tracker=self.tracker,
-            conf=self.conf,
-            iou=self.iou,
-            classes=self.classes,
-            device=self.device,
-            verbose=False
-        )
+        if persist is None:
+            results = self.model.predict(
+                source=frame,
+                conf=self.conf,
+                iou=self.iou,
+                classes=self.classes,
+                device=self.device,
+                verbose=False,
+            )
+        else:
+            results = self.model.track(
+                source=frame,
+                persist=persist,
+                tracker=self.tracker,
+                conf=self.conf,
+                iou=self.iou,
+                classes=self.classes,
+                device=self.device,
+                verbose=False,
+            )
 
         result = results[0]
         detections = []
@@ -76,4 +90,5 @@ class YoloPoseTracker:
             }
             detections.append(det)
 
+        detections, self.last_filter_stats = filter_person_detections(detections, self.tracking_cfg)
         return detections, result

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
+from src.utils.filters import DetectionFilterStats, filter_person_detections
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -18,6 +19,7 @@ class PedestrianYoloTracker:
         tracker="bytetrack.yaml",
         device=None,
         classes=None,
+        tracking_cfg=None,
     ):
         self.weights = Path(weights)
         if not self.weights.exists():
@@ -31,6 +33,8 @@ class PedestrianYoloTracker:
         self.tracker = tracker
         self.device = device
         self.classes = classes
+        self.tracking_cfg = tracking_cfg or {}
+        self.last_filter_stats = DetectionFilterStats()
 
         logger.info(f"Loading pedestrian YOLO model: {self.weights}")
         self.model = YOLO(str(self.weights))
@@ -73,4 +77,5 @@ class PedestrianYoloTracker:
                 }
             )
 
+        detections, self.last_filter_stats = filter_person_detections(detections, self.tracking_cfg)
         return detections, result

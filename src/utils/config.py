@@ -9,13 +9,14 @@ PATH_FIELDS = {
     ("system", "vis_dir"),
     ("system", "default_source"),
     ("pose", "weights"),
-    ("pedestrian", "weights"),
+    ("tracking", "weights"),
     ("reid", "weights"),
     ("reid", "output_dir"),
     ("reid", "gallery_dir"),
     ("adl", "weights"),
     ("adl", "export_dir"),
     ("adl", "work_dir"),
+    ("object", "weights"),
 }
 
 ULTRALYTICS_BUILTIN_TRACKERS = {"bytetrack.yaml", "botsort.yaml"}
@@ -85,9 +86,9 @@ def resolve_cfg_paths(cfg: dict, root: Path) -> dict:
     if "system" in cfg:
         cfg["system"]["device"] = normalize_device(cfg["system"].get("device"))
 
-    tracker_yaml = cfg.get("tracker", {}).get("tracker_yaml")
+    tracker_yaml = cfg.get("tracking", {}).get("tracker_yaml")
     if tracker_yaml:
-        cfg["tracker"]["tracker_yaml"] = resolve_tracker_yaml(tracker_yaml, root)
+        cfg["tracking"]["tracker_yaml"] = resolve_tracker_yaml(tracker_yaml, root)
 
     embedding_dirs = cfg.get("reid", {}).get("embedding_dirs")
     if embedding_dirs:
@@ -110,8 +111,55 @@ def load_pipeline_cfg(path: Path, root: Path) -> dict:
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
+    cfg = normalize_cfg(cfg)
     validate_cfg(cfg)
     return resolve_cfg_paths(cfg, root)
+
+
+def normalize_cfg(cfg: dict) -> dict:
+    cfg = deepcopy(cfg)
+
+    if "tracking" not in cfg:
+        tracking = {}
+        if "pedestrian" in cfg:
+            tracking.update(cfg["pedestrian"])
+        if "tracker" in cfg:
+            tracking.update(cfg["tracker"])
+        cfg["tracking"] = tracking
+
+    tracking_defaults = {
+        "enabled": True,
+        "model_type": "pose",
+        "person_conf": 0.60,
+        "iou": 0.5,
+        "min_box_area": 2500,
+        "min_keypoints": 5,
+        "min_keypoint_score": 0.35,
+        "tracker_yaml": "bytetrack.yaml",
+    }
+    cfg["tracking"] = {**tracking_defaults, **cfg.get("tracking", {})}
+
+    cfg.setdefault("object", {
+        "enabled": False,
+        "weights": "models/yolo11n.pt",
+        "conf": 0.45,
+        "iou": 0.5,
+        "classes": ["pickleball", "paddle", "ball"],
+    })
+
+    cfg.setdefault("ui", {"enabled": True, "log_metrics": True, "max_log_lines": 300, "metrics_interval_frames": 5})
+    cfg.setdefault("output", {})
+    cfg["output"].setdefault("save_video", True)
+    cfg["output"].setdefault("save_json", False)
+    cfg["output"].setdefault("short_names", True)
+    cfg.setdefault("logging", {})
+    cfg["logging"].setdefault("save_events", False)
+    cfg["logging"].setdefault("level", "INFO")
+    cfg.setdefault("adl", {})
+    cfg["adl"].setdefault("export_dir", "data/output/clips_pkl")
+    cfg["adl"].setdefault("work_dir", cfg["adl"]["export_dir"])
+
+    return cfg
 
 
 def validate_cfg(cfg: dict):
@@ -123,7 +171,7 @@ def validate_cfg(cfg: dict):
         "reid": ["fastreid_config", "weights", "gallery_dir", "threshold", "reid_interval"],
         "adl": ["posec3d_config", "weights", "seq_len", "stride", "export_dir"],
         "system": ["device", "event_log", "vis_dir"],
-        "tracker": ["tracker_yaml"],
+        "tracking": ["person_conf", "iou", "min_box_area", "min_keypoints", "min_keypoint_score", "tracker_yaml"],
     }
     for section, keys in required.items():
         if section not in cfg:

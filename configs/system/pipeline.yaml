@@ -13,22 +13,41 @@ logging:
 output:
   short_names: true
   save_json: false
-  save_video: false
+  save_video: true
 
 pose:
+  enabled: true
   weights: "models/yolo11n-pose.pt"
   conf: 0.6
-  iou: 0.6
-
-pedestrian:
-  weights: "models/tracking.pt"
-  conf: 0.3
   iou: 0.5
+  min_keypoints: 5
+  min_keypoint_score: 0.35
+
+tracking:
+  enabled: true
+  model_type: "pose"
+  weights: "models/tracking.pt"
+  person_conf: 0.60
+  iou: 0.5
+  min_box_area: 2500
+  min_keypoints: 5
+  min_keypoint_score: 0.35
+  tracker_yaml: "bytetrack.yaml"
   classes:
     - 0
 
-tracker:
-  tracker_yaml: "bytetrack.yaml"
+object:
+  enabled: false
+  weights: "models/yolo11n.pt"
+  conf: 0.45
+  iou: 0.5
+  classes: [pickleball, paddle, ball]
+
+ui:
+  enabled: true
+  log_metrics: true
+  max_log_lines: 300
+  metrics_interval_frames: 5
 
 reid:
   weights: "models/fastreid_market_R50.pth"
@@ -109,6 +128,8 @@ reid:
 
 adl:
   weights: "models/posec3d_r50_ntu60.pth"
+  export_dir: "data/output/clips_pkl"
+  work_dir: "data/output/clips_pkl"
   num_classes: 60
   seq_len: 48
   stride: 12

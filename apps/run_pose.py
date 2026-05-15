@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run YOLO11-Pose + ByteTrack visualization")
+    parser = argparse.ArgumentParser(description="Run YOLO11-Pose skeleton visualization")
     parser.add_argument("--source", type=str, default=None)
     parser.add_argument("--camera-id", type=str, default="cam01")
     parser.add_argument("--config", type=str, default=str(ROOT / "configs/system/pipeline.yaml"))
@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--save-video", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
+    parser.add_argument("--ui-log", action="store_true")
     return parser.parse_args()
 
 
@@ -38,15 +39,16 @@ def main():
         weights=cfg["pose"]["weights"],
         conf=cfg["pose"]["conf"],
         iou=cfg["pose"]["iou"],
-        tracker=cfg["tracker"]["tracker_yaml"],
+        tracker=cfg["tracking"]["tracker_yaml"],
         device=cfg["system"]["device"],
+        tracking_cfg=cfg["tracking"],
     )
 
     source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
     if source is None:
         raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
 
-    show = not args.no_show
+    show = bool(args.show and not args.no_show)
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
@@ -74,7 +76,7 @@ def main():
                 break
 
             try:
-                detections, _ = detector.infer(frame, persist=True)
+                detections, _ = detector.infer(frame, persist=None)
             except Exception as exc:
                 logger.warning(f"[frame {frame_idx}] pose inference failed: {exc}", exc_info=True)
                 continue
@@ -83,11 +85,19 @@ def main():
                 tid = det.get("track_id", -1)
                 draw_detection(frame, det, label=f"track={tid} conf={det['score']:.2f}")
 
+            keypoint_scores = [
+                float(sum(det.get("keypoint_scores") or []) / len(det.get("keypoint_scores") or [1]))
+                for det in detections
+            ]
+            avg_kpt = sum(keypoint_scores) / len(keypoint_scores) if keypoint_scores else 0.0
+            valid_skeletons = sum(1 for det in detections if det.get("keypoints") is not None)
             draw_info_panel(frame, {
-                "Module": "YOLO11-Pose + ByteTrack",
+                "Module": "YOLO11-Pose",
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
+                "Valid skeletons": valid_skeletons,
+                "Avg kpt": f"{avg_kpt:.2f}",
                 "Device": cfg["system"]["device"],
                 "FPS": f"{fps_counter.tick():.1f}",
             })
@@ -95,7 +105,7 @@ def main():
             if writer is not None:
                 writer.write(frame)
             if show:
-                key = safe_imshow("CPose - Pose Tracking", frame)
+                key = safe_imshow("CPose - Pose Estimation", frame)
                 if key in (27, ord("q"), ord("Q")):
                     break
     finally:

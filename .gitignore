@@ -12,6 +12,7 @@ dist/
 .eggs/
 
 data/config/
+data/config/resources.txt
 
 # ===========================
 # Virtual environments

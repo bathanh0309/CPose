@@ -1,2 +1,0 @@
-Cam Nha __rtsp://bathanh0309:bathanh0309@192.168.100.160:554/stream1
-Cam San __rtsp://bathanh0309:bathanh0309@192.168.100.242:554/stream1

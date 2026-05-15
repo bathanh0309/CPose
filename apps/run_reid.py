@@ -54,7 +54,13 @@ def main():
         from src.reid.fast_reid import FastReIDExtractor
         from src.reid.gallery import ReIDGallery
 
-        extractor = FastReIDExtractor(cfg["reid"]["fastreid_root"], cfg["reid"]["config"], cfg["reid"]["weights"], cfg["system"]["device"])
+        extractor = FastReIDExtractor(
+            config=cfg["reid"]["fastreid_config"],
+            weights_path=cfg["reid"]["weights"],
+            device=cfg["system"]["device"],
+            output_dir=cfg["reid"].get("output_dir"),
+            fastreid_root=cfg["reid"].get("fastreid_root"),
+        )
         gallery = ReIDGallery(extractor, cfg["reid"]["gallery_dir"], embedding_dirs=cfg["reid"].get("embedding_dirs"))
         gallery.build()
         gid_mgr = GlobalIDManager(gallery, threshold=cfg["reid"]["threshold"], reid_interval=cfg["reid"]["reid_interval"])
@@ -70,7 +76,7 @@ def main():
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
-    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    save_video = bool(args.save_video)
     if save_video:
         out_path = Path(args.output) if args.output else resolve_output_path(
             cfg["system"]["vis_dir"],

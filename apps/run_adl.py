@@ -68,10 +68,11 @@ def main():
         try:
             from src.action.posec3d import PoseC3DRunner
             posec3d_runner = PoseC3DRunner(
-                mmaction_root=cfg["adl"]["mmaction_root"],
-                base_config=cfg["adl"]["base_config"],
+                config=cfg["adl"]["posec3d_config"],
                 checkpoint=cfg["adl"]["weights"],
                 work_dir=cfg["adl"].get("work_dir", cfg["adl"]["export_dir"]),
+                num_classes=cfg["adl"].get("num_classes", 60),
+                mmaction_root=cfg["adl"].get("mmaction_root"),
             )
         except Exception as exc:
             logger.warning(f"PoseC3D disabled: {exc}")
@@ -84,7 +85,7 @@ def main():
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
-    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    save_video = bool(args.save_video)
     if save_video:
         out_path = Path(args.output) if args.output else resolve_output_path(
             cfg["system"]["vis_dir"],

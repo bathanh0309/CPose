@@ -1,6 +1,4 @@
 system:
-  # Use "auto" so the same config works on CPU-only laptops and CUDA machines.
-  # The loader resolves it to "cuda" only when torch.cuda.is_available() is true.
   device: "auto"
   event_log: "data/output/events/pipeline.jsonl"
   vis_dir: "data/output/vis"
@@ -15,32 +13,103 @@ logging:
 output:
   short_names: true
   save_json: false
-  save_video: true
+  save_video: false
 
 pose:
   weights: "models/yolo11n-pose.pt"
-  conf: 0.45
+  conf: 0.6
+  iou: 0.6
+
+pedestrian:
+  weights: "models/tracking.pt"
+  conf: 0.3
   iou: 0.5
+  classes:
+    - 0
 
 tracker:
-  # Ultralytics built-in ByteTrack config. This is not the external ByteTrack
-  # checkpoint; it is a tracking-by-detection YAML used by YOLO.track().
   tracker_yaml: "bytetrack.yaml"
 
 reid:
-  fastreid_root: ".github/fast-reid"
-  config: "configs/fast-reid/R50.yml"
   weights: "models/fastreid_market_R50.pth"
+  output_dir: "data/output/fastreid"
   gallery_dir: "data/gallery"
   embedding_dirs:
     - "data/face"
   threshold: 0.55
   reid_interval: 10
+  fastreid_config:
+    MODEL:
+      META_ARCHITECTURE: "Baseline"
+      BACKBONE:
+        NAME: "build_resnet_backbone"
+        NORM: "BN"
+        DEPTH: "50x"
+        LAST_STRIDE: 1
+        FEAT_DIM: 2048
+        WITH_IBN: false
+        PRETRAIN: true
+      HEADS:
+        NAME: "EmbeddingHead"
+        NORM: "BN"
+        WITH_BNNECK: true
+        POOL_LAYER: "GlobalAvgPool"
+        NECK_FEAT: "before"
+        CLS_LAYER: "Linear"
+      LOSSES:
+        NAME:
+          - "CrossEntropyLoss"
+          - "TripletLoss"
+        CE:
+          EPSILON: 0.1
+          SCALE: 1.0
+        TRI:
+          MARGIN: 0.3
+          HARD_MINING: true
+          NORM_FEAT: false
+          SCALE: 1.0
+    INPUT:
+      SIZE_TRAIN: [256, 128]
+      SIZE_TEST: [256, 128]
+      REA:
+        ENABLED: true
+        PROB: 0.5
+      FLIP:
+        ENABLED: true
+      PADDING:
+        ENABLED: true
+    DATASETS:
+      NAMES:
+        - "Market1501"
+      TESTS:
+        - "Market1501"
+    DATALOADER:
+      SAMPLER_TRAIN: "NaiveIdentitySampler"
+      NUM_INSTANCE: 4
+      NUM_WORKERS: 8
+    SOLVER:
+      AMP:
+        ENABLED: true
+      OPT: "Adam"
+      MAX_EPOCH: 120
+      BASE_LR: 0.00035
+      WEIGHT_DECAY: 0.0005
+      WEIGHT_DECAY_NORM: 0.0005
+      IMS_PER_BATCH: 64
+      SCHED: "MultiStepLR"
+      STEPS: [40, 90]
+      GAMMA: 0.1
+      WARMUP_FACTOR: 0.1
+      WARMUP_ITERS: 2000
+      CHECKPOINT_PERIOD: 30
+    TEST:
+      EVAL_PERIOD: 30
+      IMS_PER_BATCH: 128
+    CUDNN_BENCHMARK: true
 
 adl:
-  mmaction_root: ".github/pose-c3d"
-  base_config: "configs/posec3d/posec3d.py"
   weights: "models/posec3d_r50_ntu60.pth"
+  num_classes: 60
   seq_len: 48
   stride: 12
   max_idle_frames: 150
@@ -48,3 +117,89 @@ adl:
   default_label: 0
   work_dir: "data/output/posec3d"
   auto_infer: false
+  posec3d_config:
+    model:
+      type: "Recognizer3D"
+      backbone:
+        type: "ResNet3dSlowOnly"
+        in_channels: 17
+        base_channels: 32
+        num_stages: 3
+        out_indices: [2]
+        stage_blocks: [4, 6, 3]
+        conv1_stride: [1, 1]
+        pool1_stride: [1, 1]
+        inflate: [0, 1, 1]
+        spatial_strides: [2, 2, 2]
+        temporal_strides: [1, 1, 2]
+      cls_head:
+        type: "I3DHead"
+        in_channels: 512
+        num_classes: 60
+        dropout: 0.5
+      test_cfg:
+        average_clips: "prob"
+    dataset_type: "PoseDataset"
+    left_kp: [1, 3, 5, 7, 9, 11, 13, 15]
+    right_kp: [2, 4, 6, 8, 10, 12, 14, 16]
+    test_pipeline:
+      - type: "UniformSampleFrames"
+        clip_len: 48
+        num_clips: 10
+      - type: "PoseDecode"
+      - type: "PoseCompact"
+        hw_ratio: 1.0
+        allow_imgpad: true
+      - type: "Resize"
+        scale: [64, 64]
+        keep_ratio: false
+      - type: "GeneratePoseTarget"
+        with_kp: true
+        with_limb: false
+        double: true
+        left_kp: [1, 3, 5, 7, 9, 11, 13, 15]
+        right_kp: [2, 4, 6, 8, 10, 12, 14, 16]
+      - type: "FormatShape"
+        input_format: "NCTHW_Heatmap"
+      - type: "Collect"
+        keys: ["imgs"]
+        meta_keys: []
+      - type: "ToTensor"
+        keys: ["imgs"]
+    data:
+      videos_per_gpu: 32
+      workers_per_gpu: 4
+      test_dataloader:
+        videos_per_gpu: 1
+      test:
+        type: "PoseDataset"
+        ann_file: ""
+        split: "test"
+        pipeline: "__test_pipeline__"
+    optimizer:
+      type: "SGD"
+      lr: 0.4
+      momentum: 0.9
+      weight_decay: 0.0003
+    optimizer_config:
+      grad_clip:
+        max_norm: 40
+        norm_type: 2
+    lr_config:
+      policy: "CosineAnnealing"
+      by_epoch: false
+      min_lr: 0
+    total_epochs: 24
+    checkpoint_config:
+      interval: 1
+    evaluation:
+      interval: 1
+      metrics:
+        - "top_k_accuracy"
+        - "mean_class_accuracy"
+      topk: [1, 5]
+    log_config:
+      interval: 20
+      hooks:
+        - type: "TextLoggerHook"
+    log_level: "INFO"

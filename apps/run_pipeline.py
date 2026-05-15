@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--no-show", action="store_true")
     parser.add_argument("--save-video", action="store_true")
+    parser.add_argument("--save-events", action="store_true")
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--max-frames", type=int, default=0)
     return parser.parse_args()
@@ -77,7 +78,13 @@ def main():
         from src.reid.fast_reid import FastReIDExtractor
         from src.reid.gallery import ReIDGallery
 
-        extractor = FastReIDExtractor(cfg["reid"]["fastreid_root"], cfg["reid"]["config"], cfg["reid"]["weights"], cfg["system"]["device"])
+        extractor = FastReIDExtractor(
+            config=cfg["reid"]["fastreid_config"],
+            weights_path=cfg["reid"]["weights"],
+            device=cfg["system"]["device"],
+            output_dir=cfg["reid"].get("output_dir"),
+            fastreid_root=cfg["reid"].get("fastreid_root"),
+        )
         gallery = ReIDGallery(extractor, cfg["reid"]["gallery_dir"], embedding_dirs=cfg["reid"].get("embedding_dirs"))
         gallery.build()
         gid_mgr = GlobalIDManager(gallery, threshold=cfg["reid"]["threshold"], reid_interval=cfg["reid"]["reid_interval"])
@@ -92,7 +99,7 @@ def main():
         default_label=cfg["adl"].get("default_label", 0),
         max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
     )
-    save_events = bool(cfg.get("logging", {}).get("save_events", True))
+    save_events = bool(args.save_events)
     event_bus = EventBus(cfg["system"].get("event_log"), enabled=save_events) if save_events else NullEventBus()
 
     posec3d_runner = None
@@ -100,10 +107,11 @@ def main():
         try:
             from src.action.posec3d import PoseC3DRunner
             posec3d_runner = PoseC3DRunner(
-                mmaction_root=cfg["adl"]["mmaction_root"],
-                base_config=cfg["adl"]["base_config"],
+                config=cfg["adl"]["posec3d_config"],
                 checkpoint=cfg["adl"]["weights"],
                 work_dir=cfg["adl"].get("work_dir", cfg["adl"]["export_dir"]),
+                num_classes=cfg["adl"].get("num_classes", 60),
+                mmaction_root=cfg["adl"].get("mmaction_root"),
             )
         except Exception as exc:
             logger.warning(f"PoseC3D disabled: {exc}")
@@ -117,7 +125,7 @@ def main():
     width, height, fps, total = get_video_meta(cap)
     panel_w = 220
     writer = None
-    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    save_video = bool(args.save_video)
     if save_video:
         out_path = Path(args.output) if args.output else resolve_output_path(
             cfg["system"]["vis_dir"],

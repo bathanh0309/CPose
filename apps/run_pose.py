@@ -50,7 +50,7 @@ def main():
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     writer = None
-    save_video = args.save_video or bool(cfg.get("output", {}).get("save_video", cfg["system"].get("save_video", False)))
+    save_video = bool(args.save_video)
     if save_video:
         out_path = Path(args.output) if args.output else resolve_output_path(
             cfg["system"]["vis_dir"],

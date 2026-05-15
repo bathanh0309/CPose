@@ -1,0 +1,132 @@
+benchmark:
+  enabled: false
+  output_dir: "data/output/benchmark"
+  report_formats:
+    - "json"
+    - "csv"
+  warmup_frames: 30
+  max_frames: 0
+  sample_interval: 1
+  device: "auto"
+
+runtime_metrics:
+  fps:
+    enabled: true
+    description: "Frames processed per second."
+    unit: "frames/second"
+    aggregate:
+      - "mean"
+      - "median"
+      - "min"
+      - "max"
+      - "p95"
+  latency:
+    enabled: true
+    description: "Per-frame processing time."
+    unit: "ms/frame"
+    aggregate:
+      - "mean"
+      - "median"
+      - "p90"
+      - "p95"
+      - "p99"
+  memory:
+    enabled: true
+    description: "Peak CPU/GPU memory during evaluation."
+    unit: "MB"
+    aggregate:
+      - "peak"
+
+modules:
+  pose:
+    name: "YOLO11-Pose"
+    enabled: true
+    predictions_path: "data/output/pose_results.json"
+    ground_truth_path: ""
+    metrics:
+      - "fps"
+      - "latency"
+      - "precision"
+      - "recall"
+      - "map50"
+      - "map50_95"
+      - "oks_ap"
+      - "oks_ar"
+
+  pedestrian_tracking:
+    name: "Custom YOLO Pedestrian + ByteTrack"
+    enabled: true
+    predictions_path: "data/output/track_results.json"
+    ground_truth_path: ""
+    metrics:
+      - "fps"
+      - "latency"
+      - "mota"
+      - "motp"
+      - "idf1"
+      - "id_precision"
+      - "id_recall"
+      - "id_switches"
+      - "mostly_tracked"
+      - "mostly_lost"
+      - "false_positives"
+      - "false_negatives"
+
+  reid:
+    name: "FastReID"
+    enabled: true
+    embeddings_dir: "data/face"
+    gallery_dir: "data/gallery"
+    query_dir: ""
+    metrics:
+      - "latency"
+      - "top1_accuracy"
+      - "top5_accuracy"
+      - "map"
+      - "cmc_rank1"
+      - "cmc_rank5"
+      - "cmc_rank10"
+      - "cosine_threshold_accuracy"
+    threshold_sweep:
+      enabled: true
+      min: 0.30
+      max: 0.90
+      step: 0.05
+
+  adl:
+    name: "PoseC3D ADL"
+    enabled: true
+    predictions_path: "data/output/adl_results.json"
+    ground_truth_path: ""
+    label_map_path: ""
+    metrics:
+      - "latency"
+      - "top1_accuracy"
+      - "top5_accuracy"
+      - "precision_macro"
+      - "recall_macro"
+      - "f1_macro"
+      - "confusion_matrix"
+      - "per_class_accuracy"
+    confusion_matrix:
+      normalize: true
+      output_image: "data/output/benchmark/adl_confusion_matrix.png"
+      output_csv: "data/output/benchmark/adl_confusion_matrix.csv"
+
+  full_pipeline:
+    name: "Full CPose Pipeline"
+    enabled: true
+    event_log_path: "data/output/events/pipeline.jsonl"
+    metrics:
+      - "fps"
+      - "latency"
+      - "end_to_end_latency"
+      - "tracks_per_frame"
+      - "persons_per_frame"
+      - "reid_match_rate"
+      - "adl_clip_export_rate"
+
+export:
+  summary_json: "data/output/benchmark/summary.json"
+  summary_csv: "data/output/benchmark/summary.csv"
+  raw_samples_jsonl: "data/output/benchmark/raw_samples.jsonl"

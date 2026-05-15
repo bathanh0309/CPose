@@ -9,12 +9,10 @@ PATH_FIELDS = {
     ("system", "vis_dir"),
     ("system", "default_source"),
     ("pose", "weights"),
-    ("reid", "fastreid_root"),
-    ("reid", "config"),
+    ("pedestrian", "weights"),
     ("reid", "weights"),
+    ("reid", "output_dir"),
     ("reid", "gallery_dir"),
-    ("adl", "mmaction_root"),
-    ("adl", "base_config"),
     ("adl", "weights"),
     ("adl", "export_dir"),
     ("adl", "work_dir"),
@@ -122,8 +120,8 @@ def validate_cfg(cfg: dict):
 
     required = {
         "pose": ["weights", "conf", "iou"],
-        "reid": ["config", "weights", "gallery_dir", "threshold", "fastreid_root", "reid_interval"],
-        "adl": ["mmaction_root", "base_config", "weights", "seq_len", "stride", "export_dir"],
+        "reid": ["fastreid_config", "weights", "gallery_dir", "threshold", "reid_interval"],
+        "adl": ["posec3d_config", "weights", "seq_len", "stride", "export_dir"],
         "system": ["device", "event_log", "vis_dir"],
         "tracker": ["tracker_yaml"],
     }

@@ -1,0 +1,22 @@
+# System packages (Linux/Colab/Streamlit Cloud)
+libgl1-mesa-glx
+ffmpeg
+
+# Python build tools
+pip install --upgrade pip
+pip install "setuptools<82" wheel
+
+# PyTorch CUDA 11.8
+pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu118
+
+# Core project dependencies
+pip install -r requirements.txt
+
+# OpenMMLab stack for PoseC3D / MMAction2
+pip install -U openmim
+mim install mmengine
+mim install mmcv==2.1.0
+pip install mmaction2
+
+# Optional verification
+python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"

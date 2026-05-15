@@ -6,6 +6,7 @@ const WS_BASE = IS_LIVE_SERVER ? `ws://${location.hostname}:${FASTAPI_PORT}` : `
 const sockets = { 1: null, 2: null };
 const sessionIds = { 1: null, 2: null };
 const cameraSlots = { 1: null, 2: null };
+const frameStats = { 1: null, 2: null };
 let rtspCameras = [];
 
 const activeModules = {
@@ -194,6 +195,10 @@ function startStream(camId) {
   document.getElementById(`placeholder-${camId}`).style.display = "none";
   const img = document.getElementById(`frame-${camId}`);
   img.style.display = "block";
+  if (img._blobUrl) {
+    URL.revokeObjectURL(img._blobUrl);
+    img._blobUrl = null;
+  }
   img.src = "";
 
   const mods = [...activeModules[camId]].join(",");
@@ -206,33 +211,20 @@ function startStream(camId) {
   addLog(camId, `Phan tich cac module: [${mods}]`, "system");
 
   const ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
   sockets[camId] = ws;
+  initFrameStats(camId);
 
   ws.onopen = () => {
     setStatus(camId, "Dang Live", "online");
   };
 
   ws.onmessage = (evt) => {
-    const data = JSON.parse(evt.data);
-
-    if (data.type === "session") {
-      sessionIds[camId] = data.session_id;
-      toggleSaveButtons(camId, true);
-    } else if (data.type === "image") {
-      img.src = "data:image/jpeg;base64," + data.data;
-    } else if (data.type === "metric") {
-      const m = data.metrics || {};
-      const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
-      addLog(
-        camId,
-        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}`,
-        "metric"
-      );
-    } else if (data.type === "ai") {
-      addLog(camId, `AI: ${data.msg}`, "ai");
-    } else if (data.type === "log" || data.type === "system") {
-      addLog(camId, maskRtsp(data.msg), data.level || "system");
+    if (evt.data instanceof ArrayBuffer) {
+      renderBinaryFrame(camId, img, evt.data);
+      return;
     }
+    handleJsonMessage(camId, JSON.parse(evt.data));
   };
 
   ws.onerror = () => {
@@ -246,12 +238,126 @@ function startStream(camId) {
     toggleSaveButtons(camId, false);
     sessionIds[camId] = null;
     sockets[camId] = null;
+    cleanupFrameStats(camId);
   };
 }
 
 function getSelectedDisplayName(camId) {
   const selectEl = document.getElementById(`cam${camId}-display`);
   return selectEl?.selectedOptions?.[0]?.textContent || `Camera ${camId}`;
+}
+
+function handleJsonMessage(camId, data) {
+  if (data.type === "session") {
+    sessionIds[camId] = data.session_id;
+    toggleSaveButtons(camId, true);
+  } else if (data.type === "metric") {
+    const m = data.metrics || {};
+    const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
+    addLog(
+      camId,
+      `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
+      "metric"
+    );
+  } else if (data.type === "ai") {
+    addLog(camId, `AI: ${data.msg}`, "ai");
+  } else if (data.type === "log" || data.type === "system") {
+    addLog(camId, maskRtsp(data.msg), data.level || "system");
+  }
+}
+
+function ensureVideoOverlays(camId) {
+  const view = document.getElementById(`frame-${camId}`)?.closest(".cam-view");
+  if (!view) return {};
+
+  let fpsBadge = document.getElementById(`fps-badge-${camId}`);
+  if (!fpsBadge) {
+    fpsBadge = document.createElement("span");
+    fpsBadge.id = `fps-badge-${camId}`;
+    fpsBadge.className = "fps-badge fps-red";
+    fpsBadge.textContent = "0 FPS";
+    view.appendChild(fpsBadge);
+  }
+
+  let stale = document.getElementById(`stale-overlay-${camId}`);
+  if (!stale) {
+    stale = document.createElement("div");
+    stale.id = `stale-overlay-${camId}`;
+    stale.className = "stale-overlay";
+    stale.textContent = "Yeu tin hieu";
+    view.appendChild(stale);
+  }
+
+  return { fpsBadge, stale };
+}
+
+function initFrameStats(camId) {
+  const overlays = ensureVideoOverlays(camId);
+  frameStats[camId] = {
+    count: 0,
+    lastTick: performance.now(),
+    lastFrame: performance.now(),
+    fps: 0,
+    staleTimer: window.setInterval(() => updateStaleOverlay(camId), 500),
+    ...overlays
+  };
+  updateFpsBadge(camId, 0);
+  setStaleVisible(camId, false);
+  return frameStats[camId];
+}
+
+function cleanupFrameStats(camId) {
+  const stats = frameStats[camId];
+  if (!stats) return;
+  if (stats.staleTimer) window.clearInterval(stats.staleTimer);
+  const img = document.getElementById(`frame-${camId}`);
+  if (img?._blobUrl) {
+    URL.revokeObjectURL(img._blobUrl);
+    img._blobUrl = null;
+  }
+  updateFpsBadge(camId, 0);
+  setStaleVisible(camId, false);
+  frameStats[camId] = null;
+}
+
+function renderBinaryFrame(camId, imgEl, arrayBuffer) {
+  const prev = imgEl._blobUrl;
+  imgEl._blobUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: "image/jpeg" }));
+  imgEl.src = imgEl._blobUrl;
+  if (prev) requestAnimationFrame(() => URL.revokeObjectURL(prev));
+
+  const now = performance.now();
+  const stats = frameStats[camId] || initFrameStats(camId);
+  frameStats[camId].count += 1;
+  frameStats[camId].lastFrame = now;
+  setStaleVisible(camId, false);
+
+  if (now - frameStats[camId].lastTick >= 1000) {
+    const seconds = (now - frameStats[camId].lastTick) / 1000;
+    const fps = frameStats[camId].count / seconds;
+    frameStats[camId].count = 0;
+    frameStats[camId].lastTick = now;
+    updateFpsBadge(camId, fps);
+  }
+}
+
+function updateFpsBadge(camId, fps) {
+  const badge = ensureVideoOverlays(camId).fpsBadge;
+  if (!badge) return;
+  badge.textContent = `${fps.toFixed(1)} FPS`;
+  badge.className = "fps-badge " + (fps > 20 ? "fps-green" : fps >= 10 ? "fps-orange" : "fps-red");
+}
+
+function updateStaleOverlay(camId) {
+  const stats = frameStats[camId];
+  if (!stats) return;
+  setStaleVisible(camId, performance.now() - stats.lastFrame > 2000);
+}
+
+function setStaleVisible(camId, visible) {
+  const overlay = ensureVideoOverlays(camId).stale;
+  if (!overlay) return;
+  overlay.classList.toggle("visible", Boolean(visible));
 }
 
 function stopStream(camId) {

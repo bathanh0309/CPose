@@ -1,17 +1,30 @@
-"""
-CPose — FastAPI backend (fixed)
+﻿"""
+CPose â€” FastAPI backend (fixed)
 
 Fixes applied:
-  #1/#3  Module routing: WS nhận query param ?modules=pose,track,reid,adl
+  #1/#3  Module routing: WS nháº­n query param ?modules=pose,track,reid,adl
   #2/#5  Save-on-demand: POST /api/save-video/{cam_id} ghi buffer ra file
-  #4     Xóa fake log (frame % 90)
-  #6     Pipeline hook sẵn sàng uncomment khi model weights có mặt
-  #7     Frame buffer per session (deque) để save-on-demand hoạt động
+  #4     XÃ³a fake log (frame % 90)
+  #6     Pipeline hook sáºµn sÃ ng uncomment khi model weights cÃ³ máº·t
+  #7     Frame buffer per session (deque) Ä‘á»ƒ save-on-demand hoáº¡t Ä‘á»™ng
 """
 
+# Performance fixes:
+# FIX #8  Adaptive sleep theo target_fps.
+# FIX #9  Binary WebSocket JPEG frames, JSON chỉ cho control/log/metric.
+# FIX #10 Receive command task riêng, hot loop không wait_for.
+# FIX #11 Skip AI overlay khi loop lag, vẫn gửi frame raw.
+# FIX #12 Recording buffer 300 frame, opt-in qua recording flag.
+# FIX #13 POST /api/recording/start|stop/{session_id}.
+# FIX #14 CAP_PROP_BUFFERSIZE=1 cho OpenCV capture.
+# FIX #15 JPEG quality adaptive 75 -> 50 -> 75.
+# FIX #16 Frontend render ArrayBuffer binary frames.
+# FIX #17 Frontend FPS badge.
+# FIX #18 Frontend stale-frame overlay.
+
 import asyncio
-import base64
 import socket
+import time
 import uuid
 from collections import deque
 from pathlib import Path
@@ -37,15 +50,16 @@ OUTPUT_DIR  = BASE_DIR / "data" / "output" / "vis"
 STATIC_DIR  = BASE_DIR / "static"
 
 # ---------------------------------------------------------------------------
-# Frame buffer: session_id → deque of encoded JPEG bytes (giữ tối đa 9000 frame ~ 5 phút @30fps)
+# Frame buffer: session_id â†’ deque of encoded JPEG bytes (giá»¯ tá»‘i Ä‘a 9000 frame ~ 5 phÃºt @30fps)
 # ---------------------------------------------------------------------------
-BUFFER_MAX   = 9000
-_frame_buffers: Dict[str, deque] = {}   # session_id → deque[bytes]
-_session_meta: Dict[str, dict]   = {}   # session_id → {width, height, fps}
+BUFFER_MAX   = 300
+_frame_buffers: Dict[str, deque] = {}   # session_id â†’ deque[bytes]
+_session_meta: Dict[str, dict]   = {}   # session_id â†’ {width, height, fps}
+_recording_flags: Dict[str, bool] = {}
 _pipeline_cfg: Optional[dict] = None
 
 # ---------------------------------------------------------------------------
-# (Optional) Pipeline import — uncomment khi model weights đã sẵn sàng
+# (Optional) Pipeline import â€” uncomment khi model weights Ä‘Ã£ sáºµn sÃ ng
 # ---------------------------------------------------------------------------
 # from src.core.pipeline import CPosePipeline
 # _pipeline: Optional[CPosePipeline] = None
@@ -70,7 +84,7 @@ VALID_MODULES: Set[str] = {"pose", "track", "reid", "adl"}
 
 
 def parse_modules(raw: Optional[str]) -> Set[str]:
-    """'pose,track,reid' → {'pose', 'track', 'reid'}"""
+    """'pose,track,reid' â†’ {'pose', 'track', 'reid'}"""
     if not raw:
         return set()
     return {m.strip().lower() for m in raw.split(",") if m.strip().lower() in VALID_MODULES}
@@ -115,7 +129,7 @@ def camera_to_payload(camera: dict, index: int) -> dict:
         "id": f"camera:{index}",
         "name": name,
         "url_masked": url_masked,
-        "display": f"{name} — {url_masked}",
+        "display": f"{name} â€” {url_masked}",
     }
 
 
@@ -143,12 +157,61 @@ async def safe_send_json(websocket: WebSocket, payload: dict) -> bool:
         return False
 
 
+async def safe_send_bytes(websocket: WebSocket, payload: bytes) -> bool:
+    try:
+        if (
+            websocket.client_state != WebSocketState.CONNECTED
+            or websocket.application_state != WebSocketState.CONNECTED
+        ):
+            return False
+        await websocket.send_bytes(payload)
+        return True
+    except WebSocketDisconnect:
+        return False
+    except RuntimeError as exc:
+        if "Cannot call" not in str(exc) and "close message" not in str(exc):
+            print(f"[WS] send bytes runtime warning: {exc}")
+        return False
+    except Exception as exc:
+        print(f"[WS] send bytes warning: {exc}")
+        return False
+
+
 async def safe_close_websocket(websocket: WebSocket) -> None:
     try:
         if websocket.application_state == WebSocketState.CONNECTED:
             await websocket.close()
     except (WebSocketDisconnect, RuntimeError):
         pass
+
+
+async def receive_commands(
+    websocket: WebSocket,
+    processor: WebAIProcessor,
+    stop_event: asyncio.Event,
+    log_queue: asyncio.Queue,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            msg = await websocket.receive_json()
+            if msg.get("type") == "set_modules":
+                active_modules = parse_modules(msg.get("modules", ""))
+                processor.set_modules(active_modules)
+                await log_queue.put((
+                    "system",
+                    f"Modules cáº­p nháº­t: {', '.join(active_modules) or 'none'}",
+                ))
+            elif msg.get("type") == "stop":
+                stop_event.set()
+                break
+        except WebSocketDisconnect:
+            stop_event.set()
+            break
+        except RuntimeError:
+            stop_event.set()
+            break
+        except Exception as exc:
+            print(f"[WS] receive warning cam={processor.camera_id}: {exc}")
 
 
 def is_local_file_source(source: str) -> bool:
@@ -178,16 +241,16 @@ def resolve_video_source(source: Optional[str], url: Optional[str]) -> tuple[Opt
         try:
             camera_index = int(source.split(":", 1)[1])
         except ValueError:
-            return None, "Camera không hợp lệ"
+            return None, "Camera khÃ´ng há»£p lá»‡"
         cameras = read_camera_sources()
         if camera_index < 0 or camera_index >= len(cameras):
-            return None, "Camera không tồn tại"
+            return None, "Camera khÃ´ng tá»“n táº¡i"
         return cameras[camera_index]["url"], cameras[camera_index]["name"]
     if source:
         return source, "File upload"
     if url:
-        return url, "Nguồn RTSP"
-    return None, "Chưa chọn nguồn video"
+        return url, "Nguá»“n RTSP"
+    return None, "ChÆ°a chá»n nguá»“n video"
 
 
 def describe_rtsp_tcp_status(video_source: str, timeout: float = 3.0) -> Optional[str]:
@@ -214,13 +277,15 @@ def open_video_capture(video_source: str) -> cv2.VideoCapture:
         5000,
     ]
     try:
-        return cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, params)
+        cap = cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, params)
     except Exception:
-        return cv2.VideoCapture(video_source)
+        cap = cv2.VideoCapture(video_source)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return cap
 
 
 # ---------------------------------------------------------------------------
-# Routes — static
+# Routes â€” static
 # ---------------------------------------------------------------------------
 
 @app.get("/")
@@ -254,7 +319,7 @@ def scripts():
     )
 
 # ---------------------------------------------------------------------------
-# Routes — cameras & upload
+# Routes â€” cameras & upload
 # ---------------------------------------------------------------------------
 
 @app.get("/api/cameras")
@@ -310,18 +375,18 @@ async def upload_video(file: Annotated[UploadFile, File(...)]):
 
 
 # ---------------------------------------------------------------------------
-# FIX #2 / #5 — Save-on-demand endpoint
+# FIX #2 / #5 â€” Save-on-demand endpoint
 # ---------------------------------------------------------------------------
 
 @app.post("/api/save-video/{session_id}")
 async def save_video(session_id: str):
     """
-    Ghi frame buffer của session ra file MP4.
-    Frontend gọi endpoint này khi người dùng nhấn nút "Lưu video".
-    Không có auto-save nào xảy ra nếu không gọi endpoint này.
+    Ghi frame buffer cá»§a session ra file MP4.
+    Frontend gá»i endpoint nÃ y khi ngÆ°á»i dÃ¹ng nháº¥n nÃºt "LÆ°u video".
+    KhÃ´ng cÃ³ auto-save nÃ o xáº£y ra náº¿u khÃ´ng gá»i endpoint nÃ y.
     """
     if session_id not in _frame_buffers or not _frame_buffers[session_id]:
-        return JSONResponse(status_code=404, content={"error": "Không có frame nào trong buffer"})
+        return JSONResponse(status_code=404, content={"error": "KhÃ´ng cÃ³ frame nÃ o trong buffer"})
 
     meta = _session_meta.get(session_id, {})
     fps    = meta.get("fps", 25)
@@ -343,6 +408,24 @@ async def save_video(session_id: str):
     writer.release()
 
     return {"saved": out_name.name, "frames": len(frames), "path": str(out_name)}
+
+
+@app.post("/api/recording/start/{session_id}")
+async def start_recording(session_id: str):
+    maxlen = int(get_pipeline_cfg().get("web", {}).get("recording_buffer_max", BUFFER_MAX))
+    _frame_buffers[session_id] = deque(maxlen=maxlen)
+    _recording_flags[session_id] = True
+    return {"session_id": session_id, "recording": True, "buffer_max": maxlen}
+
+
+@app.post("/api/recording/stop/{session_id}")
+async def stop_recording(session_id: str):
+    _recording_flags[session_id] = False
+    return {
+        "session_id": session_id,
+        "recording": False,
+        "buffered_frames": len(_frame_buffers.get(session_id, [])),
+    }
 
 
 @app.post("/api/save-excel/{session_id}")
@@ -389,7 +472,7 @@ def get_status():
 
 
 # ---------------------------------------------------------------------------
-# FIX #1 / #3 — WebSocket với module routing + frame buffer
+# FIX #1 / #3 â€” WebSocket vá»›i module routing + frame buffer
 # ---------------------------------------------------------------------------
 
 @app.websocket("/ws/stream/{cam_id}")
@@ -398,7 +481,7 @@ async def stream_video(
     cam_id: str,
     source: Optional[str] = None,
     url: Optional[str] = None,
-    modules: Optional[str] = None,   # ← FIX #3: nhận danh sách module từ UI
+    modules: Optional[str] = None,   # â† FIX #3: nháº­n danh sÃ¡ch module tá»« UI
     session_id: Optional[str] = None,
 ):
     await websocket.accept()
@@ -409,18 +492,25 @@ async def stream_video(
     cfg = get_pipeline_cfg()
     web_cfg = cfg.get("web", {})
     metrics_interval = int(web_cfg.get("metrics_interval_frames", cfg.get("ui", {}).get("metrics_interval_frames", 5)))
-    jpeg_quality = int(web_cfg.get("jpeg_quality", 60))
+    target_fps = float(web_cfg.get("target_fps", 25))
+    target_interval = 1.0 / max(target_fps, 1.0)
+    jpeg_quality_base = int(web_cfg.get("jpeg_quality", 75))
+    jpeg_quality_min = int(web_cfg.get("jpeg_quality_min", 50))
+    jpeg_quality = jpeg_quality_base
     loop_local_video = bool(web_cfg.get("loop_local_video", True))
+    lag_threshold = float(web_cfg.get("frame_skip_lag_multiplier", 2.0)) * target_interval
+    recording_buffer_max = int(web_cfg.get("recording_buffer_max", BUFFER_MAX))
     processor = WebAIProcessor(camera_id=cam_id, modules=active_modules, cfg=cfg)
 
-    # Tạo session_id nếu chưa có
+    # Táº¡o session_id náº¿u chÆ°a cÃ³
     if not session_id:
         session_id = str(uuid.uuid4())
 
-    # Khởi tạo buffer cho session này
-    _frame_buffers[session_id] = deque(maxlen=BUFFER_MAX)
+    # Khá»Ÿi táº¡o buffer cho session nÃ y
+    _frame_buffers[session_id] = deque(maxlen=recording_buffer_max)
+    _recording_flags[session_id] = False
 
-    # Gửi session_id về client để sau này gọi /api/save-video/{session_id}
+    # Gá»­i session_id vá» client Ä‘á»ƒ sau nÃ y gá»i /api/save-video/{session_id}
     if not await safe_send_json(websocket, {
         "type": "session",
         "session_id": session_id,
@@ -447,7 +537,7 @@ async def stream_video(
 
     if not await safe_send_json(websocket, {
         "type": "log",
-        "msg": f"Kết nối: {source_label} | Modules: {', '.join(active_modules) or 'none'}",
+        "msg": f"Káº¿t ná»‘i: {source_label} | Modules: {', '.join(active_modules) or 'none'}",
         "level": "system",
     }):
         return
@@ -457,42 +547,26 @@ async def stream_video(
         print(f"[RTSP] OpenCV cannot open video source: {mask_rtsp_credentials(video_source)}")
         if await safe_send_json(websocket, {
             "type": "log",
-            "msg": f"Lỗi: Không thể mở nguồn video {source_label}. OpenCV/FFmpeg cannot open source.",
+            "msg": f"Lá»—i: KhÃ´ng thá»ƒ má»Ÿ nguá»“n video {source_label}. OpenCV/FFmpeg cannot open source.",
             "level": "error",
         }):
             await safe_close_websocket(websocket)
         return
 
-    # Lưu metadata cho session (dùng khi save)
+    # LÆ°u metadata cho session (dÃ¹ng khi save)
     fps    = cap.get(cv2.CAP_PROP_FPS) or 25
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     _session_meta[session_id] = {"fps": fps, "width": width, "height": height}
 
+    stop_event = asyncio.Event()
+    log_queue: asyncio.Queue = asyncio.Queue()
+    command_task = asyncio.create_task(receive_commands(websocket, processor, stop_event, log_queue))
+    last_loop_elapsed = 0.0
+
     try:
-        while connected:
-            # Cho phép client gửi lệnh (thay đổi modules, stop, v.v.)
-            try:
-                msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.001)
-                if msg.get("type") == "set_modules":
-                    active_modules = parse_modules(msg.get("modules", ""))
-                    processor.set_modules(active_modules)
-                    if not await safe_send_json(websocket, {
-                        "type": "log",
-                        "msg": f"Modules cập nhật: {', '.join(active_modules) or 'none'}",
-                        "level": "system",
-                    }):
-                        break
-                elif msg.get("type") == "stop":
-                    break
-            except asyncio.TimeoutError:
-                pass
-            except WebSocketDisconnect:
-                break
-            except RuntimeError:
-                break
-            except Exception as exc:
-                print(f"[WS] receive warning cam={cam_id}: {exc}")
+        while connected and not stop_event.is_set():
+            frame_start = time.monotonic()
 
             ret, frame = cap.read()
             if not ret:
@@ -501,13 +575,37 @@ async def stream_video(
                     continue
                 if not await safe_send_json(websocket, {
                     "type": "log",
-                    "msg": "Mất tín hiệu hoặc không đọc được frame.",
+                    "msg": "Mat tin hieu hoac khong doc duoc frame.",
                     "level": "error",
                 }):
                     connected = False
                 break
 
-            frame, ai_logs, metrics = processor.process(frame)
+            while not log_queue.empty():
+                level, msg = await log_queue.get()
+                if not await safe_send_json(websocket, {"type": "log", "msg": msg, "level": level}):
+                    connected = False
+                    break
+            if not connected:
+                break
+
+            skip_ai = bool(processor.modules) and last_loop_elapsed > lag_threshold
+            if skip_ai:
+                processor.frame_idx += 1
+                fps_actual = round(1.0 / max(last_loop_elapsed, 1e-6), 2)
+                metrics = {
+                    "camera_id": cam_id,
+                    "frame_idx": processor.frame_idx,
+                    "fps": fps_actual,
+                    "modules": sorted(processor.modules),
+                    "detections": 0,
+                    "tracked": 0,
+                    "filtered": 0,
+                    "skip_ai": True,
+                }
+                ai_logs = []
+            else:
+                frame, ai_logs, metrics = processor.process(frame)
 
             for level, log_msg in ai_logs:
                 print(format_terminal_ai_log(cam_id, log_msg))
@@ -521,25 +619,40 @@ async def stream_video(
                 if not await safe_send_json(websocket, {"type": "metric", "metrics": metrics}):
                     break
 
+            fps_actual = float(metrics.get("fps", 0.0) or 0.0)
+            if fps_actual and fps_actual < target_fps * 0.6:
+                jpeg_quality = jpeg_quality_min
+            elif fps_actual > target_fps * 0.9:
+                jpeg_quality = jpeg_quality_base
+
             ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
             if not ok:
-                await asyncio.sleep(0.03)
+                elapsed = time.monotonic() - frame_start
+                last_loop_elapsed = elapsed
+                await asyncio.sleep(max(0.0, target_interval - elapsed))
                 continue
 
             jpeg_bytes = buffer.tobytes()
 
-            # FIX #7 — lưu vào frame buffer (không ghi ra disk tự động)
-            _frame_buffers[session_id].append(jpeg_bytes)
+            if _recording_flags.get(session_id, False):
+                _frame_buffers[session_id].append(jpeg_bytes)
 
-            frame_b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
-            if not await safe_send_json(websocket, {"type": "image", "data": frame_b64}):
+            if not await safe_send_bytes(websocket, jpeg_bytes):
                 break
 
-            await asyncio.sleep(0.03)
+            elapsed = time.monotonic() - frame_start
+            last_loop_elapsed = elapsed
+            await asyncio.sleep(max(0.0, target_interval - elapsed))
 
     except WebSocketDisconnect:
-        print(f"[System] Client ngắt kết nối {cam_id}")
+        print(f"[System] Client ngat ket noi {cam_id}")
     finally:
+        stop_event.set()
+        command_task.cancel()
+        try:
+            await command_task
+        except (asyncio.CancelledError, RuntimeError, WebSocketDisconnect):
+            pass
         try:
             cap.release()
         except Exception as exc:

@@ -28,7 +28,7 @@ from src.core.event import EventBus, NullEventBus
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.trackers.bytetrack import ByteTrackWrapper
 from src.utils.config import load_pipeline_cfg
-from src.utils.logger import get_logger
+from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
 from src.utils.video import (
     create_video_writer,
@@ -36,6 +36,7 @@ from src.utils.video import (
     get_video_meta,
     open_video_source,
     safe_imshow,
+    toggle_video_recording,
 )
 from src.utils.vis import (
     FPSCounter,
@@ -122,8 +123,9 @@ def main():
         weights=cfg["pose"]["weights"],
         conf=cfg["pose"]["conf"],
         iou=cfg["pose"]["iou"],
-        tracker=cfg["tracker"]["tracker_yaml"],
+        tracker=cfg["tracking"]["tracker_yaml"],
         device=device,
+        tracking_cfg=cfg["tracking"],
     )
     tracker = ByteTrackWrapper(detector)
 
@@ -151,6 +153,7 @@ def main():
         multimodal_gallery = MultiModalGallery(
             face_dir=cfg["reid"].get("face_dir", "data/face"),
             body_dir=cfg["reid"].get("body_dir", "data/body"),
+            id_aliases=cfg["reid"].get("id_aliases"),
         )
         multimodal_gallery.build()
 
@@ -220,11 +223,16 @@ def main():
             "No video source. Pass --source or put a video at data/input/ or data/sample.mp4"
         )
 
+    logger.info(f"Opening video source: {source}")
     show = not args.no_show
     cap, _ = open_video_source(source)
     width, height, fps, total = get_video_meta(cap)
     panel_w = 220
 
+    out_path = Path(args.output) if args.output else resolve_output_path(
+        cfg["system"]["vis_dir"],
+        make_video_output_name("pipe", args.camera_id),
+    )
     writer = None
     if args.save_video:
         out_path = (
@@ -244,7 +252,7 @@ def main():
     last_query_crop = None
     last_matches: list = []
     frame_idx = -1
-    metrics_interval = cfg.get("ui", {}).get("metrics_interval_frames", 5)
+    metrics_interval = int(cfg.get("ui", {}).get("metrics_interval_frames", 5))
 
     # ── Main loop ────────────────────────────────────────────────────────────
     try:
@@ -388,6 +396,22 @@ def main():
 
             # ── UILogger metrics (mỗi N frame) ───────────────────────────────
             current_fps = fps_counter.tick()
+            first_status = next(iter(track_status.values()), {
+                "status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"],
+            })
+            log_frame_metrics(
+                logger,
+                "pipeline",
+                args.camera_id,
+                frame_idx,
+                current_fps,
+                interval=metrics_interval,
+                persons=len(detections),
+                tracked=len(curr_ids),
+                reid_available=gid_mgr is not None,
+                adl_status=first_status.get("status", "waiting"),
+                sequence_len=first_status.get("current_len", 0),
+            )
             if ui_logger and frame_idx % metrics_interval == 0:
                 ui_logger.metric(args.camera_id, {
                     "camera_id": args.camera_id,
@@ -440,6 +464,8 @@ def main():
                 writer.write(display)
             if show:
                 key = safe_imshow(WINDOW_NAME, display)
+                if key in (ord("g"), ord("G")):
+                    writer = toggle_video_recording(writer, out_path, fps, width + panel_w, height, logger)
                 if key in (27, ord("q"), ord("Q")):
                     break
 

@@ -134,12 +134,16 @@ class MultiModalGallery:
       → list of (person_id, fusion_score, weights_dict) sorted descending
     """
 
-    def __init__(self, face_dir: str = "data/face", body_dir: str = "data/body"):
+    def __init__(self, face_dir: str = "data/face", body_dir: str = "data/body", id_aliases=None):
         self.face_dir = _to_path(face_dir)
         self.body_dir = _to_path(body_dir)
+        self.id_aliases = {str(k): str(v) for k, v in (id_aliases or {}).items()}
         self.face_prototypes: dict[str, np.ndarray] = {}
         self.body_prototypes: dict[str, np.ndarray] = {}
         self._dim_warnings: set[str] = set()
+
+    def _canonical_id(self, person_id: str) -> str:
+        return self.id_aliases.get(str(person_id), str(person_id))
 
     # ── Build ─────────────────────────────────────────────────────────────────
 
@@ -150,8 +154,7 @@ class MultiModalGallery:
         all_ids = set(self.face_prototypes) | set(self.body_prototypes)
         return self
 
-    @staticmethod
-    def _load_prototypes(root, label: str) -> dict[str, np.ndarray]:
+    def _load_prototypes(self, root, label: str) -> dict[str, np.ndarray]:
         from src.utils.logger import get_logger
         log = get_logger(__name__)
         prototypes: dict[str, np.ndarray] = {}
@@ -161,7 +164,7 @@ class MultiModalGallery:
         for person_dir in root.iterdir():
             if not person_dir.is_dir():
                 continue
-            person_id = _resolve_person_id(person_dir)
+            person_id = self._canonical_id(_resolve_person_id(person_dir))
             feats = []
             for npy in sorted(person_dir.glob("*.npy")):
                 try:

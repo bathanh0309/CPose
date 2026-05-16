@@ -46,6 +46,18 @@ class PoseSequenceBuffer:
             }
         return self.states[key]
 
+    def latest_window(self, camera_id, local_track_id):
+        key = (str(camera_id), int(local_track_id))
+        state = self.states.get(key)
+        if not state or len(state["keypoints"]) < self.seq_len:
+            return None
+        return {
+            "frame_idx": list(state["frame_idx"]),
+            "keypoints": np.stack(list(state["keypoints"]), axis=0),
+            "scores": np.stack(list(state["scores"]), axis=0),
+            "img_shape": state["img_shape"],
+        }
+
     def update(self, camera_id, local_track_id, global_id, frame_idx, keypoints_xy, keypoint_scores, img_shape):
         key = (str(camera_id), int(local_track_id))
         self.last_seen[key] = int(frame_idx)

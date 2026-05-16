@@ -10,8 +10,9 @@ import numpy as np
 
 from src.action.pose_buffer import PoseSequenceBuffer
 from src.core.track_cache import TrackCache
-from src.detectors.yolo_openvino import YOLODetectOpenVINO, YOLOPoseOpenVINO
-from src.device_manager import resolve_detect_device
+from src.detectors.yolo_ultralytics import YOLODetectUltralytics, YOLOPoseUltralytics
+from src.detectors.pedestrian_yolo import PedestrianYoloTracker
+from src.detectors.yolo_pose import YoloPoseTracker
 from src.trackers.bytetrack import ByteTrackNumpy
 from src.utils.filters import bbox_area, keypoint_quality
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
@@ -59,33 +60,30 @@ class WebAIProcessor:
         self.last_total_ms = 0.0
 
         self._print_device_allocation_header()
-        detect_device = resolve_detect_device()
-        self.detector = YOLODetectOpenVINO(
-            xml_path="D:/Capstone_Project/models/yolo11n_openvino_model/yolo11n.xml",
-            device=detect_device,
+        tracking_cfg = self.cfg.get("tracking", {})
+        pose_cfg = self.cfg.get("pose", {})
+        detect_weights = tracking_cfg.get("weights") or tracking_cfg.get("fallback_weights") or "models/yolo11n.pt"
+        self.detector = YOLODetectUltralytics(
+            weights=detect_weights,
+            device="cpu",
             conf_threshold=0.4,
             iou_threshold=0.45,
             class_filter=[0],
         )
         print(f"[DETECT] device={self.detector.device}")
-        self.pose_model = YOLOPoseOpenVINO(
-            model_path="D:/Capstone_Project/models/yolo11n-pose_openvino_model",
-            device="CPU",
+        self.pose_model = YOLOPoseUltralytics(
+            weights=pose_cfg.get("weights", "models/yolo11n-pose.pt"),
+            device="cpu",
         )
-        print("[POSE] device=CPU")
+        print("[POSE] device=cpu")
         self.tracker = ByteTrackNumpy(high_thresh=0.4, low_thresh=0.1, match_thresh=0.3, max_age=30)
         print("[ByteTrack] device=CPU")
 
-        # Legacy lazy fields kept for older helper methods, but web inference uses
-        # the OpenVINO/numpy path above.
+        # Legacy lazy fields kept for older helper methods.
         self.tracking_tracker = None
         self.tracking_tracker_error = None
         self.pose_tracker = None
         self.pose_tracker_error = None
-        self.openvino_devices = []
-        self.openvino_device = self.detector.device
-        self.openvino_enabled = True
-
         self.person_gate = None
         self.person_gate_error = None
 
@@ -127,10 +125,10 @@ class WebAIProcessor:
         print("╔══════════════════════════════════════════╗")
         print("║         CPose Device Allocation          ║")
         print("╠══════════════════════════════════════════╣")
-        print("║  YOLO Detect   │ GPU.0 (Intel Iris Xe)   ║")
+        print("║  YOLO Detect   │ CPU                     ║")
         print("║  YOLO Pose     │ CPU                     ║")
         print("║  ByteTrack     │ CPU                     ║")
-        print("║  EfficientGCN  │ CPU                     ║")
+        print("║  ADL Rules     │ CPU                     ║")
         print("║  JPEG + WS     │ CPU                     ║")
         print("╚══════════════════════════════════════════╝")
 
@@ -143,80 +141,21 @@ class WebAIProcessor:
             self.last_gate_detections = []
             self.last_gate_status = "disabled"
 
-    def _select_openvino_device(self) -> str | None:
-        web_cfg = self.cfg.get("web", {})
-        env_enabled = os.environ.get("CPOSE_OPENVINO_ENABLED")
-        if env_enabled is not None and env_enabled.strip() in {"0", "false", "False"}:
-            return None
-        if env_enabled is None and not web_cfg.get("openvino_enabled", False):
-            return None
-        if not self.openvino_devices:
-            return None
-
-        preferred = str(os.environ.get("CPOSE_OPENVINO_DEVICE") or web_cfg.get("openvino_device", "GPU.0"))
-        fallback = str(web_cfg.get("openvino_fallback_device", "CPU"))
-        return select_openvino_device(self.openvino_devices, preferred=preferred, fallback=fallback)
-
-    def _is_openvino_gpu_error(self, exc: Exception) -> bool:
-        text = str(exc).lower()
-        return any(token in text for token in ("igc_check", "cisa", "gpu compiler", "openvino", "cldnn"))
-
-    def _fallback_openvino_cpu(self, exc: Exception) -> bool:
-        if not self.openvino_enabled or not is_openvino_gpu_device(self.openvino_device):
-            return False
-        if not self._is_openvino_gpu_error(exc):
-            return False
-
-        fallback = str(self.cfg.get("web", {}).get("openvino_fallback_device", "CPU")).upper()
-        if fallback != "CPU" or "CPU" not in self.openvino_devices:
-            return False
-
-        print(
-            f"[WebAIProcessor] cam={self.camera_id} Warning: OpenVINO GPU failed "
-            f"({type(exc).__name__}: {exc}); falling back to CPU"
-        )
-        self.openvino_device = "CPU"
-        self.openvino_enabled = True
-        self.pose_tracker = None
-        self.pose_tracker_error = None
-        self.tracking_tracker = None
-        self.tracking_tracker_error = None
-        self.person_gate = None
-        self.person_gate_error = None
-        return True
-
     def _select_tracking_runtime(self) -> tuple[str, str | None, str]:
         """Select lightweight detection-only model for tracking (NOT pose model)."""
         tracking_cfg = self.cfg.get("tracking", {})
-        web_cfg = self.cfg.get("web", {})
         pt_weights = str(tracking_cfg.get("weights", "models/tracking.pt"))
-
-        if self.openvino_enabled:
-            ov_weights = web_cfg.get("openvino_tracking_weights")
-            if ov_weights and Path(str(ov_weights)).exists():
-                device = self.openvino_device
-                yolo_device = to_ultralytics_openvino_device(device)
-                return str(ov_weights), yolo_device, "OpenVINO"
 
         fallback = str(tracking_cfg.get("fallback_weights", pt_weights))
         if Path(fallback).exists():
-            return fallback, self.cfg.get("system", {}).get("device"), "PyTorch-fallback"
-        return pt_weights, self.cfg.get("system", {}).get("device"), "PyTorch"
+            return fallback, "cpu", "CPU"
+        return pt_weights, "cpu", "CPU"
 
     def _select_pose_runtime(self) -> tuple[str, str | None, str]:
         """Select pose model — only used when Pose module is active."""
         pose_cfg = self.cfg.get("pose", {})
-        web_cfg = self.cfg.get("web", {})
         pt_weights = str(pose_cfg["weights"])
-
-        if self.openvino_enabled:
-            ov_weights = web_cfg.get("openvino_pose_weights")
-            if ov_weights and Path(str(ov_weights)).exists():
-                device = self.openvino_device
-                yolo_device = to_ultralytics_openvino_device(device)
-                return str(ov_weights), yolo_device, "OpenVINO"
-
-        return pt_weights, self.cfg.get("system", {}).get("device"), "PyTorch"
+        return pt_weights, "cpu", "CPU"
 
     def _ensure_tracking_tracker(self):
         """Ensure the lightweight tracking-only detector is loaded."""
@@ -276,18 +215,10 @@ class WebAIProcessor:
 
     def _select_person_gate_runtime(self) -> tuple[str, str | None]:
         gate_cfg = self.cfg.get("person_gate", {})
-        web_cfg = self.cfg.get("web", {})
-
-        weights = gate_cfg.get("weights") or web_cfg.get("openvino_detect_weights")
+        weights = gate_cfg.get("weights")
         fallback = gate_cfg.get("fallback_weights") or self.cfg.get("object", {}).get("weights")
         weights = weights or fallback
-
-        if self.openvino_enabled and weights and "openvino_model" in str(weights):
-            device = to_ultralytics_openvino_device(self.openvino_device)
-        else:
-            device = self.cfg.get("system", {}).get("device")
-
-        return str(weights), device
+        return str(weights), "cpu"
 
     def _ensure_person_gate(self) -> bool:
         if self.person_gate is not None:
@@ -352,11 +283,11 @@ class WebAIProcessor:
         try:
             adl_cfg = self.cfg.get("adl", {})
             self.adl = ADLEfficientGCN(
-                xml_path="D:/Capstone_Project/models/efficientgcn_b0_ntu_xsub120_openvino_model/efficientgcn_b0_ntu_xsub120.xml",
+                xml_path=adl_cfg.get("weights", ""),
                 conf_threshold=float(adl_cfg.get("conf_threshold", 0.3)),
                 min_frames=int(adl_cfg.get("min_frames", 30)),
                 device="CPU",
-                cache_dir=adl_cfg.get("openvino_cache_dir") or self.cfg.get("web", {}).get("openvino_cache_dir", "openvino_cache"),
+                cache_dir=None,
                 precision_hint=adl_cfg.get("precision_hint", "f16"),
             )
             self.adl.infer_every_n_frames = int(adl_cfg.get("infer_every_n_frames", 15))
@@ -379,6 +310,53 @@ class WebAIProcessor:
         if include_pose:
             return det
         return {**det, "keypoints": None, "keypoint_scores": None}
+
+    def _track_adl_status(self, track_id: int) -> dict[str, Any] | None:
+        status = self.adl_status_by_track.get(int(track_id))
+        if not status:
+            return None
+        label = status.get("label")
+        if not label or label == "unknown":
+            return None
+        return status
+
+    def _track_overlay_label(self, det: dict[str, Any]) -> str:
+        tid = int(det.get("track_id", -1))
+        cached = bool(det.get("cached", False))
+        conf = float(det.get("score", 0.0))
+        parts = [f"track={tid}"]
+        if cached:
+            parts.append("cached")
+        parts.append(f"conf={conf:.2f}")
+        adl_status = self._track_adl_status(tid)
+        if adl_status:
+            parts.append(f"ADL={adl_status.get('label')}")
+        return " ".join(parts)
+
+    def _build_track_metrics(self, display_dets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        tracks: list[dict[str, Any]] = []
+        for det in display_dets:
+            tid = int(det.get("track_id", -1))
+            if tid < 0:
+                continue
+            adl_status = self._track_adl_status(tid)
+            item = {
+                "track_id": tid,
+                "conf": round(float(det.get("score", 0.0)), 3),
+                "bbox": [round(float(v), 2) for v in det.get("bbox", [0, 0, 0, 0])],
+                "cached": bool(det.get("cached", False)),
+                "age": int(det.get("age", 0)),
+                "adl_label": adl_status.get("label") if adl_status else None,
+                "adl_score": round(float(adl_status.get("score", 0.0)), 3) if adl_status else 0.0,
+            }
+            tracks.append(item)
+        return tracks
+
+    def _track_conf_log_text(self, tracks: list[dict[str, Any]], mean_conf: float) -> str:
+        if not tracks:
+            return ""
+        per_track = " ".join(f"t{t['track_id']}={float(t['conf']):.2f}" for t in tracks)
+        return f"{per_track} mean={mean_conf:.2f}"
 
     def _draw_waiting_panel(self, frame: np.ndarray, fps: float, metrics: dict[str, Any]) -> None:
         web_cfg = self.cfg.get("web", {})
@@ -471,6 +449,10 @@ class WebAIProcessor:
             "persons": 0,
             "valid_skeletons": 0,
             "avg_kpt": 0.0,
+            "tracks": [],
+            "best_track_conf": 0.0,
+            "mean_track_conf": 0.0,
+            "num_tracks": 0,
         }
 
         if not self.modules:
@@ -499,7 +481,7 @@ class WebAIProcessor:
                 else:
                     detections = tracked
             except Exception as exc:
-                logs.append(("warning", f"OpenVINO/numpy pipeline failed: {type(exc).__name__}: {exc}"))
+                logs.append(("warning", f"CPU AI pipeline failed: {type(exc).__name__}: {exc}"))
                 return frame, logs, metrics
 
             self.last_gate_detections = [{"bbox": b[:4], "score": b[4], "class_id": 0} for b in bboxes]
@@ -555,18 +537,33 @@ class WebAIProcessor:
                 "gate_best_conf": round(float(best_conf), 3),
             })
 
+        if "adl" in self.modules:
+            t_adl = time.perf_counter()
+            self._process_adl(frame, display_dets, logs, (h, w))
+            adl_ms = (time.perf_counter() - t_adl) * 1000.0
+
+        tracks_metric = self._build_track_metrics(display_dets)
+        track_confs = [float(t["conf"]) for t in tracks_metric]
+        mean_track_conf = float(sum(track_confs) / len(track_confs)) if track_confs else 0.0
+        best_track_conf = max(track_confs, default=0.0)
+        metrics.update({
+            "tracks": tracks_metric,
+            "best_track_conf": round(best_track_conf, 3),
+            "mean_track_conf": round(mean_track_conf, 3),
+            "num_tracks": len(tracks_metric),
+        })
+
         if "track" in self.modules:
             for det in display_dets:
-                tid = int(det.get("track_id", -1))
-                cached = det.get("cached", False)
-                score = float(det.get("score", 0.0))
-                label = f"track={tid} {'cached ' if cached else ''}conf={score:.2f}"
                 draw_detection(
                     frame,
                     self._track_label_det(det, include_pose=("pose" in self.modules or "adl" in self.modules)),
-                    label=label,
+                    label=self._track_overlay_label(det),
                 )
             logs.append(("ai", f"TRACK: frame={self.frame_idx} det={len(detections)} tracked={tracked} filtered={filtered} fps={fps}"))
+            conf_text = self._track_conf_log_text(tracks_metric, mean_track_conf)
+            if conf_text:
+                logs.append(("metric", f"TRACK_CONF: {conf_text}"))
 
         if "pose" in self.modules:
             for det in display_dets:
@@ -576,11 +573,6 @@ class WebAIProcessor:
 
         if "reid" in self.modules:
             self._process_reid(frame, display_dets, logs)
-
-        if "adl" in self.modules:
-            t_adl = time.perf_counter()
-            self._process_adl(frame, display_dets, logs, (h, w))
-            adl_ms = (time.perf_counter() - t_adl) * 1000.0
 
         # --- Gallery events ---
         self._generate_gallery_events(frame, display_dets)
@@ -656,7 +648,7 @@ class WebAIProcessor:
             draw_detection(
                 frame,
                 self._track_label_det(det, include_pose=("pose" in self.modules or "adl" in self.modules)),
-                label=f"track={tid} gid={gid} score={float(score):.2f}",
+                label=f"{self._track_overlay_label(det)} gid={gid} reid={float(score):.2f}",
             )
             logs.append(("ai" if status not in {"gallery_empty"} else "warning", f"ReID: track={tid} gid={gid} score={float(score):.2f}"))
 
@@ -688,7 +680,7 @@ class WebAIProcessor:
             status = {
                 "status": "inferred" if action_label != "unknown" else "collecting",
                 "label": action_label,
-                "score": 0.0,
+                "score": float(self.adl.score(tid)) if self.adl and hasattr(self.adl, "score") else 0.0,
                 "current_len": len(self.adl.buffers.get(tid, [])) if self.adl else 0,
                 "seq_len": int(self.cfg.get("adl", {}).get("sequence_len", 300)),
             }
@@ -729,11 +721,15 @@ class WebAIProcessor:
         ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
         if not ok:
             return None
+        tid = int(det.get("track_id", -1))
+        adl_status = self._track_adl_status(tid)
         return {
             "type": "gallery",
-            "track_id": int(det.get("track_id", -1)),
+            "track_id": tid,
             "global_id": det.get("global_id", "unknown"),
             "conf": round(float(det.get("score", 0.0)), 2),
+            "adl_label": adl_status.get("label") if adl_status else None,
+            "adl_score": round(float(adl_status.get("score", 0.0)), 3) if adl_status else 0.0,
             "crop_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
             "ts": time.strftime("%H:%M:%S"),
         }

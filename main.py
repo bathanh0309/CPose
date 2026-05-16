@@ -56,6 +56,7 @@ if STATIC_DIR.exists():
 # ---------------------------------------------------------------------------
 
 VALID_MODULES: Set[str] = {"pose", "track", "reid", "adl"}
+VALID_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 
 def parse_modules(raw: Optional[str]) -> Set[str]:
     if not raw:
@@ -352,7 +353,10 @@ class ThreadedCamera:
                 self._error = None
                 self._read_failures = 0
 
-                time.sleep(self.sleep_sec)
+                if is_local_file_source(self.source):
+                    time.sleep(max(self.sleep_sec, 1.0 / max(float(self.fps), 1.0)))
+                else:
+                    time.sleep(self.sleep_sec)
 
             except Exception as exc:
                 self._error = f"ThreadedCamera error: {exc}. Reconnecting..."
@@ -425,6 +429,12 @@ def get_cameras():
 async def upload_video(file: Annotated[UploadFile, File(...)]):
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = Path(file.filename or "uploaded-video").name
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in VALID_VIDEO_EXTENSIONS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Unsupported video extension: {suffix or '(none)'}"},
+        )
     target = UPLOAD_DIR / safe_name
     stem, suffix, counter = target.stem, target.suffix, 1
     while target.exists():
@@ -433,7 +443,7 @@ async def upload_video(file: Annotated[UploadFile, File(...)]):
     with target.open("wb") as f:
         while chunk := await file.read(1024 * 1024):
             f.write(chunk)
-    return {"name": target.name, "source": str(target)}
+    return {"name": target.name, "source": str(target), "type": "uploaded_video"}
 
 # ---------------------------------------------------------------------------
 # Save-on-demand endpoint

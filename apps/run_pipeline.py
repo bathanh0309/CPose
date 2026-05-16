@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.action.pose_buffer import PoseSequenceBuffer
+from src.action.rule_adl import classify_rule_adl
 from src.core.event import EventBus, NullEventBus
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.trackers.bytetrack import ByteTrackWrapper
@@ -49,6 +50,9 @@ from src.utils.vis import (
 logger = get_logger(__name__)
 
 WINDOW_NAME = "CPose - Full Pipeline"
+
+# Optional label map for ADL (list indexed by label id)
+ADL_LABEL_MAP = None
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -90,7 +94,19 @@ def adl_label(status: dict | None) -> str:
     if s == "exported":
         return "ADL: exported"
     if s == "inferred":
-        return f"ADL: {status.get('label')} score={float(status.get('score', 0.0)):.2f}"
+        # If a label map is available, show human-readable name
+        label_val = status.get('label')
+        label_display = label_val
+        try:
+            if ADL_LABEL_MAP is not None and label_val is not None:
+                lid = int(label_val)
+                if 0 <= lid < len(ADL_LABEL_MAP):
+                    label_display = ADL_LABEL_MAP[lid]
+        except Exception:
+            pass
+        method = status.get("method")
+        suffix = f" ({method})" if method else ""
+        return f"ADL: {label_display} score={float(status.get('score', 0.0)):.2f}{suffix}"
     if s == "disabled":
         return "ADL: disabled"
     if s == "failed":
@@ -98,6 +114,11 @@ def adl_label(status: dict | None) -> str:
     if s == "skipped":
         return f"ADL: skipped {status.get('reason', '')}".strip()
     return f"ADL: {s}"
+
+
+def rule_status(pose_buffer, camera_id, track_id):
+    window = pose_buffer.latest_window(camera_id, track_id)
+    return classify_rule_adl(window)
 
 
 def build_overlay_label(tid, gid, score, weights, adl_status) -> str:
@@ -117,6 +138,24 @@ def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
     device = cfg["system"]["device"]
+
+    # Load optional ADL label map (text file with one class name per line)
+    global ADL_LABEL_MAP
+    ADL_LABEL_MAP = None
+    label_map_path = cfg.get("adl", {}).get("label_map_path")
+    if label_map_path:
+        p = Path(label_map_path)
+        if not p.is_absolute():
+            p = ROOT / label_map_path
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as fh:
+                    ADL_LABEL_MAP = [l.strip() for l in fh if l.strip()]
+                logger.info(f"Loaded ADL label map: {p} ({len(ADL_LABEL_MAP)} labels)")
+            except Exception as exc:
+                logger.warning(f"Failed to load ADL label map {p}: {exc}")
+        else:
+            logger.info(f"ADL label map not found: {p}")
 
     # ── Detector + Tracker ───────────────────────────────────────────────────
     detector = YoloPoseTracker(
@@ -183,7 +222,7 @@ def main():
         output_dir=cfg["adl"]["export_dir"],
         default_label=cfg["adl"].get("default_label", 0),
         max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
-        export_enabled=args.save_clips,
+        export_enabled=args.save_clips or cfg["adl"].get("auto_infer", False),
     )
 
     posec3d_runner = None
@@ -348,27 +387,42 @@ def main():
                             "pkl_path": adl_status.get("pkl_path"),
                         })
                         if posec3d_runner is None:
-                            adl_status = {**adl_status, "status": "disabled"}
+                            adl_status = rule_status(pose_buffer, args.camera_id, tid)
                         else:
                             try:
                                 result = posec3d_runner.run_test(adl_status["pkl_path"])
                                 if isinstance(result, dict) and result.get("label") is not None:
+                                    # Map numeric label -> human name if label map available
+                                    raw_label = result.get("label")
+                                    label_name = raw_label
+                                    label_id = None
+                                    try:
+                                        if ADL_LABEL_MAP is not None and raw_label is not None:
+                                            lid = int(raw_label)
+                                            if 0 <= lid < len(ADL_LABEL_MAP):
+                                                label_name = ADL_LABEL_MAP[lid]
+                                                label_id = lid
+                                    except Exception:
+                                        label_name = str(raw_label)
+
                                     adl_status = {
                                         "status": "inferred",
-                                        "label": result["label"],
+                                        "label": label_name,
+                                        "label_id": label_id,
                                         "score": result.get("score", 0.0),
                                         "pkl_path": adl_status.get("pkl_path"),
                                     }
                                     event_bus.emit("adl_result", {
                                         "camera_id": args.camera_id, "frame_idx": frame_idx,
                                         "local_track_id": tid, "global_id": gid,
-                                        "label": result["label"],
+                                        "label": label_name,
+                                        "label_id": label_id,
                                         "score": float(result.get("score", 0.0)),
                                     })
                                     if ui_logger:
                                         ui_logger.log(
                                             args.camera_id, "INFO", "adl",
-                                            f"ADL: gid={gid} action={result['label']} "
+                                            f"ADL: gid={gid} action={label_name} "
                                             f"score={result.get('score', 0.0):.2f}",
                                         )
                                 elif isinstance(result, dict):
@@ -377,6 +431,18 @@ def main():
                                 logger.warning(f"PoseC3D failed: {exc}", exc_info=True)
                                 adl_status = {"status": "failed", "label": None,
                                               "score": 0.0, "pkl_path": adl_status.get("pkl_path")}
+                            if adl_status.get("status") != "inferred":
+                                adl_status = rule_status(pose_buffer, args.camera_id, tid)
+                    elif adl_status and adl_status.get("status") == "disabled" and adl_status.get("reason") == "clip_export_disabled":
+                        adl_status = rule_status(pose_buffer, args.camera_id, tid)
+                    elif adl_status and adl_status.get("status") == "collecting":
+                        previous = track_status.get(tid)
+                        if previous and previous.get("status") == "inferred":
+                            adl_status = {
+                                **previous,
+                                "current_len": adl_status.get("current_len"),
+                                "seq_len": adl_status.get("seq_len"),
+                            }
 
                 track_status[tid] = adl_status
 

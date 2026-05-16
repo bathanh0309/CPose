@@ -1,8 +1,4 @@
-"""YOLO Detect + Pose wrappers using Ultralytics (PyTorch .pt models).
-
-Drop-in replacement for the former yolo_openvino.py module.
-Uses ultralytics YOLO for both detection and pose estimation.
-"""
+"""YOLO Detect + Pose wrappers using Ultralytics (PyTorch .pt models)."""
 
 from __future__ import annotations
 

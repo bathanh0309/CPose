@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.action.pose_buffer import PoseSequenceBuffer
+from src.action.rule_adl import classify_rule_adl
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger, log_frame_metrics
@@ -17,6 +18,9 @@ from src.utils.video import create_video_writer, find_default_video_source, get_
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
 
 logger = get_logger(__name__)
+
+# Optional ADL label map (list indexed by label id)
+ADL_LABEL_MAP = None
 
 
 def parse_args():
@@ -43,7 +47,18 @@ def adl_text(status):
     if state == "exported":
         return "ADL: clip exported"
     if state == "inferred":
-        return f"ADL: {status.get('label')} score={float(status.get('score', 0.0)):.2f}"
+        label_val = status.get('label')
+        label_display = label_val
+        try:
+            if ADL_LABEL_MAP is not None and label_val is not None:
+                lid = int(label_val)
+                if 0 <= lid < len(ADL_LABEL_MAP):
+                    label_display = ADL_LABEL_MAP[lid]
+        except Exception:
+            pass
+        method = status.get("method")
+        suffix = f" ({method})" if method else ""
+        return f"ADL: {label_display} score={float(status.get('score', 0.0)):.2f}{suffix}"
     if state == "skipped":
         return f"ADL: skipped {status.get('reason', '')}".strip()
     if state == "failed":
@@ -53,9 +68,31 @@ def adl_text(status):
     return f"ADL: {state}"
 
 
+def rule_status(pose_buffer, camera_id, track_id):
+    window = pose_buffer.latest_window(camera_id, track_id)
+    return classify_rule_adl(window)
+
+
 def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
+    # Load optional ADL label map
+    global ADL_LABEL_MAP
+    ADL_LABEL_MAP = None
+    label_map_path = cfg.get("adl", {}).get("label_map_path")
+    if label_map_path:
+        p = Path(label_map_path)
+        if not p.is_absolute():
+            p = ROOT / label_map_path
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as fh:
+                    ADL_LABEL_MAP = [l.strip() for l in fh if l.strip()]
+                logger.info(f"Loaded ADL label map: {p} ({len(ADL_LABEL_MAP)} labels)")
+            except Exception as exc:
+                logger.warning(f"Failed to load ADL label map {p}: {exc}")
+        else:
+            logger.info(f"ADL label map not found: {p}")
     detector = YoloPoseTracker(
         cfg["pose"]["weights"],
         cfg["pose"]["conf"],
@@ -70,7 +107,7 @@ def main():
         output_dir=cfg["adl"]["export_dir"],
         default_label=cfg["adl"].get("default_label", 0),
         max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
-        export_enabled=args.save_clips,
+        export_enabled=args.save_clips or cfg["adl"].get("auto_infer", False),
     )
 
     posec3d_runner = None
@@ -134,17 +171,40 @@ def main():
                 status = pose_buffer.update(args.camera_id, tid, f"track_{tid}", frame_idx, det.get("keypoints"), det.get("keypoint_scores"), (h, w))
                 if status and status.get("status") == "exported":
                     if posec3d_runner is None:
-                        status = {**status, "status": "disabled"}
+                        status = rule_status(pose_buffer, args.camera_id, tid)
                     else:
                         try:
                             result = posec3d_runner.run_test(status["pkl_path"])
                             if isinstance(result, dict) and result.get("label") is not None:
-                                status = {"status": "inferred", "label": result["label"], "score": result.get("score", 0.0)}
+                                raw_label = result.get("label")
+                                label_name = raw_label
+                                label_id = None
+                                try:
+                                    if ADL_LABEL_MAP is not None and raw_label is not None:
+                                        lid = int(raw_label)
+                                        if 0 <= lid < len(ADL_LABEL_MAP):
+                                            label_name = ADL_LABEL_MAP[lid]
+                                            label_id = lid
+                                except Exception:
+                                    label_name = str(raw_label)
+                                status = {"status": "inferred", "label": label_name, "label_id": label_id, "score": result.get("score", 0.0)}
                             elif isinstance(result, dict):
                                 status = result
                         except Exception as exc:
                             logger.warning(f"PoseC3D failed for {status['pkl_path']}: {exc}", exc_info=True)
                             status = {"status": "failed", "label": None, "score": 0.0}
+                        if status.get("status") != "inferred":
+                            status = rule_status(pose_buffer, args.camera_id, tid)
+                elif status and status.get("status") == "disabled" and status.get("reason") == "clip_export_disabled":
+                    status = rule_status(pose_buffer, args.camera_id, tid)
+                elif status and status.get("status") == "collecting":
+                    previous = track_status.get(tid)
+                    if previous and previous.get("status") == "inferred":
+                        status = {
+                            **previous,
+                            "current_len": status.get("current_len"),
+                            "seq_len": status.get("seq_len"),
+                        }
                 track_status[tid] = status
                 draw_detection(frame, det, label=f"track={tid} {adl_text(status)}")
 

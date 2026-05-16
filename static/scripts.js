@@ -111,6 +111,17 @@ async function handleCamUpload(event, camId) {
   const file = event.target.files[0];
   if (!file) return;
 
+  if (sockets[camId]) {
+    try {
+      sockets[camId].send(JSON.stringify({ type: "stop" }));
+    } catch (e) {
+      // ignore close races
+    }
+    sockets[camId].close();
+    sockets[camId] = null;
+    addLog(camId, "Closed previous stream before loading uploaded video.", "system");
+  }
+
   const formData = new FormData();
   formData.append("file", file);
 
@@ -125,10 +136,10 @@ async function handleCamUpload(event, camId) {
 
     const uploadedPath = data.source || data.file_path || data.filename || data.name;
     document.getElementById(`cam${camId}-source`).value = uploadedPath;
-    setSelectToUploadedFile(camId, file.name);
+    setSelectToUploadedFile(camId, data.name || file.name, uploadedPath);
     cameraSlots[camId] = null;
 
-    addLog(camId, "Upload completed. Ready to process the local file.", "system");
+    addLog(camId, "Upload completed. Select modules, then press ON.", "system");
   } catch (e) {
     addLog(camId, `Upload error: ${e.message || e}`, "error");
   } finally {
@@ -136,7 +147,7 @@ async function handleCamUpload(event, camId) {
   }
 }
 
-function setSelectToUploadedFile(camId, fileName) {
+function setSelectToUploadedFile(camId, fileName, sourcePath) {
   const selectEl = document.getElementById(`cam${camId}-display`);
   if (!selectEl) return;
 
@@ -146,8 +157,10 @@ function setSelectToUploadedFile(camId, fileName) {
     option.dataset.upload = "true";
     selectEl.appendChild(option);
   }
-  option.value = "__uploaded_file__";
+  option.value = sourcePath || "__uploaded_file__";
   option.textContent = fileName;
+  option.title = sourcePath || fileName;
+  option.dataset.source = sourcePath || "";
   selectEl.value = option.value;
 }
 
@@ -254,6 +267,13 @@ function handleJsonMessage(camId, data) {
   } else if (data.type === "metric") {
     const m = data.metrics || {};
     const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
+    if (Array.isArray(m.tracks) && m.tracks.length) {
+      const trackText = m.tracks
+        .map((track) => `t${track.track_id}=${Number(track.conf || 0).toFixed(2)}`)
+        .join(", ");
+      const mean = Number(m.mean_track_conf || 0).toFixed(2);
+      addLog(camId, `TRACK_CONF: ${trackText} | mean=${mean}`, "metric");
+    }
     addLog(
       camId,
       `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
@@ -454,12 +474,14 @@ function addGalleryItem(camId, data) {
   const track = data.track_id ?? "-";
   const gid = data.global_id || "unknown";
   const conf = Number(data.conf || 0).toFixed(2);
+  const adlLabel = data.adl_label || "";
   const ts = data.ts || new Date().toLocaleTimeString();
 
   meta.innerHTML = `
     <div>track=${escapeHtml(String(track))}</div>
     <div>gid=${escapeHtml(String(gid))}</div>
     <div>conf=${escapeHtml(conf)}</div>
+    ${adlLabel ? `<div>ADL=${escapeHtml(String(adlLabel))}</div>` : ""}
     <div>${escapeHtml(ts)}</div>
   `;
 

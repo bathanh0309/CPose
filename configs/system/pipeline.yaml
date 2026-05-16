@@ -1,5 +1,5 @@
 system:
-  device: "auto"
+  device: "cpu"
   event_log: "data/output/events/pipeline.jsonl"
   vis_dir: "data/output/vis"
   default_source: "data/input/cam2_2026-01-29_16-26-40.mp4"
@@ -29,8 +29,8 @@ pose:
 tracking:
   enabled: true
   model_type: "pedestrian"
-  weights: "models/tracking_openvino_model"
-  fallback_weights: "models/yolo11n_openvino_model"
+  weights: "models/tracking.pt"
+  fallback_weights: "models/yolo11n.pt"
   conf: 0.35
   iou: 0.5
   imgsz: 416
@@ -52,7 +52,7 @@ object:
 
 person_gate:
   enabled: true
-  weights: "models/yolo11n_openvino_model"
+  weights: "models/yolo11n.pt"
   fallback_weights: "models/yolo11n.pt"
   conf: 0.25
   iou: 0.5
@@ -86,13 +86,6 @@ web:
   no_person_log_interval_frames: 30
   lost_person_grace_frames: 30
   draw_waiting_panel: true
-  openvino_enabled: true
-  openvino_device: "GPU.0"
-  openvino_fallback_device: "CPU"
-  openvino_cache_dir: "openvino_cache"
-  openvino_pose_weights: "models/yolo11n-pose_openvino_model"
-  openvino_tracking_weights: "models/tracking_openvino_model"
-  openvino_detect_weights: "models/yolo11n_openvino_model"
   gallery_enabled: true
   gallery_interval_frames: 20
   max_gallery_items: 20
@@ -180,9 +173,7 @@ reid:
 adl:
   enabled: true
   model_type: "efficientgcn"
-  efficientgcn_xml: "models/efficientgcn_b0_ntu_xsub120_openvino_model/efficientgcn_b0_ntu_xsub120.xml"
   device: "CPU"
-  openvino_cache_dir: "openvino_cache"
   precision_hint: "f16"
   conf_threshold: 0.3
   min_frames: 30
@@ -196,7 +187,9 @@ adl:
   stride: 12
   max_idle_frames: 150
   default_label: 0
+    label_map_path: ".github/pose-c3d/tools/data/label_map/nturgbd_120.txt"
   auto_infer: true
+  mmaction_root: ".github/pose-c3d"
   posec3d_config:
     model:
       type: "Recognizer3D"

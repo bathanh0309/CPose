@@ -13,38 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.utils.openvino import available_openvino_devices, select_openvino_device, to_ultralytics_openvino_device
-
-
-def detect_openvino() -> tuple[list[str], str | None]:
-    try:
-        devices = available_openvino_devices()
-        # Prefer Intel Iris Xe iGPU through OpenVINO when it is available.
-        # Web runtime still falls back to CPU on known OpenVINO GPU failures.
-        device = select_openvino_device(devices, preferred="GPU.0", fallback="CPU")
-        return devices, device
-    except Exception as exc:
-        print(f"[OpenVINO] unavailable: {type(exc).__name__}: {exc}")
-        return [], None
-
 
 def build_server_env() -> dict[str, str]:
     env = os.environ.copy()
-    devices, device = detect_openvino()
-    forced_device = env.get("CPOSE_OPENVINO_DEVICE")
-    ultralytics_device = forced_device or to_ultralytics_openvino_device(device)
-
     env["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;15000000|max_delay;500000"
-    env["CPOSE_OPENVINO_ENABLED"] = "1" if device else "0"
-    if ultralytics_device:
-        env["CPOSE_OPENVINO_DEVICE"] = ultralytics_device
+    env["CUDA_VISIBLE_DEVICES"] = ""
 
     print(f"[Python] {sys.executable}")
-    print(f"[OpenVINO] devices: {devices or 'none'}")
-    if device:
-        print(f"[OpenVINO] CPose will prefer device: {ultralytics_device}")
-    else:
-        print("[OpenVINO] CPose will fall back to the configured PyTorch/CPU runtime.")
+    print("[Runtime] CPU only")
     print(f"[OpenCV] OPENCV_FFMPEG_CAPTURE_OPTIONS={env['OPENCV_FFMPEG_CAPTURE_OPTIONS']}")
     return env
 

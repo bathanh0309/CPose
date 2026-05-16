@@ -17,12 +17,11 @@ PATH_FIELDS = {
     ("adl", "weights"),
     ("adl", "export_dir"),
     ("adl", "work_dir"),
+    ("adl", "label_map_path"),
+    ("adl", "mmaction_root"),
     ("object", "weights"),
     ("person_gate", "weights"),
     ("person_gate", "fallback_weights"),
-    ("web", "openvino_pose_weights"),
-    ("web", "openvino_tracking_weights"),
-    ("web", "openvino_detect_weights"),
 }
 
 ULTRALYTICS_BUILTIN_TRACKERS = {"bytetrack.yaml", "botsort.yaml"}

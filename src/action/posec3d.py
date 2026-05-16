@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 from src.utils.logger import get_logger
@@ -64,12 +65,16 @@ class PoseC3DRunner:
 
     def run_test(self, ann_file):
         cfg_path = self.build_temp_test_config(ann_file)
+        result_path = self.work_dir / f"posec3d_result_{uuid.uuid4().hex}.pkl"
         try:
             cmd = [
                 sys.executable,
                 str(self.mmaction_root / "tools" / "test.py"),
                 cfg_path,
-                str(self.checkpoint)
+                "-C",
+                str(self.checkpoint),
+                "--out",
+                str(result_path),
             ]
             logger.info("Running PoseC3D subprocess")
             # capture output so we can try to parse results
@@ -84,13 +89,20 @@ class PoseC3DRunner:
                 import re
                 import pickle
 
+                result_candidates = [result_path]
+
                 # look for a saved results path in the combined output
-                m = re.search(r"saved to (.+)", combined, re.IGNORECASE)
-                if m:
+                for pattern in (r"saved to (.+)", r"writing results to (.+)"):
+                    m = re.search(pattern, combined, re.IGNORECASE)
+                    if not m:
+                        continue
                     path_str = m.group(1).strip()
                     p = Path(path_str)
                     if not p.is_absolute():
                         p = (self.work_dir / p).resolve()
+                    result_candidates.append(p)
+
+                for p in result_candidates:
                     if p.exists():
                         try:
                             with open(p, "rb") as f:
@@ -102,6 +114,10 @@ class PoseC3DRunner:
                                 if isinstance(first, int):
                                     label = int(first)
                                     return {"status": "inferred", "label": str(label), "score": 1.0, "label_id": label}
+                                if hasattr(first, "argmax"):
+                                    label = int(first.argmax())
+                                    score = float(first[label]) if hasattr(first, "__getitem__") else 1.0
+                                    return {"status": "inferred", "label": str(label), "score": score, "label_id": label}
                                 # If first is (label, score)
                                 if isinstance(first, (list, tuple)) and len(first) >= 1:
                                     try:
@@ -127,7 +143,9 @@ class PoseC3DRunner:
 
             logger.info("PoseC3D subprocess finished; no ADL result parsed.")
             if cp.returncode != 0:
+                logger.warning(f"PoseC3D subprocess failed: {combined[-1000:]}")
                 return {"status": "failed", "label": None, "score": 0.0, "message": combined[-1000:]}
             return {"status": "completed_no_result", "label": None, "score": 0.0, "message": "No parseable ADL output"}
         finally:
             Path(cfg_path).unlink(missing_ok=True)
+            result_path.unlink(missing_ok=True)

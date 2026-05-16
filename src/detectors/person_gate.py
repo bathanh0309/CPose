@@ -50,7 +50,7 @@ class PersonGateDetector:
         self.imgsz = int(imgsz)
         self.classes = classes if classes is not None else [0]
         self.min_box_area = float(min_box_area)
-        self.device = self._normalize_device(self.weights, device)
+        self.device = "cpu" if device is None else str(device)
 
         print(
             f"[PersonGate] loading model={self.weights} "
@@ -59,34 +59,9 @@ class PersonGateDetector:
 
         self.model = YOLO(str(self.weights))
 
-    @staticmethod
-    def _is_openvino_model(weights: Path) -> bool:
-        text = str(weights).lower()
-        return "openvino_model" in text or weights.suffix.lower() == ".xml"
-
-    @classmethod
-    def _normalize_device(cls, weights: Path, device: str | None) -> str | None:
-        if not device:
-            return None
-
-        device_text = str(device).strip()
-        if cls._is_openvino_model(weights):
-            if device_text.lower().startswith("intel:"):
-                return device_text
-            return f"intel:{device_text.lower()}"
-
-        if device_text.lower().startswith("intel:"):
-            return "cpu"
-        return device_text
-
-    @staticmethod
-    def _is_openvino_gpu_error(exc: Exception) -> bool:
-        text = str(exc).lower()
-        return any(token in text for token in ("igc_check", "cisa", "gpu compiler", "cldnn", "openvino"))
-
     def _reload(self, weights: Path, device: str | None, reason: str) -> None:
         self.weights = weights
-        self.device = self._normalize_device(weights, device)
+        self.device = "cpu" if device is None else str(device)
         print(f"[PersonGate] {reason}; loading model={self.weights} device={self.device}")
         self.model = YOLO(str(self.weights))
 
@@ -105,14 +80,7 @@ class PersonGateDetector:
         try:
             results = self._predict(frame)
         except Exception as exc:
-            if (
-                self._is_openvino_gpu_error(exc)
-                and self._is_openvino_model(self.weights)
-                and str(self.device).lower().startswith("intel:gpu")
-            ):
-                self._reload(self.weights, "intel:cpu", f"OpenVINO GPU failed ({type(exc).__name__}: {exc})")
-                results = self._predict(frame)
-            elif self.fallback_weights and self.fallback_weights.exists() and self.weights != self.fallback_weights:
+            if self.fallback_weights and self.fallback_weights.exists() and self.weights != self.fallback_weights:
                 self._reload(self.fallback_weights, "cpu", f"primary gate failed ({type(exc).__name__}: {exc})")
                 results = self._predict(frame)
             else:

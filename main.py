@@ -15,6 +15,7 @@ import socket
 import time
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from pathlib import Path
 from typing import Annotated, Dict, Optional, Set
@@ -30,6 +31,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from src.core.ui_logger import ui_logger
+from src.core.model_registry import ModelRegistry
+from src.core.sequential_camera import SequentialFileCamera
 from src.core.web_runtime import WebAIProcessor
 from src.utils.config import load_pipeline_cfg
 
@@ -263,6 +266,31 @@ def open_video_capture(video_source: str) -> cv2.VideoCapture:
     except Exception:
         pass
     return cap
+
+
+def encode_jpeg(frame: np.ndarray, quality: int) -> Optional[bytes]:
+    ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if not ok:
+        return None
+    return buffer.tobytes()
+
+
+@app.on_event("startup")
+async def startup_event():
+    cfg = get_pipeline_cfg()
+    web_cfg = cfg.get("web", {})
+    app.state.model_registry = ModelRegistry(cfg)
+    app.state.model_registry.preload({"detect", "pose", "reid"})
+    app.state.ai_executor = ThreadPoolExecutor(max_workers=int(web_cfg.get("ai_workers", 2)))
+    app.state.encode_executor = ThreadPoolExecutor(max_workers=int(web_cfg.get("encode_workers", 1)))
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    for name in ("ai_executor", "encode_executor"):
+        executor = getattr(app.state, name, None)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 # ---------------------------------------------------------------------------
@@ -604,7 +632,7 @@ async def stream_video(
 ):
     await websocket.accept()
     connected = True
-    camera: Optional[ThreadedCamera] = None
+    camera: Optional[ThreadedCamera | SequentialFileCamera] = None
 
     active_modules = parse_modules(modules)
     cfg = get_pipeline_cfg()
@@ -616,12 +644,17 @@ async def stream_video(
     jpeg_quality_min   = int(web_cfg.get("jpeg_quality_min", 45))
     jpeg_quality       = jpeg_quality_base
     stream_width       = int(web_cfg.get("stream_width", 0) or 0)
-    infer_every_n      = max(1, int(web_cfg.get("infer_every_n_frames", 2) or 2))
     loop_local_video   = bool(web_cfg.get("loop_local_video", True))
+    local_file_sequential = bool(web_cfg.get("local_file_sequential", True))
     lag_threshold      = float(web_cfg.get("frame_skip_lag_multiplier", 2.0)) * target_interval
     recording_buf_max  = int(web_cfg.get("recording_buffer_max", BUFFER_MAX))
 
-    processor = WebAIProcessor(camera_id=cam_id, modules=active_modules, cfg=cfg)
+    processor = WebAIProcessor(
+        camera_id=cam_id,
+        modules=active_modules,
+        cfg=cfg,
+        model_registry=getattr(app.state, "model_registry", None),
+    )
 
     if not session_id:
         session_id = str(uuid.uuid4())
@@ -663,12 +696,21 @@ async def stream_video(
     }):
         return
 
-    camera = ThreadedCamera(
-        source=video_source,
-        loop_local_video=loop_local_video,
-        name=f"cam-{cam_id}",
-        sleep_sec=0.005,
-    ).start()
+    local_file = is_local_file_source(video_source)
+    if local_file and local_file_sequential:
+        camera = SequentialFileCamera(video_source, loop=loop_local_video).start()
+        await safe_send_json(websocket, {
+            "type": "log",
+            "msg": "Local video mode: sequential frames enabled for stable tracking.",
+            "level": "system",
+        })
+    else:
+        camera = ThreadedCamera(
+            source=video_source,
+            loop_local_video=loop_local_video,
+            name=f"cam-{cam_id}",
+            sleep_sec=0.005,
+        ).start()
 
     if not camera.wait_opened(timeout=5.0):
         err_msg = camera.error() or "OpenCV/FFmpeg cannot open source."
@@ -698,7 +740,9 @@ async def stream_video(
         while connected and not stop_event.is_set():
             frame_start = time.monotonic()
 
+            t_read = time.perf_counter()
             frame = camera.read(copy=True)
+            read_ms = (time.perf_counter() - t_read) * 1000.0
             if frame is None:
                 now = time.monotonic()
                 if now - last_stale_log_ts >= 3.0:
@@ -733,15 +777,9 @@ async def stream_video(
             if not connected:
                 break
 
-            # Frame skip: interval + lag
-            next_frame_idx = processor.frame_idx + 1
-            skip_ai = (
-                bool(processor.modules)
-                and (
-                    next_frame_idx % infer_every_n != 0
-                    or last_loop_elapsed > lag_threshold
-                )
-            )
+            # RTSP can drop AI work to preserve low latency. Local files stay
+            # sequential so ByteTrack sees every frame.
+            skip_ai = bool(processor.modules) and (not local_file) and last_loop_elapsed > lag_threshold
 
             if skip_ai:
                 processor.frame_idx += 1
@@ -753,11 +791,30 @@ async def stream_video(
                     "modules": sorted(processor.modules),
                     "detections": 0,
                     "tracked": 0,
+                    "live_tracked": 0,
+                    "display_tracked": 0,
                     "skip_ai": True,
+                    "timing": {
+                        "read_ms": round(read_ms, 2),
+                        "process_ms": 0.0,
+                        "encode_ms": 0.0,
+                        "send_ms": 0.0,
+                        "total_loop_ms": round(last_loop_elapsed * 1000.0, 2),
+                    },
                 }
                 ai_logs = []
             else:
-                frame, ai_logs, metrics = processor.process(frame)
+                loop = asyncio.get_running_loop()
+                t_process = time.perf_counter()
+                frame, ai_logs, metrics = await loop.run_in_executor(
+                    app.state.ai_executor,
+                    processor.process,
+                    frame,
+                )
+                process_ms = (time.perf_counter() - t_process) * 1000.0
+                metrics.setdefault("timing", {})
+                metrics["timing"]["read_ms"] = round(read_ms, 2)
+                metrics["timing"]["process_ms"] = round(process_ms, 2)
 
             for level, log_msg in ai_logs:
                 print(format_terminal_ai_log(cam_id, log_msg))
@@ -766,10 +823,6 @@ async def stream_video(
                     break
             if not connected:
                 break
-
-            if metrics_interval > 0 and processor.frame_idx % metrics_interval == 0:
-                if not await safe_send_json(websocket, {"type": "metric", "metrics": metrics}):
-                    break
 
             # Gallery events
             for event in getattr(processor, "gallery_events", []):
@@ -793,22 +846,40 @@ async def stream_video(
                     scale = stream_width / float(w)
                     frame = cv2.resize(frame, (stream_width, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
 
-            ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-            if not ok:
+            loop = asyncio.get_running_loop()
+            t_encode = time.perf_counter()
+            jpeg_bytes = await loop.run_in_executor(
+                app.state.encode_executor,
+                encode_jpeg,
+                frame,
+                jpeg_quality,
+            )
+            encode_ms = (time.perf_counter() - t_encode) * 1000.0
+            metrics.setdefault("timing", {})
+            metrics["timing"]["encode_ms"] = round(encode_ms, 2)
+            if jpeg_bytes is None:
                 elapsed = time.monotonic() - frame_start
                 last_loop_elapsed = elapsed
                 await asyncio.sleep(max(0.0, target_interval - elapsed))
                 continue
 
-            jpeg_bytes = buffer.tobytes()
             if _recording_flags.get(session_id, False):
                 _frame_buffers[session_id].append(jpeg_bytes)
 
+            t_send = time.perf_counter()
             if not await safe_send_bytes(websocket, jpeg_bytes):
                 break
+            send_ms = (time.perf_counter() - t_send) * 1000.0
 
             elapsed = time.monotonic() - frame_start
             last_loop_elapsed = elapsed
+            metrics.setdefault("timing", {})
+            metrics["timing"]["send_ms"] = round(send_ms, 2)
+            metrics["timing"]["total_loop_ms"] = round(elapsed * 1000.0, 2)
+            metrics["timing"]["total_ms"] = metrics["timing"]["total_loop_ms"]
+            if metrics_interval > 0 and processor.frame_idx % metrics_interval == 0:
+                if not await safe_send_json(websocket, {"type": "metric", "metrics": metrics}):
+                    break
             await asyncio.sleep(max(0.0, target_interval - elapsed))
 
     except WebSocketDisconnect:
@@ -818,6 +889,8 @@ async def stream_video(
         command_task.cancel()
         try:
             await command_task
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
         try:

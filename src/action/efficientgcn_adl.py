@@ -95,6 +95,17 @@ class EfficientGCNADL:
                     checkpoint = torch.load(str(path), map_location="cpu")
                 if hasattr(checkpoint, "eval") and callable(checkpoint):
                     self.model = checkpoint
+                elif isinstance(checkpoint, dict) and callable(checkpoint.get("model", None)):
+                    self.model = checkpoint["model"]
+                elif isinstance(checkpoint, dict) and (
+                    "state_dict" in checkpoint or "model_state_dict" in checkpoint
+                ):
+                    self.model = None
+                    self.load_error = (
+                        "EfficientGCN architecture missing; ADL disabled. "
+                        "Please provide model class or TorchScript export."
+                    )
+                    return
                 else:
                     self.model = None
                     self.load_error = "checkpoint is not a TorchScript/callable model"

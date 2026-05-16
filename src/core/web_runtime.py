@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 import yaml
 
+from src.core.model_registry import ModelRegistry
 from src.core.track_cache import TrackCache
 from src.detectors.person_gate import PersonGateDetector          # ← was missing
 from src.detectors.yolo_ultralytics import YOLODetectUltralytics, YOLOPoseUltralytics
@@ -66,10 +67,27 @@ def draw_action_label(frame: np.ndarray, bbox: list[float], action_label: str) -
     cv2.putText(frame, text, (x1 + 3, max(th + 2, y1 - 7)), font, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
 
 
+def bbox_iou(a: list[float], b: list[float]) -> float:
+    ax1, ay1, ax2, ay2 = map(float, a[:4])
+    bx1, by1, bx2, by2 = map(float, b[:4])
+    xx1, yy1 = max(ax1, bx1), max(ay1, by1)
+    xx2, yy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    return inter / (area_a + area_b - inter + 1e-9)
+
+
 # ── main class ────────────────────────────────────────────────────────────────
 
 class WebAIProcessor:
-    def __init__(self, camera_id: str, modules: set[str], cfg: dict[str, Any]):
+    def __init__(
+        self,
+        camera_id: str,
+        modules: set[str],
+        cfg: dict[str, Any],
+        model_registry: ModelRegistry | None = None,
+    ):
         self.camera_id = str(camera_id)
         self.cfg = cfg
         self.modules: set[str] = set(modules)
@@ -89,34 +107,24 @@ class WebAIProcessor:
         self._adl_ms_window: deque[float] = deque(maxlen=100)
         self._total_ms_window: deque[float] = deque(maxlen=100)
         self.keypoint_smoother = KeypointSmoother(freq=float(cfg.get("web", {}).get("target_fps", 25)))
+        self.registry = model_registry or ModelRegistry(cfg)
+        if model_registry is None:
+            self.registry.preload({"detect"})
 
         self._print_device_allocation_header()
 
         tracking_cfg = cfg.get("tracking", {})
-        pose_cfg = cfg.get("pose", {})
-        detect_weights = (
-            tracking_cfg.get("weights")
-            or tracking_cfg.get("fallback_weights")
-            or "models/yolo11n.pt"
+        self.detector = self.registry.get_detector()
+        need_pose_at_start = bool({"pose", "adl"} & self.modules)
+        self.pose_model: YOLOPoseUltralytics | None = (
+            self.registry.get_pose_model() if need_pose_at_start else getattr(self.registry, "pose_model", None)
         )
-
-        self.detector = YOLODetectUltralytics(
-            weights=detect_weights,
-            device="cpu",
-            conf_threshold=float(tracking_cfg.get("conf", 0.40)),
-            iou_threshold=float(tracking_cfg.get("iou", 0.50)),
-            class_filter=[0],
-            imgsz=int(tracking_cfg.get("imgsz", 640)),
-        )
-        print(f"[DETECT] device={self.detector.device} imgsz={self.detector.imgsz}")
-
-        self.pose_model: YOLOPoseUltralytics | None = None   # lazy-loaded
-        self._pose_model_error: str | None = None
+        self._pose_model_error: str | None = self.registry.error_for("pose")
 
         self.tracker = ByteTrackNumpy(
             high_thresh=float(tracking_cfg.get("track_thresh", tracking_cfg.get("conf", 0.45))),
-            low_thresh=0.1,
-            match_thresh=float(tracking_cfg.get("match_thresh", 0.80)),
+            low_thresh=float(tracking_cfg.get("low_thresh", 0.10)),
+            match_thresh=float(tracking_cfg.get("match_thresh", 0.30)),
             max_age=int(tracking_cfg.get("track_buffer", tracking_cfg.get("track_ttl_frames", 25))),
         )
         print("[ByteTrack] device=CPU")
@@ -126,17 +134,22 @@ class WebAIProcessor:
         self.person_gate_error: str | None = None
 
         # ── ReID ───────────────────────────────────────────────────────────
-        self.reid = None
-        self.reid_error: str | None = None
+        self.reid = self.registry.get_reid_model() if "reid" in self.modules else getattr(self.registry, "reid_model", None)
+        self.reid_error: str | None = self.registry.error_for("reid")
         self.reid_gid_cache: dict[int, dict[str, Any]] = {}
         self.reid_last_frame: dict[int, int] = {}
+        self._reid_warned = False
+        self._reid_gid_log_frame: dict[int, int] = {}
         self.temp_gid_counter = 0
         self.temp_gid_by_track: dict[int, str] = {}
 
         # ── ADL ────────────────────────────────────────────────────────────
-        self.adl = None
-        self.adl_enabled = False
-        self.adl_error: str | None = None
+        self.adl = self.registry.get_adl_model() if "adl" in self.modules else None
+        self.adl_enabled = self.adl is not None and not getattr(self.adl, "load_error", None)
+        self.adl_error: str | None = self.registry.error_for("adl")
+        if "adl" not in self.modules and self.adl is None:
+            self.adl_error = "ADL model was not preloaded for this session"
+        self._adl_warned = False
         self.adl_status_by_track: dict[int, dict[str, Any]] = {}
         self.adl_last_seen_frame: dict[int, int] = {}
         self.lost_track_threshold = int(cfg.get("adl", {}).get("lost_track_threshold", 30))
@@ -163,9 +176,17 @@ class WebAIProcessor:
         # Gallery events
         self.gallery_events: list[dict[str, Any]] = []
         self.last_gallery_frame_by_track: dict[int, int] = {}
+        self.last_gallery_bbox_by_track: dict[int, list[float]] = {}
 
-        # Lazy-load ADL on first use if module is enabled
-        self._ensure_adl()
+        if not self.adl_enabled and str(cfg.get("adl", {}).get("fallback", "rules")).lower() == "rules":
+            try:
+                from src.action.rule_adl import classify_rule_adl
+
+                self._rule_adl_fn = classify_rule_adl
+                self._rule_adl_buffers: dict[int, list[dict[str, np.ndarray]]] = {}
+                self._adl_min_frames = int(cfg.get("adl", {}).get("min_frames", 30))
+            except Exception as exc:
+                self.adl_error = f"{self.adl_error or ''}; rule fallback unavailable: {exc}".strip("; ")
 
     # ── Init helpers ──────────────────────────────────────────────────────────
 
@@ -209,57 +230,21 @@ class WebAIProcessor:
     def _ensure_pose_model(self) -> bool:
         if self.pose_model is not None:
             return True
-        if self._pose_model_error:
-            return False
-        try:
-            pose_cfg = self.cfg.get("pose", {})
-            self.pose_model = YOLOPoseUltralytics(
-                weights=pose_cfg.get("weights", "models/yolo11n-pose.pt"),
-                device="cpu",
-                conf_threshold=float(pose_cfg.get("conf", 0.55)),
-                iou_threshold=float(pose_cfg.get("iou", 0.5)),
-                imgsz=int(pose_cfg.get("imgsz", 640)),
-            )
-            print("[POSE] model loaded, device=cpu")
-            return True
-        except Exception as exc:
-            self._pose_model_error = f"{type(exc).__name__}: {exc}"
-            print(f"[POSE] load failed: {self._pose_model_error}")
-            return False
+        self._pose_model_error = self.registry.error_for("pose")
+        return False
 
     def _ensure_reid(self) -> bool:
         if self.reid is not None:
             return True
-        if self.reid_error:
-            return False
-        try:
-            from src.reid.osnet_reid import OSNetReID
-
-            reid_cfg = self.cfg.get("reid", {})
-            self.reid = OSNetReID(
-                weight_path=reid_cfg.get("weights", "models/osnet_x0_25_msmt17.pth"),
-                threshold=float(reid_cfg.get("threshold", 0.65)),
-                reid_interval=int(reid_cfg.get("reid_interval", 15)),
-                max_gallery=int(reid_cfg.get("max_gallery", 10)),
-                min_crop_area=float(reid_cfg.get("min_crop_area", 2500)),
-            )
-            loaded = self.reid.load_gallery_embeddings(
-                reid_cfg.get("embedding_dirs"),
-                reid_cfg.get("id_aliases"),
-            )
-            print(f"[ReID] OSNet-x0.25 loaded on CPU; gallery={loaded}")
-            return True
-        except Exception as exc:
-            self.reid_error = f"{type(exc).__name__}: {exc}"
-            print(f"[ReID] unavailable: {self.reid_error}")
-            return False
+        self.reid_error = self.registry.error_for("reid")
+        return False
 
     def _ensure_adl(self) -> bool:
         """Lazy-load ADL engine.  Moved import inside to avoid top-level crash."""
         if self.adl is not None:
             return True
         if self.adl_error:
-            return False
+            return hasattr(self, "_rule_adl_fn")
         adl_cfg = self.cfg.get("adl", {})
         mode_adl = self.mode_cfg.get("adl", {}).get(self.mode)
         backend = str(mode_adl or adl_cfg.get("model_type", "efficientgcn")).lower()
@@ -395,6 +380,8 @@ class WebAIProcessor:
             "modules": sorted(self.modules),
             "detections": 0,
             "tracked": 0,
+            "live_tracked": 0,
+            "display_tracked": 0,
             "filtered": 0,
             "persons": 0,
             "valid_skeletons": 0,
@@ -423,9 +410,12 @@ class WebAIProcessor:
         # ── Detection + Tracking ──────────────────────────────────────────
         try:
             t0 = time.perf_counter()
-            bboxes = self.detector.detect(frame)
+            if self.detector is None:
+                raise RuntimeError(self.registry.error_for("detect") or "detector unavailable")
+            with self.registry.locks["detect"]:
+                bboxes = self.detector.detect(frame)
             detect_ms = (time.perf_counter() - t0) * 1000.0
-            fresh_tracked: list[dict[str, Any]] = self.tracker.update(bboxes, frame)
+            fresh_tracked: list[dict[str, Any]] = self.tracker.update(bboxes, frame, frame_stride=1, timestamp=time.time())
         except Exception as exc:
             logs.append(("warning", f"Detection failed: {type(exc).__name__}: {exc}"))
             return frame, logs, base_metrics
@@ -444,11 +434,14 @@ class WebAIProcessor:
             self.last_gate_status = "waiting"
 
         # ── Pose estimation (only when needed) ───────────────────────────
-        if need_pose and fresh_tracked:
+        pose_interval = max(1, int(self.cfg.get("pose", {}).get("infer_every_n_frames", 4)))
+        run_pose = need_pose and fresh_tracked and (self.frame_idx % pose_interval == 0)
+        if run_pose:
             if self._ensure_pose_model():
                 try:
                     t1 = time.perf_counter()
-                    fresh_detections: list[dict[str, Any]] = self.pose_model.estimate(frame, fresh_tracked)
+                    with self.registry.locks["pose"]:
+                        fresh_detections: list[dict[str, Any]] = self.pose_model.estimate(frame, fresh_tracked)
                     fresh_detections = self._smooth_pose_keypoints(fresh_detections)
                     pose_ms = (time.perf_counter() - t1) * 1000.0
                 except Exception as exc:
@@ -463,12 +456,24 @@ class WebAIProcessor:
         # ── TrackCache: update with FRESH detections only ─────────────────
         self.track_cache.update(fresh_detections, self.frame_idx)
         # display_dets may include stale cached entries – used for drawing only
-        display_dets = self.track_cache.active(self.frame_idx)
+        cached_dets = [d for d in self.track_cache.active(self.frame_idx) if bool(d.get("cached", False))]
         # fresh_only: tracks actually seen THIS frame – used for AI inference
         fresh_ids = {int(d.get("track_id", -1)) for d in fresh_detections if d.get("track_id", -1) >= 0}
-        fresh_only = [d for d in display_dets if int(d.get("track_id", -1)) in fresh_ids]
+        fresh_only = [
+            {**d, "cached": False, "age": 0}
+            for d in fresh_detections
+            if int(d.get("track_id", -1)) in fresh_ids
+        ]
+        fresh_boxes = [d.get("bbox", [0, 0, 0, 0]) for d in fresh_only]
+        cached_dets = [
+            d for d in cached_dets
+            if not fresh_boxes
+            or max(bbox_iou(d.get("bbox", [0, 0, 0, 0]), fb) for fb in fresh_boxes) <= 0.5
+        ]
+        display_dets = fresh_only + cached_dets
 
-        tracked = sum(1 for d in display_dets if int(d.get("track_id", -1)) >= 0)
+        live_tracked = sum(1 for d in fresh_only if int(d.get("track_id", -1)) >= 0)
+        display_tracked = sum(1 for d in display_dets if int(d.get("track_id", -1)) >= 0)
         skeleton_scores = [
             keypoint_quality(d.get("keypoint_scores"), 0.0)[1]
             for d in fresh_only
@@ -479,7 +484,9 @@ class WebAIProcessor:
 
         base_metrics.update({
             "detections": len(bboxes),
-            "tracked": tracked,
+            "tracked": display_tracked,
+            "live_tracked": live_tracked,
+            "display_tracked": display_tracked,
             "persons": len(display_dets),
             "valid_skeletons": valid_skeletons,
             "avg_kpt": round(avg_kpt, 2),
@@ -489,7 +496,8 @@ class WebAIProcessor:
 
         # ── Module-specific pipelines (fresh detections only!) ────────────
 
-        if "adl" in self.modules:
+        adl_interval = max(1, int(self.cfg.get("adl", {}).get("infer_every_n_frames", 15)))
+        if "adl" in self.modules and self.frame_idx % adl_interval == 0:
             t_adl = time.perf_counter()
             self._process_adl(frame, fresh_only, logs, (h, w))  # ← fresh_only, NOT display_dets
             adl_ms = (time.perf_counter() - t_adl) * 1000.0
@@ -511,13 +519,10 @@ class WebAIProcessor:
         mean_conf = float(sum(track_confs) / len(track_confs)) if track_confs else 0.0
         best_conf = max(track_confs, default=0.0)
 
-        if "track" in self.modules:
-            logs.append(("ai", f"TRACK: frame={self.frame_idx} det={len(bboxes)} tracked={tracked} fps={fps}"))
-            if tracks_metric:
-                per_t = " ".join(f"t{t['track_id']}={t['conf']:.2f}" for t in tracks_metric)
-                logs.append(("metric", f"TRACK_CONF: {per_t} mean={mean_conf:.2f}"))
+        if "track" in self.modules and self.frame_idx % 15 == 0:
+            logs.append(("ai", f"TRACK: frame={self.frame_idx} det={len(bboxes)} live={live_tracked} display={display_tracked} fps={fps}"))
 
-        if "pose" in self.modules:
+        if "pose" in self.modules and self.frame_idx % 15 == 0:
             logs.append(("ai", f"POSE: frame={self.frame_idx} persons={len(fresh_only)} valid={valid_skeletons} avg_kpt={avg_kpt:.2f}"))
 
         # ── Gallery events (fresh_only, with interval dedup) ─────────────
@@ -529,7 +534,7 @@ class WebAIProcessor:
             "Frame": self.frame_idx,
             "Modules": ",".join(sorted(self.modules)) or "none",
             "Detections": len(bboxes),
-            "Tracked": tracked,
+            "Tracked": display_tracked,
             "FPS": f"{fps:.1f}",
         })
 
@@ -543,7 +548,7 @@ class WebAIProcessor:
         self._reid_ms_window.append(reid_ms)
         self._adl_ms_window.append(adl_ms)
         self._total_ms_window.append(total_ms)
-        id_max = max([int(d.get("track_id", 0)) for d in display_dets], default=0)
+        id_max = max(int(getattr(self.tracker, "next_id", 1)) - 1, 0)
 
         base_metrics.update({
             "tracks": tracks_metric,
@@ -555,6 +560,13 @@ class WebAIProcessor:
             "reid_ms": round(reid_ms, 2),
             "adl_ms": round(adl_ms, 2),
             "total_ms": round(total_ms, 2),
+            "timing": {
+                "detect_ms": round(detect_ms, 2),
+                "pose_ms": round(pose_ms, 2),
+                "reid_ms": round(reid_ms, 2),
+                "adl_ms": round(adl_ms, 2),
+                "total_ms": round(total_ms, 2),
+            },
             "id_max": id_max,
         })
 
@@ -564,7 +576,7 @@ class WebAIProcessor:
             avg_adl = self._avg(self._adl_ms_window)
             avg_total = self._avg(self._total_ms_window)
             print(
-                f"[METRIC] fps={fps:.1f} | det={len(bboxes)} | tracked={tracked} | "
+                f"[METRIC] fps={fps:.1f} | det={len(bboxes)} | live={live_tracked} display={display_tracked} | "
                 f"id_max={id_max} | pose={avg_pose:.1f}ms | reid={avg_reid:.1f}ms | "
                 f"adl={avg_adl:.1f}ms | total={avg_total:.1f}ms"
             )
@@ -578,18 +590,21 @@ class WebAIProcessor:
         reid_cfg = self.cfg.get("reid", {})
         min_track_age = int(reid_cfg.get("min_track_age", 10))
         min_crop_area = float(reid_cfg.get("min_crop_area", 2500))
-        reid_warn_logged = False
+        min_track_conf = float(reid_cfg.get("min_track_conf", 0.60))
+        min_hits = int(reid_cfg.get("min_hits", min_track_age))
+        log_interval = int(reid_cfg.get("reid_log_interval", 45))
 
         if not self._ensure_reid():
-            if not reid_warn_logged:
+            if not self._reid_warned:
                 logs.append(("warning", f"ReID unavailable: {self.reid_error}"))
-                reid_warn_logged = True
+                self._reid_warned = True
             return
 
-        gallery_empty = not bool(getattr(self.reid, "gallery", {}))
-        if gallery_empty and not reid_warn_logged:
-            logs.append(("warning", "ReID gallery empty; assigned temporary gid"))
-            reid_warn_logged = True
+        gallery_disabled_reason = getattr(self.reid, "gallery_disabled_reason", None)
+        gallery_empty = not bool(getattr(self.reid, "gallery", {})) or bool(gallery_disabled_reason)
+        if gallery_empty and not self._reid_warned:
+            logs.append(("warning", gallery_disabled_reason or "ReID gallery empty; matching disabled."))
+            self._reid_warned = True
 
         for det in detections:
             if det.get("cached", False):
@@ -599,9 +614,10 @@ class WebAIProcessor:
             if tid < 0:
                 continue
 
-            # Min track age guard
-            track_hit_count = self.reid_last_frame.get(tid, -min_track_age)
-            if self.frame_idx - track_hit_count < min_track_age:
+            track_age = int(det.get("track_age", det.get("age", 0)))
+            hit_count = int(det.get("hit_count", 0))
+            conf = float(det.get("score", 0.0))
+            if track_age < min_track_age or hit_count < min_hits or conf < min_track_conf:
                 continue
 
             # Min crop area guard
@@ -622,6 +638,8 @@ class WebAIProcessor:
 
             if gallery_empty:
                 gid, score = self._next_temp_gid(tid), 0.0
+                self.reid_gid_cache[tid] = {"gid": "unknown", "score": score}
+                self.reid_last_frame[f"reid_{tid}"] = self.frame_idx
             else:
                 try:
                     prev_gid = self.reid_gid_cache.get(tid, {}).get("gid")
@@ -630,8 +648,10 @@ class WebAIProcessor:
                     self.reid_last_frame[f"reid_{tid}"] = self.frame_idx
 
                     # Log only on gid change or every 30 frames
-                    if prev_gid != gid or self.frame_idx % 30 == 0:
+                    last_log = self._reid_gid_log_frame.get(tid, -999999)
+                    if prev_gid != gid or self.frame_idx - last_log >= log_interval:
                         logs.append(("ai", f"ReID: track={tid} gid={gid} score={score:.2f}"))
+                        self._reid_gid_log_frame[tid] = self.frame_idx
 
                 except Exception as exc:
                     gid = self._next_temp_gid(tid)
@@ -651,8 +671,13 @@ class WebAIProcessor:
     ) -> None:
         """Run ADL on fresh detections only. Supports EfficientGCN or rule-based fallback."""
         if not self._ensure_adl():
-            logs.append(("warning", f"ADL unavailable: {self.adl_error}"))
+            if not self._adl_warned:
+                logs.append(("warning", f"ADL unavailable: {self.adl_error or 'backend not loaded'}"))
+                self._adl_warned = True
             return
+        if self.adl is None and hasattr(self, "_rule_adl_fn") and not self._adl_warned:
+            logs.append(("warning", f"ADL unavailable: {self.adl_error or 'EfficientGCN disabled'}; using rule fallback."))
+            self._adl_warned = True
 
         active_ids: set[int] = set()
         first_status = None
@@ -791,6 +816,7 @@ class WebAIProcessor:
             "track_conf": round(float(det.get("score", 0.0)), 2),
             "adl_label": adl_status.get("label") if adl_status else None,
             "adl_score": round(float(adl_status.get("score", 0.0)), 3) if adl_status else 0.0,
+            "frame_idx": self.frame_idx,
             "crop_jpeg": base64.b64encode(buf.tobytes()).decode("ascii"),
             "ts": time.strftime("%H:%M:%S"),
         }
@@ -817,6 +843,13 @@ class WebAIProcessor:
             last = self.last_gallery_frame_by_track.get(tid, -(gallery_interval + 1))
             if self.frame_idx - last < gallery_interval:
                 continue
+            last_bbox = self.last_gallery_bbox_by_track.get(tid)
+            if (
+                last_bbox is not None
+                and self.frame_idx - last < gallery_interval * 3
+                and bbox_iou(det.get("bbox", [0, 0, 0, 0]), last_bbox) > 0.9
+            ):
+                continue
 
             if len(self.gallery_events) >= max_items:
                 break
@@ -825,3 +858,4 @@ class WebAIProcessor:
             if event:
                 self.gallery_events.append(event)
                 self.last_gallery_frame_by_track[tid] = self.frame_idx
+                self.last_gallery_bbox_by_track[tid] = list(det.get("bbox", [0, 0, 0, 0]))

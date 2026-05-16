@@ -48,9 +48,10 @@ class ByteTrackNumpy:
         self.tracks: dict[int, dict] = {}
         self.frame_idx = 0
 
-    def update(self, bboxes: list[list[float]], frame=None) -> list[dict]:
-        self.frame_idx += 1
+    def update(self, bboxes: list[list[float]], frame=None, frame_stride: int = 1, timestamp: float | None = None) -> list[dict]:
+        self.frame_idx += max(1, int(frame_stride))
         dets = np.asarray(bboxes, dtype=np.float32).reshape(-1, 5) if bboxes else np.empty((0, 5), dtype=np.float32)
+        dets = self._suppress_duplicate_dets(dets)
         outputs: list[dict] = []
         if len(dets) == 0:
             self._prune()
@@ -82,6 +83,8 @@ class ByteTrackNumpy:
         for di, det in enumerate(dets):
             if di in assigned_det or float(det[4]) < self.high_thresh:
                 continue
+            if self._overlaps_unassigned_track(det, assigned_track):
+                continue
             tid = self.next_id
             self.next_id += 1
             self._update_track(tid, det)
@@ -91,10 +94,13 @@ class ByteTrackNumpy:
         return outputs
 
     def _update_track(self, track_id: int, det: np.ndarray) -> None:
+        prev = self.tracks.get(int(track_id), {})
         self.tracks[int(track_id)] = {
             "bbox": det[:4].astype(np.float32),
             "score": float(det[4]),
             "last_seen": self.frame_idx,
+            "start_frame": int(prev.get("start_frame", self.frame_idx)),
+            "hit_count": int(prev.get("hit_count", 0)) + 1,
         }
 
     def _as_detection(self, track_id: int) -> dict:
@@ -104,9 +110,34 @@ class ByteTrackNumpy:
             "bbox": tr["bbox"].astype(float).tolist(),
             "score": float(tr["score"]),
             "class_id": 0,
+            "track_age": max(0, self.frame_idx - int(tr.get("start_frame", self.frame_idx))),
+            "hit_count": int(tr.get("hit_count", 1)),
         }
 
     def _prune(self) -> None:
         for tid, tr in list(self.tracks.items()):
             if self.frame_idx - int(tr["last_seen"]) > self.max_age:
                 self.tracks.pop(tid, None)
+
+    @staticmethod
+    def _suppress_duplicate_dets(dets: np.ndarray, iou_thresh: float = 0.60) -> np.ndarray:
+        if len(dets) <= 1:
+            return dets
+        order = np.argsort(-dets[:, 4])
+        kept: list[int] = []
+        for idx in order:
+            box = dets[int(idx), :4][None, :]
+            if kept:
+                ious = _iou_matrix(box, dets[kept, :4])[0]
+                if float(np.max(ious)) > iou_thresh:
+                    continue
+            kept.append(int(idx))
+        return dets[kept]
+
+    def _overlaps_unassigned_track(self, det: np.ndarray, assigned_track: set[int]) -> bool:
+        candidates = [tid for tid in self.tracks if tid not in assigned_track]
+        if not candidates:
+            return False
+        boxes = np.asarray([self.tracks[tid]["bbox"] for tid in candidates], dtype=np.float32)
+        best = float(np.max(_iou_matrix(det[:4][None, :], boxes)))
+        return best >= 0.60

@@ -215,7 +215,7 @@ function startStream(camId) {
   const wsUrl = `${WS_BASE}/ws/stream/${camId}?source=${encodeURIComponent(videoSource)}&modules=${encodeURIComponent(mods)}`;
 
   const displayName = getSelectedDisplayName(camId);
-  addLog(camId, `Starting stream: ${displayName}`, "system");
+  addLog(camId, `Starting stream: source=${displayName}, modules=${mods || "none"}`, "system");
   if (mods) {
     addLog(camId, `Modules: [${mods}]`, "system");
   } else {
@@ -264,25 +264,18 @@ function handleJsonMessage(camId, data) {
       sessionIds[camId] = data.session_id;
       toggleSaveButtons(camId, true);
       // Confirm active modules from backend echo
-      if (Array.isArray(data.active_modules) && data.active_modules.length) {
-        addLog(camId, `Session ready. Active modules: [${data.active_modules.join(",")}]`, "system");
+      if (Array.isArray(data.active_modules)) {
+        syncModuleButtons(camId, data.active_modules);
+        addLog(camId, `Session ready. Active modules: [${data.active_modules.join(",") || "none"}]`, "system");
       }
       break;
 
     case "metric": {
       const m = data.metrics || {};
-      // TRACK_CONF line
-      if (Array.isArray(m.tracks) && m.tracks.length) {
-        const trackText = m.tracks
-          .map((t) => `t${t.track_id}=${Number(t.conf || 0).toFixed(2)}`)
-          .join(" ");
-        const mean = Number(m.mean_track_conf || 0).toFixed(2);
-        addLog(camId, `TRACK_CONF: ${trackText} | mean=${mean}`, "metric");
-      }
       const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
       addLog(
         camId,
-        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
+        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} live=${m.live_tracked ?? m.tracked ?? "-"} display=${m.display_tracked ?? m.tracked ?? "-"} id_max=${m.id_max ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
         "metric"
       );
       break;
@@ -375,6 +368,14 @@ function renderBinaryFrame(camId, imgEl, arrayBuffer) {
     frameStats[camId].lastTick = now;
     updateFpsBadge(camId, fps);
   }
+}
+
+function syncModuleButtons(camId, modules) {
+  const next = new Set((modules || []).map((m) => String(m).toLowerCase()));
+  activeModules[camId] = next;
+  document.querySelectorAll(`.btn-module[data-cam="${camId}"]`).forEach((btn) => {
+    btn.classList.toggle("active", next.has(btn.dataset.module));
+  });
 }
 
 function updateFpsBadge(camId, fps) {
@@ -483,10 +484,8 @@ function addGalleryItem(camId, data) {
   const box = document.getElementById(`gallery-box-${camId}`);
   if (!box || !data.crop_jpeg) return;
 
-  // Dedup: bucket by (camId, track_id, floor(timestamp/gallery_interval_sec))
-  // Use a 30-second bucket so the same track refreshes occasionally
-  const bucketSec = 30;
-  const bucketTs = Math.floor(Date.now() / 1000 / bucketSec);
+  const galleryIntervalFrames = 30;
+  const bucketTs = Math.floor(Number(data.frame_idx || 0) / galleryIntervalFrames);
   const key = `${camId}_${data.track_id}_${bucketTs}`;
   if (galleryKeys[camId].has(key)) return;  // already shown in this bucket
   galleryKeys[camId].add(key);

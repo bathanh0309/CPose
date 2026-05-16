@@ -20,30 +20,34 @@ output:
 
 pose:
   enabled: true
-  weights: "models/yolo11n-pose.pt"
+  weights: "models/yolo11n-pose_openvino_model"
+  fallback_weights: "models/yolo11n-pose.pt"
   conf: 0.55
   iou: 0.5
-  imgsz: 640
+  imgsz: 416
   min_keypoints: 5
   min_keypoint_score: 0.35
-  infer_every_n_frames: 3
+  infer_every_n_frames: 4
 
 tracking:
   enabled: true
   model_type: "pedestrian"
-  weights: "models/yolo11n.pt"
+  weights: "models/yolo11n_openvino_model"
   fallback_weights: "models/yolo11n.pt"
   conf: 0.40
   iou: 0.5
-  imgsz: 640
+  imgsz: 416
   min_box_area: 600
   min_keypoints: 5
   min_keypoint_score: 0.35
-  infer_every_n_frames: 2
-  # TrackCache tuning (fixes ghost tracks)
-  track_ttl_frames: 12
-  min_conf_for_cache: 0.45
-  max_cached_tracks: 5
+  track_thresh: 0.45
+  low_thresh: 0.10
+  match_thresh: 0.30
+  track_buffer: 30
+  track_ttl_frames: 6
+  min_conf_for_cache: 0.55
+  max_cached_tracks: 2
+  max_iou_duplicate: 0.60
   tracker_yaml: "bytetrack.yaml"
   classes:
     - 0
@@ -78,12 +82,13 @@ ui:
 web:
   threaded_camera: true
   stream_width: 960
-  infer_every_n_frames: 2
-  target_fps: 25
+  target_fps: 15
   jpeg_quality: 55
   jpeg_quality_min: 45
-  metrics_interval_frames: 10
+  metrics_interval_frames: 15
   loop_local_video: true
+  local_file_sequential: true
+  rtsp_latest_frame: true
   frame_skip_lag_multiplier: 2.0
   recording_buffer_max: 500
   start_ai_on_person_only: false
@@ -94,10 +99,13 @@ web:
   gallery_enabled: true
   gallery_interval_frames: 30
   max_gallery_items: 20
+  ai_workers: 2
+  encode_workers: 1
 
 reid:
   model_name: "osnet_x0_25"
-  weights: "models/osnet_x0_25_msmt17.pth"
+  weights: "models/osnet_x0_25_openvino_model/osnet_x0_25.xml"
+  fallback_weights: "models/osnet_x0_25_msmt17.pth"
   research_weights: "models/fastreid_market_R50.pth"
   fastreid_root: ".github/fast-reid"
   gallery_dir: "data/gallery"
@@ -106,10 +114,13 @@ reid:
     - "data/body"
   id_aliases:
     person01: APhu
-  threshold: 0.65
-  reid_interval: 15
-  min_track_age: 10
-  min_crop_area: 2500
+  threshold: 0.45
+  min_gallery_size: 5
+  reid_interval: 45
+  reid_log_interval: 45
+  min_track_age: 15
+  min_track_conf: 0.60
+  min_crop_area: 3500
   max_gallery: 10
   fastreid_config:
     MODEL:
@@ -191,11 +202,13 @@ adl:
   min_frames: 30
   infer_every_n_frames: 15
   lost_track_threshold: 30
-  weights: "models/2015_EfficientGCN-B0_ntu-xsub120.pth.tar"
+  weights: "models/efficientgcn/2015_EfficientGCN-B0_ntu-xsub120.pth.tar"
   export_dir: "data/output/clips_pkl"
   work_dir: "data/output/clips_pkl"
   # export_pkl: false means no pkl spam during web realtime
   export_pkl: false
+  fallback: "rules"
+  disable_if_load_failed: true
   num_classes: 60
   seq_len: 48
   stride: 12

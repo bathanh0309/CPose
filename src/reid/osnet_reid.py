@@ -22,6 +22,7 @@ class OSNetReID:
         reid_interval: int = 15,
         max_gallery: int = 10,
         min_crop_area: float = 2500.0,
+        min_gallery_size: int = 5,
     ) -> None:
         self.extractor = torchreid.utils.FeatureExtractor(
             model_name="osnet_x0_25",
@@ -33,8 +34,10 @@ class OSNetReID:
         self.interval = int(reid_interval)
         self.max_gallery = int(max_gallery)
         self.min_crop_area = float(min_crop_area)
+        self.min_gallery_size = int(min_gallery_size)
         self.gallery: dict[str, np.ndarray] = {}
         self._frame_count = 0
+        self.gallery_disabled_reason: str | None = None
 
     def register(self, person_id: str, crop_bgr: np.ndarray) -> None:
         """Register a person from a BGR crop."""
@@ -69,9 +72,10 @@ class OSNetReID:
                         arr = np.load(str(npy_path)).astype(np.float32).reshape(-1)
                     except Exception:
                         continue
-                    if arr.size == 512:
-                        norm = np.linalg.norm(arr) + 1e-12
-                        vectors.append(arr / norm)
+                    if arr.size != 512:
+                        continue
+                    norm = np.linalg.norm(arr) + 1e-12
+                    vectors.append(arr / norm)
                 if not vectors:
                     continue
                 pid = aliases.get(person_dir.name, person_dir.name)
@@ -80,6 +84,10 @@ class OSNetReID:
                 self.gallery[str(pid)] = proto.astype(np.float32)
                 loaded += 1
         self._trim_gallery()
+        if loaded < self.min_gallery_size:
+            self.gallery_disabled_reason = "ReID gallery too small; matching disabled."
+        else:
+            self.gallery_disabled_reason = None
         return loaded
 
     def identify(self, crop_bgr: np.ndarray, bbox_area: float) -> tuple[str, float]:
@@ -87,7 +95,7 @@ class OSNetReID:
         if float(bbox_area) < self.min_crop_area:
             return "too_small", 0.0
         feat = self._extract(crop_bgr)
-        if feat is None or not self.gallery:
+        if feat is None or not self.gallery or self.gallery_disabled_reason:
             return "unknown", 0.0
         best_id, best_sim = "unknown", 0.0
         for pid, gfeat in self.gallery.items():

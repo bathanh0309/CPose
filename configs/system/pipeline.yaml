@@ -87,8 +87,9 @@ web:
   lost_person_grace_frames: 30
   draw_waiting_panel: true
   openvino_enabled: true
-  openvino_device: "CPU"
+  openvino_device: "GPU.0"
   openvino_fallback_device: "CPU"
+  openvino_cache_dir: "openvino_cache"
   openvino_pose_weights: "models/yolo11n-pose_openvino_model"
   openvino_tracking_weights: "models/tracking_openvino_model"
   openvino_detect_weights: "models/yolo11n_openvino_model"
@@ -177,6 +178,16 @@ reid:
     CUDNN_BENCHMARK: true
 
 adl:
+  enabled: true
+  model_type: "efficientgcn"
+  efficientgcn_xml: "models/efficientgcn_b0_ntu_xsub120_openvino_model/efficientgcn_b0_ntu_xsub120.xml"
+  device: "CPU"
+  openvino_cache_dir: "openvino_cache"
+  precision_hint: "f16"
+  conf_threshold: 0.3
+  min_frames: 30
+  infer_every_n_frames: 15
+  lost_track_threshold: 30
   weights: "models/posec3d_r50_ntu60.pth"
   export_dir: "data/output/clips_pkl"
   work_dir: "data/output/clips_pkl"

@@ -6,12 +6,13 @@ websockets>=12.0
 python-multipart>=0.0.9
 Pillow>=9.5.0
 PyYAML>=6.0
+psutil>=5.9.0
 scipy>=1.10.0
 tqdm>=4.66.0
 
 ultralytics>=8.2.0
 lapx>=0.5.2
-openvino>=2024.0.0
+torchreid>=0.2.5
 
 yacs>=0.1.8
 gdown>=5.1.0

@@ -10,21 +10,18 @@ HOST = "127.0.0.1"
 PORT = "8000"
 URL = f"http://{HOST}:{PORT}"
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.utils.openvino import available_openvino_devices, select_openvino_device, to_ultralytics_openvino_device
 
 
 def detect_openvino() -> tuple[list[str], str | None]:
     try:
-        try:
-            from openvino.runtime import Core
-        except ModuleNotFoundError:
-            from openvino import Core
-
-        ie = Core()
-        devices = list(ie.available_devices)
-        # Prefer CPU for now: Intel Iris Xe OpenVINO can hit igc_check compiler
-        # failures on some driver/runtime combinations. GPU can still be forced
-        # by setting CPOSE_OPENVINO_DEVICE=intel:gpu before launching.
-        device = "CPU" if "CPU" in devices else "GPU" if "GPU" in devices else None
+        devices = available_openvino_devices()
+        # Prefer Intel Iris Xe iGPU through OpenVINO when it is available.
+        # Web runtime still falls back to CPU on known OpenVINO GPU failures.
+        device = select_openvino_device(devices, preferred="GPU.0", fallback="CPU")
         return devices, device
     except Exception as exc:
         print(f"[OpenVINO] unavailable: {type(exc).__name__}: {exc}")
@@ -35,7 +32,7 @@ def build_server_env() -> dict[str, str]:
     env = os.environ.copy()
     devices, device = detect_openvino()
     forced_device = env.get("CPOSE_OPENVINO_DEVICE")
-    ultralytics_device = forced_device or (f"intel:{device.lower()}" if device else None)
+    ultralytics_device = forced_device or to_ultralytics_openvino_device(device)
 
     env["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;15000000|max_delay;500000"
     env["CPOSE_OPENVINO_ENABLED"] = "1" if device else "0"

@@ -108,7 +108,7 @@ class PersonGateDetector:
             if (
                 self._is_openvino_gpu_error(exc)
                 and self._is_openvino_model(self.weights)
-                and str(self.device).lower() == "intel:gpu"
+                and str(self.device).lower().startswith("intel:gpu")
             ):
                 self._reload(self.weights, "intel:cpu", f"OpenVINO GPU failed ({type(exc).__name__}: {exc})")
                 results = self._predict(frame)

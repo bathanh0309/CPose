@@ -7,27 +7,15 @@ from typing import Any
 
 import cv2
 import numpy as np
-import os
 
 from src.action.pose_buffer import PoseSequenceBuffer
 from src.core.track_cache import TrackCache
-from src.detectors.person_gate import PersonGateDetector
-from src.detectors.pedestrian_yolo import PedestrianYoloTracker
-from src.detectors.yolo_pose import YoloPoseTracker
+from src.detectors.yolo_openvino import YOLODetectOpenVINO, YOLOPoseOpenVINO
+from src.device_manager import resolve_detect_device
+from src.trackers.bytetrack import ByteTrackNumpy
 from src.utils.filters import bbox_area, keypoint_quality
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
-
-
-def available_openvino_devices() -> list[str]:
-    try:
-        try:
-            from openvino.runtime import Core
-        except ModuleNotFoundError:
-            from openvino import Core
-
-        return list(Core().available_devices)
-    except Exception:
-        return []
+from src.action.adl_efficientgcn import ADLEfficientGCN
 
 
 def clipped_crop(frame: np.ndarray, bbox: list[float]):
@@ -40,6 +28,24 @@ def clipped_crop(frame: np.ndarray, bbox: list[float]):
     return frame[y1:y2, x1:x2]
 
 
+def draw_action_label(frame: np.ndarray, bbox: list[float], action_label: str) -> None:
+    if not action_label or action_label == "unknown":
+        return
+    h, w = frame.shape[:2]
+    x1, y1, x2, _ = map(int, bbox)
+    x1 = max(0, min(w - 1, x1))
+    y1 = max(0, min(h - 1, y1))
+    text = str(action_label)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.55
+    thickness = 2
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+    y0 = max(0, y1 - th - 10)
+    x_end = min(w - 1, x1 + tw + 8)
+    cv2.rectangle(frame, (x1, y0), (x_end, y1), (0, 80, 160), -1)
+    cv2.putText(frame, text, (x1 + 3, max(th + 2, y1 - 7)), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+
 class WebAIProcessor:
     def __init__(self, camera_id: str, modules: set[str], cfg: dict[str, Any]):
         self.camera_id = str(camera_id)
@@ -47,15 +53,38 @@ class WebAIProcessor:
         self.modules = set(modules)
         self.frame_idx = -1
         self.fps_counter = FPSCounter()
+        self.last_detect_ms = 0.0
+        self.last_pose_ms = 0.0
+        self.last_adl_ms = 0.0
+        self.last_total_ms = 0.0
 
-        # Separate trackers for tracking-only vs pose
+        self._print_device_allocation_header()
+        detect_device = resolve_detect_device()
+        self.detector = YOLODetectOpenVINO(
+            xml_path="D:/Capstone_Project/models/yolo11n_openvino_model/yolo11n.xml",
+            device=detect_device,
+            conf_threshold=0.4,
+            iou_threshold=0.45,
+            class_filter=[0],
+        )
+        print(f"[DETECT] device={self.detector.device}")
+        self.pose_model = YOLOPoseOpenVINO(
+            model_path="D:/Capstone_Project/models/yolo11n-pose_openvino_model",
+            device="CPU",
+        )
+        print("[POSE] device=CPU")
+        self.tracker = ByteTrackNumpy(high_thresh=0.4, low_thresh=0.1, match_thresh=0.3, max_age=30)
+        print("[ByteTrack] device=CPU")
+
+        # Legacy lazy fields kept for older helper methods, but web inference uses
+        # the OpenVINO/numpy path above.
         self.tracking_tracker = None
         self.tracking_tracker_error = None
         self.pose_tracker = None
         self.pose_tracker_error = None
-        self.openvino_devices = available_openvino_devices()
-        self.openvino_device = self._select_openvino_device()
-        self.openvino_enabled = bool(self.openvino_device)
+        self.openvino_devices = []
+        self.openvino_device = self.detector.device
+        self.openvino_enabled = True
 
         self.person_gate = None
         self.person_gate_error = None
@@ -68,8 +97,12 @@ class WebAIProcessor:
         self.temp_gid_by_track: dict[int, str] = {}
 
         self.pose_buffer = None
+        self.adl = None
+        self.adl_enabled = False
         self.adl_error = None
         self.adl_status_by_track: dict[int, dict[str, Any]] = {}
+        self.adl_last_seen_frame: dict[int, int] = {}
+        self.lost_track_threshold = int(cfg.get("adl", {}).get("lost_track_threshold", 30))
 
         self.person_active = False
         self.no_person_frames = 0
@@ -87,6 +120,19 @@ class WebAIProcessor:
         # Gallery event support
         self.gallery_events: list[dict[str, Any]] = []
         self.last_gallery_frame_by_track: dict[int, int] = {}
+
+        self._ensure_adl()
+
+    def _print_device_allocation_header(self) -> None:
+        print("╔══════════════════════════════════════════╗")
+        print("║         CPose Device Allocation          ║")
+        print("╠══════════════════════════════════════════╣")
+        print("║  YOLO Detect   │ GPU.0 (Intel Iris Xe)   ║")
+        print("║  YOLO Pose     │ CPU                     ║")
+        print("║  ByteTrack     │ CPU                     ║")
+        print("║  EfficientGCN  │ CPU                     ║")
+        print("║  JPEG + WS     │ CPU                     ║")
+        print("╚══════════════════════════════════════════╝")
 
     def set_modules(self, modules: set[str]):
         self.modules = set(modules)
@@ -107,21 +153,16 @@ class WebAIProcessor:
         if not self.openvino_devices:
             return None
 
-        preferred_raw = str(os.environ.get("CPOSE_OPENVINO_DEVICE") or web_cfg.get("openvino_device", "GPU"))
-        preferred = preferred_raw.replace("intel:", "").upper()
-        fallback = str(web_cfg.get("openvino_fallback_device", "CPU")).upper()
-        if preferred in self.openvino_devices:
-            return preferred
-        if fallback in self.openvino_devices:
-            return fallback
-        return None
+        preferred = str(os.environ.get("CPOSE_OPENVINO_DEVICE") or web_cfg.get("openvino_device", "GPU.0"))
+        fallback = str(web_cfg.get("openvino_fallback_device", "CPU"))
+        return select_openvino_device(self.openvino_devices, preferred=preferred, fallback=fallback)
 
     def _is_openvino_gpu_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
         return any(token in text for token in ("igc_check", "cisa", "gpu compiler", "openvino", "cldnn"))
 
     def _fallback_openvino_cpu(self, exc: Exception) -> bool:
-        if not self.openvino_enabled or str(self.openvino_device).upper() != "GPU":
+        if not self.openvino_enabled or not is_openvino_gpu_device(self.openvino_device):
             return False
         if not self._is_openvino_gpu_error(exc):
             return False
@@ -138,6 +179,10 @@ class WebAIProcessor:
         self.openvino_enabled = True
         self.pose_tracker = None
         self.pose_tracker_error = None
+        self.tracking_tracker = None
+        self.tracking_tracker_error = None
+        self.person_gate = None
+        self.person_gate_error = None
         return True
 
     def _select_tracking_runtime(self) -> tuple[str, str | None, str]:
@@ -150,7 +195,7 @@ class WebAIProcessor:
             ov_weights = web_cfg.get("openvino_tracking_weights")
             if ov_weights and Path(str(ov_weights)).exists():
                 device = self.openvino_device
-                yolo_device = device if str(device).lower().startswith("intel:") else f"intel:{str(device).lower()}"
+                yolo_device = to_ultralytics_openvino_device(device)
                 return str(ov_weights), yolo_device, "OpenVINO"
 
         fallback = str(tracking_cfg.get("fallback_weights", pt_weights))
@@ -168,7 +213,7 @@ class WebAIProcessor:
             ov_weights = web_cfg.get("openvino_pose_weights")
             if ov_weights and Path(str(ov_weights)).exists():
                 device = self.openvino_device
-                yolo_device = device if str(device).lower().startswith("intel:") else f"intel:{str(device).lower()}"
+                yolo_device = to_ultralytics_openvino_device(device)
                 return str(ov_weights), yolo_device, "OpenVINO"
 
         return pt_weights, self.cfg.get("system", {}).get("device"), "PyTorch"
@@ -238,9 +283,7 @@ class WebAIProcessor:
         weights = weights or fallback
 
         if self.openvino_enabled and weights and "openvino_model" in str(weights):
-            device = self.openvino_device
-            if device and not str(device).lower().startswith("intel:"):
-                device = f"intel:{str(device).lower()}"
+            device = to_ultralytics_openvino_device(self.openvino_device)
         else:
             device = self.cfg.get("system", {}).get("device")
 
@@ -302,20 +345,23 @@ class WebAIProcessor:
             return False
 
     def _ensure_adl(self):
-        if self.pose_buffer is not None:
+        if self.adl is not None:
             return True
         if self.adl_error:
             return False
         try:
             adl_cfg = self.cfg.get("adl", {})
-            self.pose_buffer = PoseSequenceBuffer(
-                seq_len=adl_cfg.get("seq_len", 48),
-                stride=adl_cfg.get("stride", 12),
-                output_dir=adl_cfg.get("export_dir", "data/output/clips_pkl"),
-                default_label=adl_cfg.get("default_label", 0),
-                max_idle_frames=adl_cfg.get("max_idle_frames", 150),
-                export_enabled=False,
+            self.adl = ADLEfficientGCN(
+                xml_path="D:/Capstone_Project/models/efficientgcn_b0_ntu_xsub120_openvino_model/efficientgcn_b0_ntu_xsub120.xml",
+                conf_threshold=float(adl_cfg.get("conf_threshold", 0.3)),
+                min_frames=int(adl_cfg.get("min_frames", 30)),
+                device="CPU",
+                cache_dir=adl_cfg.get("openvino_cache_dir") or self.cfg.get("web", {}).get("openvino_cache_dir", "openvino_cache"),
+                precision_hint=adl_cfg.get("precision_hint", "f16"),
             )
+            self.adl.infer_every_n_frames = int(adl_cfg.get("infer_every_n_frames", 15))
+            self.adl_enabled = True
+            print("[ADL] device=CPU")
             return True
         except Exception as exc:
             self.adl_error = f"{type(exc).__name__}: {exc}"
@@ -434,77 +480,46 @@ class WebAIProcessor:
             })
             return frame, [], metrics
 
-        web_cfg = self.cfg.get("web", {})
-        gate_cfg = self.cfg.get("person_gate", {})
-        start_ai_on_person_only = bool(web_cfg.get("start_ai_on_person_only", True))
-        person_gate_enabled = bool(gate_cfg.get("enabled", True))
         need_pose_model = bool({"track", "pose", "reid", "adl"} & self.modules)
         detections: list[dict[str, Any]] = []
-        filter_stats = {}
+        filter_stats: dict[str, int] = {}
+        t_total = time.perf_counter()
+        detect_ms = pose_ms = adl_ms = 0.0
 
-        if start_ai_on_person_only and person_gate_enabled and need_pose_model:
-            ai_allowed = self._run_person_gate(frame, logs)
-            metrics.update({
-                "ai_active": bool(ai_allowed),
-                "person_gate_detected": bool(ai_allowed),
-                "gate_detections": len(self.last_gate_detections),
-                "gate_best_conf": float(self.last_gate_best_conf),
-                "selected_modules": sorted(self.modules),
-            })
-            if not ai_allowed:
+        if need_pose_model:
+            try:
+                t0 = time.perf_counter()
+                bboxes = self.detector.detect(frame)
+                detect_ms = (time.perf_counter() - t0) * 1000.0
+                tracked = self.tracker.update(bboxes, frame)
+                if {"pose", "adl"} & self.modules:
+                    t1 = time.perf_counter()
+                    detections = self.pose_model.estimate(frame, tracked)
+                    pose_ms = (time.perf_counter() - t1) * 1000.0
+                else:
+                    detections = tracked
+            except Exception as exc:
+                logs.append(("warning", f"OpenVINO/numpy pipeline failed: {type(exc).__name__}: {exc}"))
+                return frame, logs, metrics
+
+            self.last_gate_detections = [{"bbox": b[:4], "score": b[4], "class_id": 0} for b in bboxes]
+            self.last_gate_best_conf = max([float(b[4]) for b in bboxes], default=0.0)
+            if bboxes:
+                self._handle_person_detected(logs, len(bboxes))
+                self.last_gate_status = "person_detected"
+            else:
+                self.last_gate_status = "waiting"
+                self.no_person_frames += 1
                 metrics.update({
-                    "detections": 0,
-                    "tracked": 0,
-                    "persons": 0,
                     "ai_active": False,
+                    "person_gate": "waiting",
+                    "person_gate_detected": False,
+                    "gate_detections": 0,
+                    "gate_best_conf": 0.0,
+                    "selected_modules": sorted(self.modules),
                 })
                 self._draw_waiting_panel(frame, fps, metrics)
                 return frame, logs, metrics
-
-        if need_pose_model:
-            need_pose = bool({"pose", "adl"} & self.modules)
-            need_track = "track" in self.modules
-
-            if need_pose:
-                # Use pose model (heavier, has keypoints)
-                if not self._ensure_pose_tracker():
-                    logs.append(("warning", f"Pose runtime unavailable: {self.pose_tracker_error}"))
-                    return frame, logs, metrics
-                try:
-                    detections, _ = self.pose_tracker.infer(frame, persist=True)
-                    filter_stats = self.pose_tracker.last_filter_stats.as_dict()
-                except Exception as exc:
-                    retry_ok = False
-                    if self._fallback_openvino_cpu(exc) and self._ensure_pose_tracker():
-                        try:
-                            detections, _ = self.pose_tracker.infer(frame, persist=True)
-                            filter_stats = self.pose_tracker.last_filter_stats.as_dict()
-                            retry_ok = True
-                        except Exception as retry_exc:
-                            exc = retry_exc
-                    if not retry_ok:
-                        logs.append(("warning", f"Pose inference failed: {type(exc).__name__}: {exc}"))
-                        return frame, logs, metrics
-            elif need_track or "reid" in self.modules:
-                # Use lightweight tracking-only model (no keypoints, faster)
-                if not self._ensure_tracking_tracker():
-                    logs.append(("warning", f"Tracking runtime unavailable: {self.tracking_tracker_error}"))
-                    return frame, logs, metrics
-                try:
-                    detections, _ = self.tracking_tracker.infer(frame, persist=True)
-                    filter_stats = self.tracking_tracker.last_filter_stats.as_dict()
-                except Exception as exc:
-                    retry_ok = False
-                    if self._fallback_openvino_cpu(exc) and self._ensure_tracking_tracker():
-                        try:
-                            detections, _ = self.tracking_tracker.infer(frame, persist=True)
-                            filter_stats = self.tracking_tracker.last_filter_stats.as_dict()
-                            retry_ok = True
-                        except Exception as retry_exc:
-                            exc = retry_exc
-                    if not retry_ok:
-                        logs.append(("warning", f"Tracking inference failed: {type(exc).__name__}: {exc}"))
-                        return frame, logs, metrics
 
         # --- TrackCache anti-flicker ---
         self.track_cache.update(detections, self.frame_idx)
@@ -530,7 +545,7 @@ class WebAIProcessor:
             "selected_modules": sorted(self.modules),
         })
 
-        if not (start_ai_on_person_only and person_gate_enabled) and len(display_dets) > 0:
+        if len(display_dets) > 0:
             self._handle_person_detected(logs, len(display_dets))
             best_conf = max([float(d.get("score", 0.0)) for d in display_dets], default=0.0)
             metrics.update({
@@ -538,13 +553,6 @@ class WebAIProcessor:
                 "person_gate_detected": True,
                 "gate_detections": len(display_dets),
                 "gate_best_conf": round(float(best_conf), 3),
-            })
-        elif start_ai_on_person_only and person_gate_enabled:
-            metrics.update({
-                "ai_active": True,
-                "person_gate_detected": (self.last_gate_status == "person_detected"),
-                "gate_detections": len(self.last_gate_detections),
-                "gate_best_conf": float(self.last_gate_best_conf),
             })
 
         if "track" in self.modules:
@@ -570,7 +578,9 @@ class WebAIProcessor:
             self._process_reid(frame, display_dets, logs)
 
         if "adl" in self.modules:
+            t_adl = time.perf_counter()
             self._process_adl(frame, display_dets, logs, (h, w))
+            adl_ms = (time.perf_counter() - t_adl) * 1000.0
 
         # --- Gallery events ---
         self._generate_gallery_events(frame, display_dets)
@@ -584,6 +594,27 @@ class WebAIProcessor:
             "Filtered": filtered,
             "FPS": f"{fps:.1f}",
         })
+
+        total_ms = (time.perf_counter() - t_total) * 1000.0
+        self.last_detect_ms = detect_ms
+        self.last_pose_ms = pose_ms
+        self.last_adl_ms = adl_ms
+        self.last_total_ms = total_ms
+        metrics.update({
+            "detect_ms": round(detect_ms, 2),
+            "pose_ms": round(pose_ms, 2),
+            "adl_ms": round(adl_ms, 2),
+            "total_ms": round(total_ms, 2),
+            "detect_device": self.detector.device,
+            "pose_device": "CPU",
+            "adl_device": "CPU",
+        })
+        if self.frame_idx % 100 == 0:
+            print(
+                f"[METRIC] Detect={detect_ms:.1f}ms ({self.detector.device}) | "
+                f"Pose={pose_ms:.1f}ms (CPU) | ADL={adl_ms:.1f}ms (CPU, throttle) | "
+                f"Total={total_ms:.1f}ms | FPS={fps:.1f}"
+            )
 
         return frame, logs, metrics
 
@@ -634,39 +665,57 @@ class WebAIProcessor:
             logs.append(("warning", f"ADL: unavailable ({self.adl_error})"))
             return
 
+        active_ids: set[int] = set()
         first_status = None
         for det in detections:
             tid = int(det.get("track_id", -1))
             if tid < 0:
                 continue
-            status = self.pose_buffer.update(
-                self.camera_id,
-                tid,
-                f"track_{tid}",
-                self.frame_idx,
-                det.get("keypoints"),
-                det.get("keypoint_scores"),
-                img_shape,
-            )
+            active_ids.add(tid)
+            self.adl_last_seen_frame[tid] = self.frame_idx
+
+            keypoints = det.get("keypoints")
+            scores = det.get("keypoint_scores")
+            action_label = "unknown"
+            if keypoints is not None:
+                kps = np.asarray(keypoints, dtype=np.float32)
+                if kps.shape == (17, 2):
+                    score_arr = np.ones((17, 1), dtype=np.float32) if scores is None else np.asarray(scores, dtype=np.float32).reshape(17, 1)
+                    kps = np.concatenate([kps, score_arr], axis=1)
+                if kps.shape == (17, 3):
+                    action_label = self.adl.update(tid, kps, det.get("bbox", [0, 0, 0, 0]))
+
+            status = {
+                "status": "inferred" if action_label != "unknown" else "collecting",
+                "label": action_label,
+                "score": 0.0,
+                "current_len": len(self.adl.buffers.get(tid, [])) if self.adl else 0,
+                "seq_len": int(self.cfg.get("adl", {}).get("sequence_len", 300)),
+            }
             self.adl_status_by_track[tid] = status
             first_status = first_status or status
 
-            state = status.get("status")
-            if state == "collecting":
-                logs.append(("ai", f"ADL: track={tid} collecting={status.get('current_len', 0)}/{status.get('seq_len', 0)}"))
-            elif state == "exported":
-                logs.append(("ai", f"ADL: track={tid} clip exported"))
-            elif state == "disabled":
-                logs.append(("warning", f"ADL: track={tid} inference disabled"))
-            elif state == "inferred":
-                logs.append(("ai", f"ADL: track={tid} {status.get('label')} score={float(status.get('score', 0.0)):.2f}"))
-            elif state:
-                logs.append(("warning", f"ADL: track={tid} {state}"))
+            if action_label != "unknown":
+                draw_action_label(frame, det.get("bbox", [0, 0, 0, 0]), action_label)
+                if self.frame_idx % 30 == 0:
+                    logs.append(("ai", f"ADL: track={tid} action={action_label}"))
 
-            draw_detection(frame, det, label=f"track={tid} ADL:{state}")
+        for tid, last_seen in list(self.adl_last_seen_frame.items()):
+            if tid not in active_ids and self.frame_idx - int(last_seen) > self.lost_track_threshold:
+                if self.adl:
+                    self.adl.cleanup_track(tid)
+                self.adl_last_seen_frame.pop(tid, None)
+                self.adl_status_by_track.pop(tid, None)
 
         if first_status:
             draw_adl_status(frame, first_status, pos=(10, 150))
+
+        if self.adl and self.frame_idx % 100 == 0:
+            m = self.adl.metrics()
+            logs.append((
+                "ai",
+                f"ADL_METRICS: infer_fps={m['infer_fps']} active_tracks={m['active_tracks']} buffer_frames={m['buffer_frames']}",
+            ))
 
     def _make_crop_event(self, frame: np.ndarray, det: dict[str, Any]) -> dict[str, Any] | None:
         """Create a gallery crop event from a detection."""
@@ -706,4 +755,3 @@ class WebAIProcessor:
                 if event:
                     self.gallery_events.append(event)
                     self.last_gallery_frame_by_track[tid] = self.frame_idx
-

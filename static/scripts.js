@@ -9,27 +9,27 @@ const cameraSlots = { 1: null, 2: null };
 const frameStats = { 1: null, 2: null };
 let rtspCameras = [];
 
+// Module state per camera — persisted across uploads and restarts
 const activeModules = {
   1: new Set(),
   2: new Set()
 };
 
+// Gallery dedup: key = "camId_trackId_bucketIdx"
+const galleryKeys = { 1: new Set(), 2: new Set() };
+
+// ── RTSP config upload ────────────────────────────────────────────────────────
+
 async function handleRtspUpload(event, camId) {
   const file = event.target.files[0];
   if (!file) return;
-
   const formData = new FormData();
   formData.append("file", file);
-
   addLog(camId, "Loading RTSP config file...", "system");
   try {
-    const res = await fetch(`${API_BASE}/api/cameras/config`, {
-      method: "POST",
-      body: formData
-    });
+    const res = await fetch(`${API_BASE}/api/cameras/config`, { method: "POST", body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Unable to load RTSP config");
-
     applyCameraList(data.cameras || []);
     selectDefaultCamera(camId);
     addLog(camId, "RTSP config loaded. Select a stream from the list, then press ON.", "system");
@@ -53,14 +53,11 @@ async function loadConfiguredCameras() {
 
 function applyCameraList(cameras) {
   rtspCameras = cameras;
-
   [1, 2].forEach((camId) => {
     const selectEl = document.getElementById(`cam${camId}-display`);
     if (!selectEl) return;
-
     const previousValue = selectEl.value;
     selectEl.innerHTML = '<option value="">Select RTSP stream...</option>';
-
     cameras.forEach((camera) => {
       const option = document.createElement("option");
       option.value = camera.id;
@@ -70,13 +67,11 @@ function applyCameraList(cameras) {
       option.dataset.urlMasked = camera.url_masked || "";
       selectEl.appendChild(option);
     });
-
-    if (previousValue && cameras.some((camera) => camera.id === previousValue)) {
+    if (previousValue && cameras.some((c) => c.id === previousValue)) {
       selectEl.value = previousValue;
     } else if (!cameraSlots[camId] && cameras[camId - 1]) {
       selectEl.value = cameras[camId - 1].id;
     }
-
     selectRtspCamera(camId, { silent: true });
   });
 }
@@ -84,7 +79,6 @@ function applyCameraList(cameras) {
 function selectDefaultCamera(camId) {
   const selectEl = document.getElementById(`cam${camId}-display`);
   if (!selectEl || selectEl.value || !rtspCameras.length) return;
-
   selectEl.value = rtspCameras[Math.min(camId - 1, rtspCameras.length - 1)].id;
   selectRtspCamera(camId);
 }
@@ -93,44 +87,34 @@ function selectRtspCamera(camId, options = {}) {
   const sourceEl = document.getElementById(`cam${camId}-source`);
   const selectEl = document.getElementById(`cam${camId}-display`);
   if (!sourceEl || !selectEl) return;
-
   const selectedId = selectEl.value;
   sourceEl.value = selectedId;
-  cameraSlots[camId] = rtspCameras.find((camera) => camera.id === selectedId) || null;
-
+  cameraSlots[camId] = rtspCameras.find((c) => c.id === selectedId) || null;
   if (cameraSlots[camId] && !options.silent) {
     addLog(camId, `Selected stream: ${cameraSlots[camId].display || cameraSlots[camId].name}`, "system");
   }
-
-  if (sockets[camId] && cameraSlots[camId]) {
-    startStream(camId);
-  }
+  if (sockets[camId] && cameraSlots[camId]) startStream(camId);
 }
+
+// ── Video upload ──────────────────────────────────────────────────────────────
 
 async function handleCamUpload(event, camId) {
   const file = event.target.files[0];
   if (!file) return;
 
+  // Stop running stream – but do NOT clear activeModules
   if (sockets[camId]) {
-    try {
-      sockets[camId].send(JSON.stringify({ type: "stop" }));
-    } catch (e) {
-      // ignore close races
-    }
+    try { sockets[camId].send(JSON.stringify({ type: "stop" })); } catch (e) { /* ignore */ }
     sockets[camId].close();
     sockets[camId] = null;
-    addLog(camId, "Closed previous stream before loading uploaded video.", "system");
+    addLog(camId, "Previous stream stopped before loading uploaded video.", "system");
   }
 
   const formData = new FormData();
   formData.append("file", file);
-
   addLog(camId, `Uploading video: ${file.name}...`, "system");
   try {
-    const res = await fetch(`${API_BASE}/api/upload`, {
-      method: "POST",
-      body: formData
-    });
+    const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Upload failed");
 
@@ -139,7 +123,16 @@ async function handleCamUpload(event, camId) {
     setSelectToUploadedFile(camId, data.name || file.name, uploadedPath);
     cameraSlots[camId] = null;
 
-    addLog(camId, "Upload completed. Select modules, then press ON.", "system");
+    // Show currently selected modules so user knows they're preserved
+    const mods = [...activeModules[camId]].join(", ");
+    addLog(camId, `Upload completed: ${data.name || file.name}`, "system");
+    addLog(
+      camId,
+      mods
+        ? `Modules active: [${mods}]. Press ON to start.`
+        : "No modules selected. Pick modules then press ON.",
+      mods ? "system" : "warning"
+    );
   } catch (e) {
     addLog(camId, `Upload error: ${e.message || e}`, "error");
   } finally {
@@ -150,7 +143,6 @@ async function handleCamUpload(event, camId) {
 function setSelectToUploadedFile(camId, fileName, sourcePath) {
   const selectEl = document.getElementById(`cam${camId}-display`);
   if (!selectEl) return;
-
   let option = selectEl.querySelector('option[data-upload="true"]');
   if (!option) {
     option = document.createElement("option");
@@ -163,6 +155,8 @@ function setSelectToUploadedFile(camId, fileName, sourcePath) {
   option.dataset.source = sourcePath || "";
   selectEl.value = option.value;
 }
+
+// ── Module toggle ─────────────────────────────────────────────────────────────
 
 function toggleModule(camId, mod) {
   const btn = document.getElementById(`btn-${mod}-${camId}`);
@@ -177,77 +171,79 @@ function toggleModule(camId, mod) {
   }
 
   const mods = [...activeModules[camId]].join(",");
-  addLog(
-    camId,
-    mods ? `Modules updated: ${mods}` : "No AI module selected, playing raw stream.",
-    mods ? "system" : "warning"
-  );
 
+  // Log only when modules change – avoid false "No AI module" when user is
+  // mid-selection. Only log the warning when the Set truly ends up empty.
+  if (mods) {
+    addLog(camId, `Modules selected: [${mods}]`, "system");
+  } else {
+    addLog(camId, "No AI module selected. Playing raw stream when ON is pressed.", "warning");
+  }
+
+  // If stream is already running, push the new module set to backend live
   if (sockets[camId] && sockets[camId].readyState === WebSocket.OPEN) {
-    sockets[camId].send(JSON.stringify({
-      type: "set_modules",
-      modules: mods
-    }));
+    sockets[camId].send(JSON.stringify({ type: "set_modules", modules: mods }));
   }
 }
 
+// ── Stream start ──────────────────────────────────────────────────────────────
+
 function startStream(camId) {
   const sourceEl = document.getElementById(`cam${camId}-source`);
-  const videoSource = sourceEl.value.trim();
+  const videoSource = sourceEl ? sourceEl.value.trim() : "";
 
   if (!videoSource) {
     alert(`Please select an RTSP stream or upload a video for Camera ${camId}`);
     return;
   }
 
-  if (sockets[camId]) {
-    sockets[camId].close();
-  }
+  if (sockets[camId]) sockets[camId].close();
 
   setStatus(camId, "Connecting...", "offline");
-  document.getElementById(`placeholder-${camId}`).style.display = "none";
+  const placeholder = document.getElementById(`placeholder-${camId}`);
+  if (placeholder) placeholder.style.display = "none";
   const img = document.getElementById(`frame-${camId}`);
-  img.style.display = "block";
-  if (img._blobUrl) {
-    URL.revokeObjectURL(img._blobUrl);
-    img._blobUrl = null;
+  if (img) {
+    img.style.display = "block";
+    if (img._blobUrl) { URL.revokeObjectURL(img._blobUrl); img._blobUrl = null; }
+    img.src = "";
   }
-  img.src = "";
 
   const mods = [...activeModules[camId]].join(",");
-  if (!mods) {
-    addLog(camId, "No AI module selected, playing raw stream.", "warning");
-  }
-  const wsUrl = `${WS_BASE}/ws/stream/${camId}?source=${encodeURIComponent(videoSource)}&modules=${mods}`;
+
+  // ── Build WebSocket URL with modules param ────────────────────────────
+  const wsUrl = `${WS_BASE}/ws/stream/${camId}?source=${encodeURIComponent(videoSource)}&modules=${encodeURIComponent(mods)}`;
+
   const displayName = getSelectedDisplayName(camId);
   addLog(camId, `Starting stream: ${displayName}`, "system");
-  addLog(camId, `Analyzing modules: [${mods}]`, "system");
+  if (mods) {
+    addLog(camId, `Modules: [${mods}]`, "system");
+  } else {
+    // Not an error — user may legitimately want raw stream
+    addLog(camId, "No AI module selected, playing raw stream.", "warning");
+  }
 
   const ws = new WebSocket(wsUrl);
   ws.binaryType = "arraybuffer";
   sockets[camId] = ws;
   initFrameStats(camId);
 
-  ws.onopen = () => {
-    setStatus(camId, "Live", "online");
-  };
+  ws.onopen = () => setStatus(camId, "Live", "online");
 
   ws.onmessage = (evt) => {
     if (evt.data instanceof ArrayBuffer) {
       renderBinaryFrame(camId, img, evt.data);
       return;
     }
-    handleJsonMessage(camId, JSON.parse(evt.data));
+    try { handleJsonMessage(camId, JSON.parse(evt.data)); } catch (e) { /* skip malformed */ }
   };
 
-  ws.onerror = () => {
-    addLog(camId, "WebSocket connection to AI server failed.", "error");
-  };
+  ws.onerror = () => addLog(camId, "WebSocket connection to AI server failed.", "error");
 
   ws.onclose = () => {
     setStatus(camId, "Disconnected", "offline");
-    img.style.display = "none";
-    document.getElementById(`placeholder-${camId}`).style.display = "flex";
+    if (img) { img.style.display = "none"; }
+    if (placeholder) placeholder.style.display = "flex";
     toggleSaveButtons(camId, false);
     sessionIds[camId] = null;
     sockets[camId] = null;
@@ -260,38 +256,61 @@ function getSelectedDisplayName(camId) {
   return selectEl?.selectedOptions?.[0]?.textContent || `Camera ${camId}`;
 }
 
+// ── JSON message handler ──────────────────────────────────────────────────────
+
 function handleJsonMessage(camId, data) {
-  if (data.type === "session") {
-    sessionIds[camId] = data.session_id;
-    toggleSaveButtons(camId, true);
-  } else if (data.type === "metric") {
-    const m = data.metrics || {};
-    const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
-    if (Array.isArray(m.tracks) && m.tracks.length) {
-      const trackText = m.tracks
-        .map((track) => `t${track.track_id}=${Number(track.conf || 0).toFixed(2)}`)
-        .join(", ");
-      const mean = Number(m.mean_track_conf || 0).toFixed(2);
-      addLog(camId, `TRACK_CONF: ${trackText} | mean=${mean}`, "metric");
+  switch (data.type) {
+    case "session":
+      sessionIds[camId] = data.session_id;
+      toggleSaveButtons(camId, true);
+      // Confirm active modules from backend echo
+      if (Array.isArray(data.active_modules) && data.active_modules.length) {
+        addLog(camId, `Session ready. Active modules: [${data.active_modules.join(",")}]`, "system");
+      }
+      break;
+
+    case "metric": {
+      const m = data.metrics || {};
+      // TRACK_CONF line
+      if (Array.isArray(m.tracks) && m.tracks.length) {
+        const trackText = m.tracks
+          .map((t) => `t${t.track_id}=${Number(t.conf || 0).toFixed(2)}`)
+          .join(" ");
+        const mean = Number(m.mean_track_conf || 0).toFixed(2);
+        addLog(camId, `TRACK_CONF: ${trackText} | mean=${mean}`, "metric");
+      }
+      const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
+      addLog(
+        camId,
+        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
+        "metric"
+      );
+      break;
     }
-    addLog(
-      camId,
-      `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} tracked=${m.tracked ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
-      "metric"
-    );
-  } else if (data.type === "gallery") {
-    addGalleryItem(camId, data);
-  } else if (data.type === "ai") {
-    addLog(camId, `AI: ${data.msg}`, "ai");
-  } else if (data.type === "log" || data.type === "system") {
-    addLog(camId, maskRtsp(data.msg), data.level || "system");
+
+    case "gallery":
+      addGalleryItem(camId, data);
+      break;
+
+    case "log":
+    case "system":
+      addLog(camId, maskRtsp(data.msg || ""), data.level || "system");
+      break;
+
+    case "ai":
+      addLog(camId, `AI: ${data.msg || ""}`, "ai");
+      break;
+
+    default:
+      break;
   }
 }
+
+// ── Frame rendering ───────────────────────────────────────────────────────────
 
 function ensureVideoOverlays(camId) {
   const view = document.getElementById(`frame-${camId}`)?.closest(".cam-view");
   if (!view) return {};
-
   let fpsBadge = document.getElementById(`fps-badge-${camId}`);
   if (!fpsBadge) {
     fpsBadge = document.createElement("span");
@@ -300,7 +319,6 @@ function ensureVideoOverlays(camId) {
     fpsBadge.textContent = "0 FPS";
     view.appendChild(fpsBadge);
   }
-
   let stale = document.getElementById(`stale-overlay-${camId}`);
   if (!stale) {
     stale = document.createElement("div");
@@ -309,7 +327,6 @@ function ensureVideoOverlays(camId) {
     stale.textContent = "Weak signal";
     view.appendChild(stale);
   }
-
   return { fpsBadge, stale };
 }
 
@@ -325,7 +342,6 @@ function initFrameStats(camId) {
   };
   updateFpsBadge(camId, 0);
   setStaleVisible(camId, false);
-  return frameStats[camId];
 }
 
 function cleanupFrameStats(camId) {
@@ -333,16 +349,14 @@ function cleanupFrameStats(camId) {
   if (!stats) return;
   if (stats.staleTimer) window.clearInterval(stats.staleTimer);
   const img = document.getElementById(`frame-${camId}`);
-  if (img?._blobUrl) {
-    URL.revokeObjectURL(img._blobUrl);
-    img._blobUrl = null;
-  }
+  if (img?._blobUrl) { URL.revokeObjectURL(img._blobUrl); img._blobUrl = null; }
   updateFpsBadge(camId, 0);
   setStaleVisible(camId, false);
   frameStats[camId] = null;
 }
 
 function renderBinaryFrame(camId, imgEl, arrayBuffer) {
+  if (!imgEl) return;
   const prev = imgEl._blobUrl;
   imgEl._blobUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: "image/jpeg" }));
   imgEl.src = imgEl._blobUrl;
@@ -382,13 +396,11 @@ function setStaleVisible(camId, visible) {
   overlay.classList.toggle("visible", Boolean(visible));
 }
 
+// ── Stream stop ───────────────────────────────────────────────────────────────
+
 function stopStream(camId) {
   if (sockets[camId]) {
-    try {
-      sockets[camId].send(JSON.stringify({ type: "stop" }));
-    } catch (e) {
-      // ignore close races
-    }
+    try { sockets[camId].send(JSON.stringify({ type: "stop" })); } catch (e) { /* ignore */ }
     sockets[camId].close();
     addLog(camId, "Camera disconnected.", "system");
   }
@@ -401,16 +413,25 @@ function toggleSaveButtons(camId, enabled) {
   if (btnExcel) btnExcel.disabled = !enabled;
 }
 
+// ── Save video ────────────────────────────────────────────────────────────────
+
 async function saveVideo(camId) {
   const sid = sessionIds[camId];
-  if (!sid) return;
-
-  addLog(camId, "Packaging and saving video...", "system");
+  if (!sid) {
+    addLog(camId, "No active session. Start a stream first.", "warning");
+    return;
+  }
+  addLog(camId, "Saving video...", "system");
   try {
     const res = await fetch(`${API_BASE}/api/save-video/${sid}`, { method: "POST" });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || data.message || "Save Video failed");
-    addLog(camId, `Video saved: ${data.path || data.saved || data.message || ""}`, "ai");
+    if (!res.ok) {
+      // Friendly message when buffer is empty
+      const msg = data.error || data.message || "Save failed";
+      addLog(camId, `Save video: ${msg}`, "warning");
+      return;
+    }
+    addLog(camId, `Video saved: ${data.path || data.saved || "OK"}`, "ai");
   } catch (err) {
     addLog(camId, `Save video error: ${err.message || err}`, "error");
   }
@@ -419,7 +440,6 @@ async function saveVideo(camId) {
 async function saveExcel(camId) {
   const sid = sessionIds[camId];
   if (!sid) return;
-
   addLog(camId, "Exporting data to Excel...", "system");
   try {
     const res = await fetch(`${API_BASE}/api/save-excel/${sid}`, { method: "POST" });
@@ -431,6 +451,8 @@ async function saveExcel(camId) {
   }
 }
 
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
 function setStatus(camId, text, type) {
   const el = document.getElementById(`status-${camId}`);
   if (!el) return;
@@ -441,15 +463,12 @@ function setStatus(camId, text, type) {
 function addLog(camId, msg, level = "system") {
   const box = document.getElementById(`log-box-${camId}`);
   if (!box) return;
-
   const entry = document.createElement("div");
-  const time = new Date().toLocaleTimeString("vi-VN");
-
+  const t = new Date().toLocaleTimeString("vi-VN");
   entry.className = `log-entry log-${level}`;
-  entry.innerHTML = `<span class="log-time">${time}</span> ${escapeHtml(maskRtsp(String(msg || "")))}`;
+  entry.innerHTML = `<span class="log-time">${t}</span> ${escapeHtml(maskRtsp(String(msg || "")))}`;
   box.appendChild(entry);
   box.scrollTop = box.scrollHeight;
-
   while (box.children.length > 500) box.removeChild(box.firstChild);
 }
 
@@ -458,9 +477,24 @@ function clearLog(camId) {
   if (box) box.innerHTML = "";
 }
 
+// ── Gallery ───────────────────────────────────────────────────────────────────
+
 function addGalleryItem(camId, data) {
   const box = document.getElementById(`gallery-box-${camId}`);
   if (!box || !data.crop_jpeg) return;
+
+  // Dedup: bucket by (camId, track_id, floor(timestamp/gallery_interval_sec))
+  // Use a 30-second bucket so the same track refreshes occasionally
+  const bucketSec = 30;
+  const bucketTs = Math.floor(Date.now() / 1000 / bucketSec);
+  const key = `${camId}_${data.track_id}_${bucketTs}`;
+  if (galleryKeys[camId].has(key)) return;  // already shown in this bucket
+  galleryKeys[camId].add(key);
+  // Prevent unbounded Set growth
+  if (galleryKeys[camId].size > 200) {
+    const iter = galleryKeys[camId].values();
+    galleryKeys[camId].delete(iter.next().value);
+  }
 
   const item = document.createElement("div");
   item.className = "gallery-item";
@@ -475,11 +509,13 @@ function addGalleryItem(camId, data) {
   const gid = data.global_id || "unknown";
   const conf = Number(data.conf || 0).toFixed(2);
   const adlLabel = data.adl_label || "";
+  const reidScore = data.reid_score ? Number(data.reid_score).toFixed(2) : null;
   const ts = data.ts || new Date().toLocaleTimeString();
 
   meta.innerHTML = `
     <div>track=${escapeHtml(String(track))}</div>
     <div>gid=${escapeHtml(String(gid))}</div>
+    ${reidScore ? `<div>reid=${escapeHtml(reidScore)}</div>` : ""}
     <div>conf=${escapeHtml(conf)}</div>
     ${adlLabel ? `<div>ADL=${escapeHtml(String(adlLabel))}</div>` : ""}
     <div>${escapeHtml(ts)}</div>
@@ -489,15 +525,18 @@ function addGalleryItem(camId, data) {
   item.appendChild(meta);
   box.prepend(item);
 
-  while (box.children.length > 20) {
-    box.removeChild(box.lastChild);
-  }
+  // Cap at max_gallery_items
+  while (box.children.length > 20) box.removeChild(box.lastChild);
 }
 
 function clearGallery(camId) {
   const box = document.getElementById(`gallery-box-${camId}`);
   if (box) box.innerHTML = "";
+  // Also reset dedup keys for this camera so new items appear immediately
+  galleryKeys[camId] = new Set();
 }
+
+// ── Security helpers ──────────────────────────────────────────────────────────
 
 function maskRtsp(str) {
   return String(str || "").replace(/rtsp:\/\/[^\s"'<>]+/gi, (url) => {
@@ -516,57 +555,42 @@ function maskRtsp(str) {
 }
 
 function escapeHtml(str) {
-  return str.replace(/[&<>"']/g, function(m) {
-    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m];
-  });
+  return String(str).replace(/[&<>"']/g, (m) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m])
+  );
 }
+
+// ── Event binding ─────────────────────────────────────────────────────────────
 
 function bindUIEvents() {
   [1, 2].forEach((camId) => {
-    const selectEl = document.getElementById(`cam${camId}-display`);
-    if (selectEl) {
-      selectEl.addEventListener("change", () => selectRtspCamera(camId));
-    }
+    document.getElementById(`cam${camId}-display`)
+      ?.addEventListener("change", () => selectRtspCamera(camId));
 
-    const rtspInput = document.getElementById(`rtsp-upload-${camId}`);
-    if (rtspInput) {
-      rtspInput.addEventListener("change", (event) => handleRtspUpload(event, camId));
-    }
+    document.getElementById(`rtsp-upload-${camId}`)
+      ?.addEventListener("change", (e) => handleRtspUpload(e, camId));
 
-    const fileInput = document.getElementById(`file-upload-${camId}`);
-    if (fileInput) {
-      fileInput.addEventListener("change", (event) => handleCamUpload(event, camId));
-    }
+    document.getElementById(`file-upload-${camId}`)
+      ?.addEventListener("change", (e) => handleCamUpload(e, camId));
 
-    const onBtn = document.getElementById(`btn-on-${camId}`);
-    if (onBtn) {
-      onBtn.addEventListener("click", () => startStream(camId));
-    }
+    document.getElementById(`btn-on-${camId}`)
+      ?.addEventListener("click", () => startStream(camId));
 
-    const offBtn = document.getElementById(`btn-off-${camId}`);
-    if (offBtn) {
-      offBtn.addEventListener("click", () => stopStream(camId));
-    }
+    document.getElementById(`btn-off-${camId}`)
+      ?.addEventListener("click", () => stopStream(camId));
 
-    const saveBtn = document.getElementById(`save-btn-${camId}`);
-    if (saveBtn) {
-      saveBtn.addEventListener("click", () => saveVideo(camId));
-    }
+    document.getElementById(`save-btn-${camId}`)
+      ?.addEventListener("click", () => saveVideo(camId));
 
-    const saveExcelBtn = document.getElementById(`save-excel-btn-${camId}`);
-    if (saveExcelBtn) {
-      saveExcelBtn.addEventListener("click", () => saveExcel(camId));
-    }
+    document.getElementById(`save-excel-btn-${camId}`)
+      ?.addEventListener("click", () => saveExcel(camId));
 
-    const clearBtn = document.getElementById(`clear-log-${camId}`);
-    if (clearBtn) {
-      clearBtn.addEventListener("click", () => clearLog(camId));
-    }
+    // clear-log and clear-gallery are INDEPENDENT buttons
+    document.getElementById(`clear-log-${camId}`)
+      ?.addEventListener("click", () => clearLog(camId));
 
-    const clearGalleryBtn = document.getElementById(`clear-gallery-${camId}`);
-    if (clearGalleryBtn) {
-      clearGalleryBtn.addEventListener("click", () => clearGallery(camId));
-    }
+    document.getElementById(`clear-gallery-${camId}`)
+      ?.addEventListener("click", () => clearGallery(camId));
   });
 
   document.querySelectorAll(".btn-module").forEach((btn) => {
@@ -578,23 +602,16 @@ function bindUIEvents() {
   });
 }
 
+// ── Exports ───────────────────────────────────────────────────────────────────
+
 Object.assign(window, {
-  handleRtspUpload,
-  handleCamUpload,
-  selectRtspCamera,
-  startStream,
-  stopStream,
-  toggleModule,
-  saveVideo,
-  saveExcel,
-  clearLog,
-  clearGallery,
-  loadConfiguredCameras,
-  bindUIEvents
+  handleRtspUpload, handleCamUpload, selectRtspCamera,
+  startStream, stopStream, toggleModule,
+  saveVideo, saveExcel, clearLog, clearGallery,
+  loadConfiguredCameras, bindUIEvents
 });
 
 window.addEventListener("DOMContentLoaded", () => {
   bindUIEvents();
   loadConfiguredCameras();
 });
-

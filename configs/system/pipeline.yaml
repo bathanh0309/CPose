@@ -21,10 +21,12 @@ output:
 pose:
   enabled: true
   weights: "models/yolo11n-pose.pt"
-  conf: 0.60
+  conf: 0.55
   iou: 0.5
+  imgsz: 416
   min_keypoints: 5
   min_keypoint_score: 0.35
+  infer_every_n_frames: 3
 
 tracking:
   enabled: true
@@ -38,7 +40,10 @@ tracking:
   min_keypoints: 5
   min_keypoint_score: 0.35
   infer_every_n_frames: 2
-  track_ttl_frames: 25
+  # TrackCache tuning (fixes ghost tracks)
+  track_ttl_frames: 12
+  min_conf_for_cache: 0.45
+  max_cached_tracks: 5
   tracker_yaml: "bytetrack.yaml"
   classes:
     - 0
@@ -68,7 +73,7 @@ ui:
   enabled: true
   log_metrics: true
   max_log_lines: 300
-  metrics_interval_frames: 5
+  metrics_interval_frames: 10
 
 web:
   threaded_camera: true
@@ -81,13 +86,13 @@ web:
   loop_local_video: true
   frame_skip_lag_multiplier: 2.0
   recording_buffer_max: 300
-  start_ai_on_person_only: true
+  start_ai_on_person_only: false
   person_gate_interval_frames: 3
   no_person_log_interval_frames: 30
   lost_person_grace_frames: 30
   draw_waiting_panel: true
   gallery_enabled: true
-  gallery_interval_frames: 20
+  gallery_interval_frames: 30
   max_gallery_items: 20
 
 reid:
@@ -100,7 +105,9 @@ reid:
   id_aliases:
     person01: APhu
   threshold: 0.55
-  reid_interval: 20
+  reid_interval: 30
+  min_track_age: 10
+  min_crop_area: 2500
   fastreid_config:
     MODEL:
       META_ARCHITECTURE: "Baseline"
@@ -172,7 +179,9 @@ reid:
 
 adl:
   enabled: true
-  model_type: "efficientgcn"
+  # backend: "rules" | "efficientgcn" | "disabled"
+  # posec3d is OFFLINE only -- never used in web realtime
+  model_type: "rules"
   device: "CPU"
   precision_hint: "f16"
   conf_threshold: 0.3
@@ -182,13 +191,16 @@ adl:
   weights: "models/posec3d_r50_ntu60.pth"
   export_dir: "data/output/clips_pkl"
   work_dir: "data/output/clips_pkl"
+  # export_pkl: false means no pkl spam during web realtime
+  export_pkl: false
   num_classes: 60
   seq_len: 48
   stride: 12
   max_idle_frames: 150
   default_label: 0
-    label_map_path: ".github/pose-c3d/tools/data/label_map/nturgbd_120.txt"
-  auto_infer: true
+  # label_map_path must be at same indent level as other adl keys (was wrongly indented before)
+  label_map_path: ".github/pose-c3d/tools/data/label_map/nturgbd_120.txt"
+  auto_infer: false
   mmaction_root: ".github/pose-c3d"
   posec3d_config:
     model:
@@ -239,40 +251,3 @@ adl:
         meta_keys: []
       - type: "ToTensor"
         keys: ["imgs"]
-    data:
-      videos_per_gpu: 32
-      workers_per_gpu: 4
-      test_dataloader:
-        videos_per_gpu: 1
-      test:
-        type: "PoseDataset"
-        ann_file: ""
-        split: "test"
-        pipeline: "__test_pipeline__"
-    optimizer:
-      type: "SGD"
-      lr: 0.4
-      momentum: 0.9
-      weight_decay: 0.0003
-    optimizer_config:
-      grad_clip:
-        max_norm: 40
-        norm_type: 2
-    lr_config:
-      policy: "CosineAnnealing"
-      by_epoch: false
-      min_lr: 0
-    total_epochs: 24
-    checkpoint_config:
-      interval: 1
-    evaluation:
-      interval: 1
-      metrics:
-        - "top_k_accuracy"
-        - "mean_class_accuracy"
-      topk: [1, 5]
-    log_config:
-      interval: 20
-      hooks:
-        - type: "TextLoggerHook"
-    log_level: "INFO"

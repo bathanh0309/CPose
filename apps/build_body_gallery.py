@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.reid.body_extractor import BodyExtractor
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.video import find_default_video_source, get_video_meta, open_video_source, safe_imshow
@@ -60,15 +59,25 @@ def draw_bbox(frame, bbox, label):
     cv2.putText(frame, label, (x1, max(24, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 180, 80), 2, cv2.LINE_AA)
 
 
-def create_extractor(cfg):
-    from src.reid.fast_reid import FastReIDExtractor
+def crop_bbox(frame, bbox):
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = map(int, bbox)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return frame[y1:y2, x1:x2]
 
-    return FastReIDExtractor(
-        config=cfg["reid"]["fastreid_config"],
-        weights_path=cfg["reid"]["weights"],
-        device=cfg["system"]["device"],
-        output_dir=cfg["reid"].get("output_dir"),
-        fastreid_root=cfg["reid"].get("fastreid_root"),
+
+def create_extractor(cfg):
+    from src.reid.osnet_reid import OSNetReID
+
+    return OSNetReID(
+        weight_path=cfg["reid"]["weights"],
+        threshold=cfg["reid"].get("threshold", 0.65),
+        reid_interval=cfg["reid"].get("reid_interval", 15),
+        max_gallery=cfg["reid"].get("max_gallery", 10),
+        min_crop_area=cfg["reid"].get("min_crop_area", 2500),
     )
 
 
@@ -95,7 +104,7 @@ def main():
     try:
         extractor = create_extractor(cfg)
     except Exception as exc:
-        logger.error(f"FastReID unavailable: {exc}")
+        logger.error(f"OSNet unavailable: {exc}")
         sys.exit(1)
 
     detector = None
@@ -108,7 +117,6 @@ def main():
 
     output_dir = ROOT / args.output_dir
     person_dir = output_dir / args.person_id
-    body_extractor = BodyExtractor(extractor)
     cap, _ = open_video_source(video_path)
     width, height, fps, total = get_video_meta(cap)
     show = not args.no_show
@@ -146,9 +154,10 @@ def main():
                     draw_bbox(display, det["bbox"], f"person {float(det.get('score', 0.0)):.2f}")
                     if not sampled:
                         continue
-                    feat = body_extractor.extract_from_bbox(frame, det["bbox"])
-                    if feat is None:
+                    crop = crop_bbox(frame, det["bbox"])
+                    if crop is None:
                         continue
+                    feat = extractor.extract(crop)
                     person_dir.mkdir(parents=True, exist_ok=True)
                     out_path = person_dir / f"emb_{len(saved_paths):02d}.npy"
                     np.save(str(out_path), feat)
@@ -156,7 +165,10 @@ def main():
                     scores.append(float(det.get("score", 0.0)))
                     saved_this_frame += 1
             elif sampled:
-                feat = body_extractor.extract_from_crop(frame)
+                try:
+                    feat = extractor.extract(frame)
+                except Exception:
+                    feat = None
                 if feat is not None:
                     person_dir.mkdir(parents=True, exist_ok=True)
                     out_path = person_dir / f"emb_{len(saved_paths):02d}.npy"
@@ -197,7 +209,7 @@ def main():
         "avg_detection_score": float(np.mean(scores)) if scores else 0.0,
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "elapsed_sec": round(time.time() - started_at, 2),
-        "note": "body embeddings via FastReID",
+        "note": "body embeddings via OSNet-x0.25",
     }
     save_meta(person_dir, meta)
     logger.info(f"Saved {len(saved_paths)} body embeddings at: {person_dir}")

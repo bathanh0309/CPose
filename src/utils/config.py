@@ -11,6 +11,7 @@ PATH_FIELDS = {
     ("pose", "weights"),
     ("tracking", "weights"),
     ("reid", "weights"),
+    ("reid", "research_weights"),
     ("reid", "output_dir"),
     ("reid", "gallery_dir"),
     ("reid", "fastreid_root"),
@@ -173,7 +174,7 @@ def validate_cfg(cfg: dict):
 
     required = {
         "pose": ["weights", "conf", "iou"],
-        "reid": ["fastreid_config", "weights", "gallery_dir", "threshold", "reid_interval"],
+        "reid": ["weights", "gallery_dir", "threshold", "reid_interval"],
         "adl": ["posec3d_config", "weights", "seq_len", "stride", "export_dir"],
         "system": ["device", "event_log", "vis_dir"],
         "tracking": ["person_conf", "iou", "min_box_area", "min_keypoints", "min_keypoint_score", "tracker_yaml"],

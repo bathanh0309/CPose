@@ -8,8 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.action.pose_buffer import PoseSequenceBuffer
-from src.action.rule_adl import classify_rule_adl
+from src.action.efficientgcn_adl import EfficientGCNADL
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.utils.config import load_pipeline_cfg
 from src.utils.logger import get_logger, log_frame_metrics
@@ -24,7 +23,7 @@ ADL_LABEL_MAP = None
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run YOLO11-Pose + pose clip export + optional PoseC3D ADL")
+    parser = argparse.ArgumentParser(description="Run YOLO11-Pose + EfficientGCN-B0 ADL")
     parser.add_argument("--source", type=str, default=None)
     parser.add_argument("--camera-id", type=str, default="cam01")
     parser.add_argument("--config", type=str, default=str(ROOT / "configs/system/pipeline.yaml"))
@@ -68,11 +67,6 @@ def adl_text(status):
     return f"ADL: {state}"
 
 
-def rule_status(pose_buffer, camera_id, track_id):
-    window = pose_buffer.latest_window(camera_id, track_id)
-    return classify_rule_adl(window)
-
-
 def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
@@ -101,28 +95,14 @@ def main():
         cfg["system"]["device"],
         tracking_cfg=cfg["tracking"],
     )
-    pose_buffer = PoseSequenceBuffer(
-        seq_len=cfg["adl"]["seq_len"],
-        stride=cfg["adl"]["stride"],
-        output_dir=cfg["adl"]["export_dir"],
-        default_label=cfg["adl"].get("default_label", 0),
-        max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
-        export_enabled=args.save_clips or cfg["adl"].get("auto_infer", False),
+    adl_model = EfficientGCNADL(
+        weight_path=cfg["adl"].get("weights", "models/2015_EfficientGCN-B0_ntu-xsub120.pth.tar"),
+        window=cfg["adl"].get("min_frames", 30),
+        stride=cfg["adl"].get("infer_every_n_frames", 15),
+        device="cpu",
     )
-
-    posec3d_runner = None
-    if cfg["adl"].get("auto_infer", False):
-        try:
-            from src.action.posec3d import PoseC3DRunner
-            posec3d_runner = PoseC3DRunner(
-                config=cfg["adl"]["posec3d_config"],
-                checkpoint=cfg["adl"]["weights"],
-                work_dir=cfg["adl"].get("work_dir", cfg["adl"]["export_dir"]),
-                num_classes=cfg["adl"].get("num_classes", 60),
-                mmaction_root=cfg["adl"].get("mmaction_root"),
-            )
-        except Exception as exc:
-            logger.warning(f"PoseC3D disabled: {exc}")
+    if adl_model.load_error:
+        logger.warning(f"EfficientGCN fallback=unknown: {adl_model.load_error}")
 
     source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
     if source is None:
@@ -168,50 +148,22 @@ def main():
                 if tid < 0:
                     draw_detection(frame, det, label="track=-1 ADL: waiting")
                     continue
-                status = pose_buffer.update(args.camera_id, tid, f"track_{tid}", frame_idx, det.get("keypoints"), det.get("keypoint_scores"), (h, w))
-                if status and status.get("status") == "exported":
-                    if posec3d_runner is None:
-                        status = rule_status(pose_buffer, args.camera_id, tid)
-                    else:
-                        try:
-                            result = posec3d_runner.run_test(status["pkl_path"])
-                            if isinstance(result, dict) and result.get("label") is not None:
-                                raw_label = result.get("label")
-                                label_name = raw_label
-                                label_id = None
-                                try:
-                                    if ADL_LABEL_MAP is not None and raw_label is not None:
-                                        lid = int(raw_label)
-                                        if 0 <= lid < len(ADL_LABEL_MAP):
-                                            label_name = ADL_LABEL_MAP[lid]
-                                            label_id = lid
-                                except Exception:
-                                    label_name = str(raw_label)
-                                status = {"status": "inferred", "label": label_name, "label_id": label_id, "score": result.get("score", 0.0)}
-                            elif isinstance(result, dict):
-                                status = result
-                        except Exception as exc:
-                            logger.warning(f"PoseC3D failed for {status['pkl_path']}: {exc}", exc_info=True)
-                            status = {"status": "failed", "label": None, "score": 0.0}
-                        if status.get("status") != "inferred":
-                            status = rule_status(pose_buffer, args.camera_id, tid)
-                elif status and status.get("status") == "disabled" and status.get("reason") == "clip_export_disabled":
-                    status = rule_status(pose_buffer, args.camera_id, tid)
-                elif status and status.get("status") == "collecting":
-                    previous = track_status.get(tid)
-                    if previous and previous.get("status") == "inferred":
-                        status = {
-                            **previous,
-                            "current_len": status.get("current_len"),
-                            "seq_len": status.get("seq_len"),
-                        }
+                label, score = adl_model.update(tid, det.get("keypoints"), frame_idx)
+                current_len = len(adl_model.buffers.get(tid, []))
+                status = {
+                    "status": "inferred" if label != "unknown" else "collecting",
+                    "label": label,
+                    "score": score,
+                    "current_len": current_len,
+                    "seq_len": adl_model.window,
+                }
                 track_status[tid] = status
                 draw_detection(frame, det, label=f"track={tid} {adl_text(status)}")
 
-            first_status = next(iter(track_status.values()), {"status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"]})
+            first_status = next(iter(track_status.values()), {"status": "waiting", "current_len": 0, "seq_len": adl_model.window})
             fps_value = fps_counter.tick()
             draw_info_panel(frame, {
-                "Module": "YOLO+Pose Buffer+PoseC3D",
+                "Module": "YOLO+EfficientGCN-B0",
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
@@ -228,7 +180,7 @@ def main():
                 persons=len(detections),
                 adl_status=first_status.get("status", "waiting"),
                 sequence_len=first_status.get("current_len", 0),
-                seq_len_required=first_status.get("seq_len", cfg["adl"]["seq_len"]),
+                seq_len_required=first_status.get("seq_len", adl_model.window),
             )
             draw_adl_status(frame, first_status, pos=(10, 150))
 

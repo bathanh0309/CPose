@@ -13,6 +13,7 @@ tqdm>=4.66.0
 ultralytics>=8.2.0
 lapx>=0.5.2
 torchreid>=0.2.5
+filterpy>=1.4.5
 
 yacs>=0.1.8
 gdown>=5.1.0

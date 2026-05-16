@@ -6,7 +6,7 @@ benchmark:
   warmup_frames: 30
   max_frames: 0
   sample_interval: 1
-  device: "auto"
+  device: "cpu"
 
 runtime_metrics:
   fps:

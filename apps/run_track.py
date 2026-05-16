@@ -40,8 +40,8 @@ def main():
 
     if cfg["tracking"].get("model_type") == "pedestrian":
         detector = PedestrianYoloTracker(
-            weights=cfg["tracking"].get("weights", ROOT / "models/tracking.pt"),
-            conf=cfg["tracking"].get("person_conf", 0.60),
+            weights=cfg["tracking"].get("weights", ROOT / "models/yolo11n.pt"),
+            conf=cfg["tracking"].get("conf", 0.40),
             iou=cfg["tracking"].get("iou", 0.5),
             tracker=cfg["tracking"]["tracker_yaml"],
             device=cfg["system"]["device"],

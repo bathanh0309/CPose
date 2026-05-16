@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run YOLO11-Pose + ByteTrack + FastReID visualization")
+    parser = argparse.ArgumentParser(description="Run YOLO11 + ByteTrack + OSNet-x0.25 ReID visualization")
     parser.add_argument("--source", type=str, default=None)
     parser.add_argument("--camera-id", type=str, default="cam01")
     parser.add_argument("--config", type=str, default=str(ROOT / "configs/system/pipeline.yaml"))
@@ -48,15 +48,15 @@ def main():
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
     if cfg["tracking"].get("model_type") == "pedestrian":
         detector = PedestrianYoloTracker(
-            weights=cfg["tracking"].get("weights", ROOT / "models/tracking.pt"),
-            conf=cfg["tracking"].get("person_conf", 0.60),
+            weights=cfg["tracking"].get("weights", ROOT / "models/yolo11n.pt"),
+            conf=cfg["tracking"].get("conf", 0.40),
             iou=cfg["tracking"].get("iou", 0.5),
             tracker=cfg["tracking"]["tracker_yaml"],
             device=cfg["system"]["device"],
             classes=cfg["tracking"].get("classes", [0]),
             tracking_cfg=cfg["tracking"],
         )
-        module_name = "Pedestrian+ByteTrack+FastReID"
+        module_name = "YOLO+ByteTrack+OSNet"
     else:
         detector = YoloPoseTracker(
             cfg["pose"]["weights"],
@@ -66,30 +66,27 @@ def main():
             cfg["system"]["device"],
             tracking_cfg=cfg["tracking"],
         )
-        module_name = "YOLO-Pose+ByteTrack+FastReID"
+        module_name = "YOLO-Pose+ByteTrack+OSNet"
     extractor = None
-    gallery = None
     reid_warning = None
     try:
-        from src.reid.fast_reid import FastReIDExtractor
-        from src.reid.gallery import ReIDGallery
+        from src.reid.osnet_reid import OSNetReID
 
-        extractor = FastReIDExtractor(
-            config=cfg["reid"]["fastreid_config"],
-            weights_path=cfg["reid"]["weights"],
-            device=cfg["system"]["device"],
-            output_dir=cfg["reid"].get("output_dir"),
-            fastreid_root=cfg["reid"].get("fastreid_root"),
+        extractor = OSNetReID(
+            weight_path=cfg["reid"]["weights"],
+            threshold=cfg["reid"].get("threshold", 0.65),
+            reid_interval=cfg["reid"].get("reid_interval", 15),
+            max_gallery=cfg["reid"].get("max_gallery", 10),
+            min_crop_area=cfg["reid"].get("min_crop_area", 2500),
         )
-        gallery = ReIDGallery(
-            extractor,
-            cfg["reid"]["gallery_dir"],
-            embedding_dirs=cfg["reid"].get("embedding_dirs"),
-            id_aliases=cfg["reid"].get("id_aliases"),
+        loaded = extractor.load_gallery_embeddings(
+            cfg["reid"].get("embedding_dirs"),
+            cfg["reid"].get("id_aliases"),
         )
-        gallery.build()
+        if loaded <= 0:
+            reid_warning = "OSNet gallery empty"
     except Exception as exc:
-        reid_warning = f"FastReID unavailable: {exc}"
+        reid_warning = f"OSNet unavailable: {exc}"
         logger.warning(reid_warning)
 
     source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
@@ -142,17 +139,18 @@ def main():
                 if tid < 0 or crop is None:
                     draw_detection(frame, det, label=f"track={tid}")
                     continue
-                if extractor is not None and gallery is not None:
+                if extractor is not None:
                     try:
-                        feat = extractor.extract(crop)
                         cached = gid_cache.get(tid)
                         if cached and frame_idx % int(cfg["reid"]["reid_interval"]) != 0:
                             gid, score, status = cached["gid"], cached["score"], "cache_hit"
                         else:
-                            gid, score = gallery.query(feat, threshold=cfg["reid"]["threshold"])
+                            x1, y1, x2, y2 = map(float, det["bbox"])
+                            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                            gid, score = extractor.identify(crop, area)
                             status = "gallery_match" if gid != "unknown" else "gallery_miss"
                             gid_cache[tid] = {"gid": gid, "score": score, "frame_idx": frame_idx}
-                        last_matches = gallery.get_top_matches(feat, topk=3)
+                        last_matches = extractor.get_top_matches(crop, topk=3)
                         last_crop = crop.copy()
                     except Exception as exc:
                         logger.warning(f"[frame {frame_idx}] ReID failed for track={tid}: {exc}")
@@ -168,7 +166,7 @@ def main():
                 draw_detection(frame, det, label=f"track={tid} gid={gid} score={score:.2f} {status}")
 
             fps_value = fps_counter.tick()
-            gallery_size = len(gallery.prototypes) if gallery is not None else 0
+            gallery_size = len(extractor.gallery) if extractor is not None else 0
             metrics_interval = int(cfg.get("ui", {}).get("metrics_interval_frames", 5))
             info = {
                 "Module": module_name,
@@ -194,7 +192,7 @@ def main():
             )
             if reid_warning:
                 info["Warning"] = reid_warning[:48]
-            elif gallery is not None and gallery.initial_empty:
+            elif extractor is not None and not extractor.gallery:
                 info["Warning"] = "ReID gallery empty"
             draw_info_panel(frame, info)
             display = draw_reid_panel(frame, last_crop, last_matches, panel_w=panel_w)

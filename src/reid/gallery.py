@@ -24,6 +24,16 @@ class ReIDGallery:
         self.index_by_dim = {}
 
     @staticmethod
+    def _standardize_dim(feat, target_dim=512):
+        feat = feat.flatten()
+        if feat.shape[0] == target_dim:
+            return feat
+        feat_2d = feat.reshape(1, -1)
+        import cv2
+        resized = cv2.resize(feat_2d, (target_dim, 1), interpolation=cv2.INTER_LINEAR).flatten()
+        return resized / (np.linalg.norm(resized) + 1e-12)
+
+    @staticmethod
     def cosine_similarity(a, b):
         denom = (np.linalg.norm(a) * np.linalg.norm(b)) + 1e-12
         return float(np.dot(a, b) / denom)
@@ -60,7 +70,8 @@ class ReIDGallery:
                     img = cv2.imread(str(img_path))
                     if img is None:
                         continue
-                    feats.append(self.extractor.extract(img))
+                    feat = self.extractor.extract(img)
+                    feats.append(self._standardize_dim(feat))
 
             if feats:
                 self._add_feature_stack(self._canonical_id(person_dir.name), feats, source="image gallery")
@@ -81,6 +92,8 @@ class ReIDGallery:
                 for npy_path in sorted(person_dir.glob("*.npy")):
                     try:
                         feat = np.load(npy_path).astype(np.float32).reshape(-1)
+                        feat = self._standardize_dim(feat)
+                        feat = self._standardize_dim(feat)
                     except Exception as exc:
                         logger.warning(f"Cannot load embedding {npy_path}: {exc}")
                         continue
@@ -159,6 +172,7 @@ class ReIDGallery:
         if not self.prototypes:
             return "unknown", -1.0
 
+        feat = self._standardize_dim(feat)
         dim = int(feat.shape[0])
         if dim in self.index_by_dim:
             ids, matrix = self.index_by_dim[dim]
@@ -188,6 +202,7 @@ class ReIDGallery:
         return best_id, best_score
 
     def get_top_matches(self, feat, topk=3):
+        feat = self._standardize_dim(feat)
         matches = []
         for person_id, proto in self.prototypes.items():
             if proto.shape != feat.shape:
@@ -199,6 +214,7 @@ class ReIDGallery:
     def add_embedding(self, person_id, feat):
         if person_id == "unknown":
             raise ValueError('Refusing to add ReID embedding under person_id="unknown"')
+        feat = self._standardize_dim(feat)
         key = (str(person_id), int(feat.shape[0]))
         if key not in self.memory:
             self.memory[key] = np.expand_dims(feat, axis=0)

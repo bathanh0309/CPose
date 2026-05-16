@@ -66,4 +66,3 @@ Thumbs.db
 tmp/
 temp/
 .env
-openvino_cache/

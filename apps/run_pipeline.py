@@ -23,8 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.action.pose_buffer import PoseSequenceBuffer
-from src.action.rule_adl import classify_rule_adl
+from src.action.efficientgcn_adl import EfficientGCNADL
 from src.core.event import EventBus, NullEventBus
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.trackers.bytetrack import ByteTrackWrapper
@@ -58,7 +57,7 @@ ADL_LABEL_MAP = None
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    p = argparse.ArgumentParser(description="CPose Full Pipeline — Track+Pose+ReID(Face+Body)+ADL")
+    p = argparse.ArgumentParser(description="CPose Full Pipeline - YOLO+ByteTrack+OSNet+EfficientGCN")
     p.add_argument("--source",      type=str, default=None)
     p.add_argument("--camera-id",   type=str, default="cam01")
     p.add_argument("--config",      type=str, default=str(ROOT / "configs/system/pipeline.yaml"))
@@ -116,11 +115,6 @@ def adl_label(status: dict | None) -> str:
     return f"ADL: {s}"
 
 
-def rule_status(pose_buffer, camera_id, track_id):
-    window = pose_buffer.latest_window(camera_id, track_id)
-    return classify_rule_adl(window)
-
-
 def build_overlay_label(tid, gid, score, weights, adl_status) -> str:
     mode = weights.get("mode", "")
     mode_short = {"face_dominant": "F↑", "body_dominant": "B↑", "balanced": "FB",
@@ -169,75 +163,41 @@ def main():
     tracker = ByteTrackWrapper(detector)
 
     # ── Body Extractor ───────────────────────────────────────────────────────
-    body_extractor = None
-    multimodal_gallery = None
-    gid_mgr = None
+    osnet_reid = None
     reid_warning = None
 
     try:
-        from src.reid.body_extractor import BodyExtractor
-        from src.reid.fast_reid import FastReIDExtractor
-        from src.reid.fusion import MultiModalGallery
-        from src.core.global_id import GlobalIDManager
+        from src.reid.osnet_reid import OSNetReID
 
-        extractor = FastReIDExtractor(
-            config=cfg["reid"]["fastreid_config"],
-            weights_path=cfg["reid"]["weights"],
-            device=device,
-            output_dir=cfg["reid"].get("output_dir"),
-            fastreid_root=cfg["reid"].get("fastreid_root"),
+        osnet_reid = OSNetReID(
+            weight_path=cfg["reid"]["weights"],
+            threshold=cfg["reid"].get("threshold", 0.65),
+            reid_interval=cfg["reid"].get("reid_interval", 15),
+            max_gallery=cfg["reid"].get("max_gallery", 10),
+            min_crop_area=cfg["reid"].get("min_crop_area", 2500),
         )
-        body_extractor = BodyExtractor(extractor)
-
-        multimodal_gallery = MultiModalGallery(
-            face_dir=cfg["reid"].get("face_dir", "data/face"),
-            body_dir=cfg["reid"].get("body_dir", "data/body"),
-            id_aliases=cfg["reid"].get("id_aliases"),
+        loaded = osnet_reid.load_gallery_embeddings(
+            cfg["reid"].get("embedding_dirs"),
+            cfg["reid"].get("id_aliases"),
         )
-        multimodal_gallery.build()
-
-        gid_mgr = GlobalIDManager(
-            gallery=multimodal_gallery,
-            threshold=cfg["reid"]["threshold"],
-            reid_interval=cfg["reid"]["reid_interval"],
-        )
-
-        if multimodal_gallery.is_empty:
-            reid_warning = "ReID gallery empty (face+body)"
+        if loaded <= 0:
+            reid_warning = "OSNet gallery empty"
         else:
-            logger.info(
-                f"MultiModal gallery: "
-                f"face={len(multimodal_gallery.face_prototypes)} "
-                f"body={len(multimodal_gallery.body_prototypes)} persons"
-            )
+            logger.info(f"OSNet gallery loaded: {loaded} persons")
 
     except Exception as exc:
-        reid_warning = f"MultiModal ReID unavailable: {exc}"
+        reid_warning = f"OSNet ReID unavailable: {exc}"
         logger.warning(reid_warning)
 
     # ── ADL buffer + PoseC3D ─────────────────────────────────────────────────
-    pose_buffer = PoseSequenceBuffer(
-        seq_len=cfg["adl"]["seq_len"],
-        stride=cfg["adl"]["stride"],
-        output_dir=cfg["adl"]["export_dir"],
-        default_label=cfg["adl"].get("default_label", 0),
-        max_idle_frames=cfg["adl"].get("max_idle_frames", 150),
-        export_enabled=args.save_clips or cfg["adl"].get("auto_infer", False),
+    adl_model = EfficientGCNADL(
+        weight_path=cfg["adl"].get("weights", "models/2015_EfficientGCN-B0_ntu-xsub120.pth.tar"),
+        window=cfg["adl"].get("min_frames", 30),
+        stride=cfg["adl"].get("infer_every_n_frames", 15),
+        device="cpu",
     )
-
-    posec3d_runner = None
-    if cfg["adl"].get("auto_infer", False):
-        try:
-            from src.action.posec3d import PoseC3DRunner
-            posec3d_runner = PoseC3DRunner(
-                config=cfg["adl"]["posec3d_config"],
-                checkpoint=cfg["adl"]["weights"],
-                work_dir=cfg["adl"].get("work_dir", cfg["adl"]["export_dir"]),
-                num_classes=cfg["adl"].get("num_classes", 60),
-                mmaction_root=cfg["adl"].get("mmaction_root"),
-            )
-        except Exception as exc:
-            logger.warning(f"PoseC3D disabled: {exc}")
+    if adl_model.load_error:
+        logger.warning(f"EfficientGCN fallback=unknown: {adl_model.load_error}")
 
     # ── Event bus ────────────────────────────────────────────────────────────
     save_events = bool(args.save_events)
@@ -316,12 +276,10 @@ def main():
             lost_ids = prev_track_ids - curr_ids
 
             # Cleanup lost tracks
-            if gid_mgr is not None:
-                for tid in lost_ids:
-                    gid_mgr.forget_track(args.camera_id, tid)
-                    if ui_logger:
-                        ui_logger.log(args.camera_id, "INFO", "pipeline",
-                                      f"Lost track id={tid}")
+            for tid in lost_ids:
+                adl_model.cleanup_track(tid)
+                if ui_logger:
+                    ui_logger.log(args.camera_id, "INFO", "pipeline", f"Lost track id={tid}")
             for tid in lost_ids:
                 track_status.pop(tid, None)
             prev_track_ids = curr_ids
@@ -337,34 +295,20 @@ def main():
                 face_conf = 0.0
 
                 # ── Assign GlobalID ──────────────────────────────────────────
-                if gid_mgr is not None and tid >= 0 and crop is not None:
+                if osnet_reid is not None and tid >= 0 and crop is not None:
                     try:
-                        gid, reid_score, reid_status, weights = gid_mgr.assign(
-                            camera_id=args.camera_id,
-                            local_track_id=tid,
-                            frame=frame,
-                            bbox=det["bbox"],
-                            frame_idx=frame_idx,
-                            face_feat=face_feat,
-                            face_conf=face_conf,
-                            body_extractor=body_extractor,
-                        )
+                        x1, y1, x2, y2 = map(float, det["bbox"])
+                        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                        gid, reid_score = osnet_reid.identify(crop, area)
+                        reid_status = "gallery_match" if gid != "unknown" else "gallery_miss"
+                        weights = {"mode": "body_only"}
+                        last_matches = osnet_reid.get_top_matches(crop, topk=3)
+                        last_query_crop = crop.copy()
                     except Exception as exc:
                         logger.warning(f"[frame {frame_idx}] ReID failed tid={tid}: {exc}", exc_info=True)
                         gid, reid_score, reid_status, weights = f"track_{tid}", 0.0, "reid_failed", {}
 
                     # Top-K matches cho panel (nếu gallery có data)
-                    if multimodal_gallery is not None and not multimodal_gallery.is_empty:
-                        try:
-                            body_feat_panel = (
-                                body_extractor.extract_from_bbox(frame, det["bbox"])
-                                if body_extractor else None
-                            )
-                            matches_raw = multimodal_gallery.query_all(face_feat, body_feat_panel, face_conf)
-                            last_matches = [(pid, sc, None) for pid, sc, _ in matches_raw[:3]]
-                            last_query_crop = crop.copy() if crop is not None else None
-                        except Exception:
-                            pass
                 else:
                     gid = f"track_{tid}" if tid >= 0 else "unknown"
                     reid_score, reid_status, weights = 0.0, "reid_unavailable", {}
@@ -373,69 +317,19 @@ def main():
 
                 # ── 5: ADL buffer ────────────────────────────────────────────
                 adl_status = {"status": "waiting", "current_len": 0,
-                              "seq_len": cfg["adl"]["seq_len"], "pkl_path": None}
+                              "seq_len": adl_model.window, "pkl_path": None}
                 if tid >= 0:
-                    adl_status = pose_buffer.update(
-                        args.camera_id, tid, gid, frame_idx,
-                        det.get("keypoints"), det.get("keypoint_scores"), (h, w),
-                    )
+                    label_name, action_score = adl_model.update(tid, det.get("keypoints"), frame_idx)
+                    adl_status = {
+                        "status": "inferred" if label_name != "unknown" else "collecting",
+                        "label": label_name,
+                        "score": float(action_score),
+                        "current_len": len(adl_model.buffers.get(tid, [])),
+                        "seq_len": adl_model.window,
+                        "pkl_path": None,
+                    }
 
-                    if adl_status and adl_status.get("status") == "exported":
-                        event_bus.emit("pose_clip_exported", {
-                            "camera_id": args.camera_id, "frame_idx": frame_idx,
-                            "local_track_id": tid, "global_id": gid,
-                            "pkl_path": adl_status.get("pkl_path"),
-                        })
-                        if posec3d_runner is None:
-                            adl_status = rule_status(pose_buffer, args.camera_id, tid)
-                        else:
-                            try:
-                                result = posec3d_runner.run_test(adl_status["pkl_path"])
-                                if isinstance(result, dict) and result.get("label") is not None:
-                                    # Map numeric label -> human name if label map available
-                                    raw_label = result.get("label")
-                                    label_name = raw_label
-                                    label_id = None
-                                    try:
-                                        if ADL_LABEL_MAP is not None and raw_label is not None:
-                                            lid = int(raw_label)
-                                            if 0 <= lid < len(ADL_LABEL_MAP):
-                                                label_name = ADL_LABEL_MAP[lid]
-                                                label_id = lid
-                                    except Exception:
-                                        label_name = str(raw_label)
-
-                                    adl_status = {
-                                        "status": "inferred",
-                                        "label": label_name,
-                                        "label_id": label_id,
-                                        "score": result.get("score", 0.0),
-                                        "pkl_path": adl_status.get("pkl_path"),
-                                    }
-                                    event_bus.emit("adl_result", {
-                                        "camera_id": args.camera_id, "frame_idx": frame_idx,
-                                        "local_track_id": tid, "global_id": gid,
-                                        "label": label_name,
-                                        "label_id": label_id,
-                                        "score": float(result.get("score", 0.0)),
-                                    })
-                                    if ui_logger:
-                                        ui_logger.log(
-                                            args.camera_id, "INFO", "adl",
-                                            f"ADL: gid={gid} action={label_name} "
-                                            f"score={result.get('score', 0.0):.2f}",
-                                        )
-                                elif isinstance(result, dict):
-                                    adl_status = {**result, "pkl_path": adl_status.get("pkl_path")}
-                            except Exception as exc:
-                                logger.warning(f"PoseC3D failed: {exc}", exc_info=True)
-                                adl_status = {"status": "failed", "label": None,
-                                              "score": 0.0, "pkl_path": adl_status.get("pkl_path")}
-                            if adl_status.get("status") != "inferred":
-                                adl_status = rule_status(pose_buffer, args.camera_id, tid)
-                    elif adl_status and adl_status.get("status") == "disabled" and adl_status.get("reason") == "clip_export_disabled":
-                        adl_status = rule_status(pose_buffer, args.camera_id, tid)
-                    elif adl_status and adl_status.get("status") == "collecting":
+                    if adl_status and adl_status.get("status") == "collecting":
                         previous = track_status.get(tid)
                         if previous and previous.get("status") == "inferred":
                             adl_status = {
@@ -463,7 +357,7 @@ def main():
             # ── UILogger metrics (mỗi N frame) ───────────────────────────────
             current_fps = fps_counter.tick()
             first_status = next(iter(track_status.values()), {
-                "status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"],
+                "status": "waiting", "current_len": 0, "seq_len": adl_model.window,
             })
             log_frame_metrics(
                 logger,
@@ -474,7 +368,7 @@ def main():
                 interval=metrics_interval,
                 persons=len(detections),
                 tracked=len(curr_ids),
-                reid_available=gid_mgr is not None,
+                reid_available=osnet_reid is not None,
                 adl_status=first_status.get("status", "waiting"),
                 sequence_len=first_status.get("current_len", 0),
             )
@@ -488,9 +382,9 @@ def main():
                     "persons": len(detections),
                     "tracked": len(curr_ids),
                     "reid_assigned": sum(
-                        1 for v in gid_mgr._cache.values()
-                        if "gid_" in v.get("global_id", "")
-                    ) if gid_mgr else 0,
+                        1 for s in track_status.values()
+                        if s is not None
+                    ) if osnet_reid else 0,
                     "adl_collecting": sum(
                         1 for s in track_status.values()
                         if s and s.get("status") == "collecting"
@@ -503,14 +397,13 @@ def main():
                 })
 
             # ── Info panel ───────────────────────────────────────────────────
-            face_count = len(multimodal_gallery.face_prototypes) if multimodal_gallery else 0
-            body_count = len(multimodal_gallery.body_prototypes) if multimodal_gallery else 0
+            gallery_count = len(osnet_reid.gallery) if osnet_reid else 0
             info: dict = {
-                "Module": "Full CPose (Face+Body ReID)",
+                "Module": "Full CPose (OSNet+EfficientGCN)",
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
-                "Gallery F/B": f"{face_count}/{body_count}",
+                "Gallery": gallery_count,
                 "Device": device,
                 "FPS": f"{current_fps:.1f}",
             }
@@ -520,7 +413,7 @@ def main():
             draw_info_panel(frame, info)
 
             first_status = next(iter(track_status.values()), {
-                "status": "waiting", "current_len": 0, "seq_len": cfg["adl"]["seq_len"],
+                "status": "waiting", "current_len": 0, "seq_len": adl_model.window,
             })
             draw_adl_status(frame, first_status, pos=(10, 170))
             display = draw_reid_panel(frame, last_query_crop, last_matches, panel_w=panel_w)

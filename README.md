@@ -94,3 +94,7 @@ Sử dụng file video đã được chỉ định sẵn trong thư mục `data/
 2. Dán đường dẫn test ở trên vào ô nhập dữ liệu của Camera 1 hoặc Camera 2.
 3. Chọn các module cần chạy (Track, Pose, ReID, ADL).
 4. Nhấn nút **▶ ON** để bắt đầu phân tích thời gian thực.
+
+
+
+

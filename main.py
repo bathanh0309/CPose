@@ -39,8 +39,10 @@ PIPELINE_CONFIG = BASE_DIR / "configs" / "system" / "pipeline.yaml"
 UPLOAD_DIR      = BASE_DIR / "data" / "uploads"
 OUTPUT_DIR      = BASE_DIR / "data" / "output" / "vis"
 STATIC_DIR      = BASE_DIR / "static"
+MODE            = os.getenv("CPOSE_MODE", "realtime")
+USE_GPU         = os.getenv("CPOSE_USE_GPU", "false").lower() == "true"
 
-BUFFER_MAX        = 300
+BUFFER_MAX        = 500
 _frame_buffers:   Dict[str, deque] = {}
 _session_meta:    Dict[str, dict]  = {}
 _recording_flags: Dict[str, bool]  = {}
@@ -56,6 +58,28 @@ app.add_middleware(
 )
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def print_startup_config(mode: str, use_gpu: bool) -> None:
+    """Print the fixed CPU realtime pipeline allocation."""
+    gpu_state = "enabled" if use_gpu else "disabled"
+    print("╔══════════════════════════════════════════════╗")
+    print("║          CPose Pipeline Configuration        ║")
+    print("╠══════════════╦═══════════════╦═══════════════╣")
+    print("║ Module       ║ Model         ║ Device        ║")
+    print("╠══════════════╬═══════════════╬═══════════════╣")
+    print("║ Detect       ║ yolo11n       ║ CPU           ║")
+    print("║ Pose         ║ yolo11n-pose  ║ CPU           ║")
+    print("║ Tracking     ║ ByteTrack     ║ CPU           ║")
+    print("║ ReID         ║ OSNet-x0.25   ║ CPU           ║")
+    print("║ ADL          ║ EfficientGCN  ║ CPU           ║")
+    print("║ RTSP         ║ CAP_FFMPEG    ║ CPU           ║")
+    print("║ WebSocket    ║ binary bytes  ║ CPU           ║")
+    print("╚══════════════╩═══════════════╩═══════════════╝")
+    print(f"Mode: {mode} | GPU: {gpu_state}")
+
+
+print_startup_config(MODE, USE_GPU)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -586,7 +610,7 @@ async def stream_video(
     cfg = get_pipeline_cfg()
     web_cfg = cfg.get("web", {})
     metrics_interval   = int(web_cfg.get("metrics_interval_frames", cfg.get("ui", {}).get("metrics_interval_frames", 10)))
-    target_fps         = float(web_cfg.get("target_fps", 15))
+    target_fps         = float(web_cfg.get("target_fps", 25))
     target_interval    = 1.0 / max(target_fps, 1.0)
     jpeg_quality_base  = int(web_cfg.get("jpeg_quality", 55))
     jpeg_quality_min   = int(web_cfg.get("jpeg_quality_min", 45))

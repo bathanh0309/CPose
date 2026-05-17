@@ -224,3 +224,172 @@ data/
 - [ByteTrack paper](https://arxiv.org/abs/2110.06864)
 - [OSNet paper](https://arxiv.org/abs/1905.00953)
 - [EfficientGCN paper](https://arxiv.org/abs/2106.15125)
+
+## Lộ trình 5 tầng
+
+### Tầng 0 — Config & Scaffold (làm trước tiên)
+
+#### Task 0.1 — Tạo configs/system/pipeline.yaml
+```text
+Tạo file configs/system/pipeline.yaml với đầy đủ các key:
+
+- model_paths: rtmpose, reid, gcn, tracking
+- reid: interval=10, cosine_threshold=0.55
+- gcn: seq_len=30, stride=12
+- logging: level=INFO
+Không thêm key nào ngoài danh sách trên.
+```
+
+#### Task 0.2 — Tạo src/utils/logger.py
+```text
+Viết src/utils/logger.py.
+
+- Hàm get_logger(name) trả về Python logger chuẩn.
+- Format bắt buộc: [HH:MM:SS] [LEVEL] message
+- KHÔNG log theo từng frame — chỉ export hàm, không tự gọi.
+```
+
+#### Task 0.3 — Tạo src/utils/gallery.py
+```text
+Viết src/utils/gallery.py. Class EmbeddingGallery:
+
+- load_from_dir(path): đọc tất cả *.npy trong data/embeddings/, key = tên file bỏ .npy
+- add(person_id, embedding): thêm embedding mới vào gallery
+- save(person_id, path): lưu embedding ra file .npy
+- get_all(): trả về dict {person_id: embedding}
+Không phụ thuộc vào bất kỳ module pipeline nào.
+```
+
+### Tầng 1 — Module Pipeline (viết độc lập từng file)
+
+#### Task 1.1 — src/pipeline/pose_estimator.py
+```text
+Viết src/pipeline/pose_estimator.py. Class RTMPoseEstimator:
+
+- **init**(config): đọc model path từ pipeline.yaml, load ONNX bằng onnxruntime.
+- infer(frame: np.ndarray) -> tuple[bboxes: np.ndarray(N,4), keypoints: np.ndarray(N,17,3)]
+- Preprocess: resize về 256x192, normalize.
+- Chạy hoàn toàn trên CPU (providers=["CPUExecutionProvider"]).
+- Không import bất kỳ file nào trong src/pipeline/.
+```
+
+#### Task 1.2 — src/pipeline/tracker.py
+```text
+Viết src/pipeline/tracker.py. Class ByteTracker:
+
+- **init**(config): đọc bytetrack.yaml path từ pipeline.yaml.
+- update(bboxes, scores, frame) -> list[Track]
+  Mỗi Track có: track_id (int), bbox (4,), is_confirmed (bool)
+- Dùng Ultralytics ByteTrack hoặc boxmot — KHÔNG implement lại từ đầu.
+- Không phụ thuộc pose_estimator.py.
+```
+
+#### Task 1.3 — src/pipeline/reid_extractor.py
+```text
+Viết src/pipeline/reid_extractor.py. Class OSNetReID:
+
+- **init**(config, gallery: EmbeddingGallery): load osnet_x0_25 từ torchreid.
+- extract(crop: np.ndarray) -> np.ndarray (512-dim, L2-normalized)
+- match(embedding) -> global_id (str) hoặc None nếu cosine < threshold
+- should_run(frame_idx) -> bool  # True nếu frame_idx % reid_interval == 0
+- Đọc cosine_threshold và interval từ config. KHÔNG hardcode.
+```
+
+#### Task 1.4 — src/pipeline/action_recognizer.py
+```text
+Viết src/pipeline/action_recognizer.py. Class EfficientGCNRecognizer:
+
+- **init**(config): load model .pth, đọc seq_len và stride từ config.
+- push_keypoints(track_id, keypoints_17x3): thêm vào buffer của track đó.
+- start_async(track_id, callback): khi buffer đủ seq_len,
+  chạy inference trong threading.Thread riêng,
+  gọi callback(track_id, action_label) khi xong.
+- TUYỆT ĐỐI KHÔNG block luồng gọi (non-blocking).
+```
+
+### Tầng 2 — Utils vẽ (phụ thuộc tầng 1)
+
+#### Task 2.1 — src/utils/draw.py
+```text
+Viết src/utils/draw.py. Hàm duy nhất:
+draw_frame(frame, tracks, keypoints_map, action_map, reid_map) -> np.ndarray
+
+- tracks: list[Track] từ ByteTracker
+- keypoints_map: dict {track_id: np.ndarray(17,3)}
+- action_map: dict {track_id: str}
+- reid_map: dict {track_id: global_id}
+Vẽ: skeleton 17 keypoints, bbox, local_track_id, global_id, action label.
+Màu bbox: xanh lá nếu có global_id, vàng nếu chưa match.
+Không import pipeline modules.
+```
+
+### Tầng 3 — Orchestrator (gộp tầng 1+2)
+
+#### Task 3.1 — apps/run_single.py
+```text
+Viết apps/run_single.py. Script CLI chạy full pipeline đơn camera:
+
+- Nhận --source (path video), --config (default: configs/system/pipeline.yaml)
+- Khởi tạo: RTMPoseEstimator, ByteTracker, OSNetReID, EfficientGCNRecognizer
+- Loop đọc frame → pose → track → reid (nếu should_run) → push keypoints → draw → cv2.imshow
+- Nhấn Q để thoát.
+- In FPS thực tế ra terminal mỗi 30 frame.
+- Không import main.py.
+```
+
+### Tầng 4 — Backend & Frontend (làm sau cùng)
+
+#### Task 4.1 — main.py
+```text
+Viết main.py. FastAPI app với:
+
+- GET  /           → serve static/index.html
+- WS   /ws/{cam_id} → WebSocket handler cho camera cam_id (1 hoặc 2)
+  - Nhận message JSON: {"action": "start", "source": "data/input/xxx.mp4", "modules": ["pose","track","reid","action"]}
+  - Nhận message JSON: {"action": "stop"}
+  - Stream frame đã xử lý về client dạng base64 JPEG
+  - Stream log event dạng JSON: {"type":"log","time":"...","level":"INFO","msg":"..."}
+- Mỗi cam_id chạy pipeline trong asyncio thread riêng (asyncio.to_thread).
+- Đọc config từ configs/system/pipeline.yaml.
+- Không hardcode path, không hardcode cổng.
+```
+
+#### Task 4.2 — static/app.js
+```text
+Viết static/app.js. WebSocket client cho 2 camera:
+
+- Giữ nguyên HTML hiện tại — chỉ viết JS logic.
+- Mỗi camera: kết nối WS /ws/1 và /ws/2 riêng biệt.
+- Nhận base64 JPEG → hiển thị vào <img> tương ứng.
+- Nhận log JSON → append vào log panel ngay dưới camera đó (KHÔNG gom chung).
+- Nút ▶ ON: gửi {"action":"start",...}, nút ■ OFF: gửi {"action":"stop"}.
+- KHÔNG thay đổi layout, màu sắc, hay thẻ HTML — chỉ thêm event listener và WS logic.
+```
+
+### Tầng 5 — Scripts tiện ích (làm khi cần)
+
+#### Task 5.1 — scripts/build_gallery.py
+```text
+Viết scripts/build_gallery.py:
+
+- CLI: python scripts/build_gallery.py --input data/input/ --output data/embeddings/
+- Đọc từng .mp4 trong --input, sample mỗi 30 frame.
+- Với mỗi frame: chạy RTMPoseEstimator lấy bbox → crop → OSNetReID.extract()
+- Lưu embedding ra --output/{video_stem}_{frame_idx}.npy
+- In tiến độ ra terminal. Không cần UI.
+```
+
+### Tóm tắt thứ tự
+```text
+0.1 pipeline.yaml  →  0.2 logger  →  0.3 gallery
+         ↓
+1.1 pose  →  1.2 tracker  →  1.3 reid  →  1.4 gcn
+         ↓
+    2.1 draw
+         ↓
+    3.1 run_single  (kiểm tra toàn pipeline trên CLI trước)
+         ↓
+4.1 main.py  →  4.2 app.js
+         ↓
+    5.1 build_gallery  (khi cần tạo gallery mới)
+```

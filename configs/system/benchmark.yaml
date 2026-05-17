@@ -92,7 +92,7 @@ modules:
       step: 0.05
 
   adl:
-    name: "PoseC3D ADL"
+    name: "EfficientGCN ADL"
     enabled: true
     ground_truth_path: ""
     label_map_path: ""

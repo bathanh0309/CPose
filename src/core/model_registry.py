@@ -122,11 +122,13 @@ class ModelRegistry:
                 min_crop_area=float(cfg.get("min_crop_area", 3500)),
                 min_gallery_size=int(cfg.get("min_gallery_size", 5)),
             )
-            loaded = self.reid_model.load_gallery_embeddings(
-                cfg.get("embedding_dirs"),
-                cfg.get("id_aliases"),
+            gallery_sources = (
+                cfg.get("body_embedding_pkls")
+                or cfg.get("body_embedding_dirs")
+                or cfg.get("embedding_dirs")
             )
-            print(f"[ReID] OSNet-x0.25 preloaded on CPU; gallery={loaded}")
+            loaded = self.reid_model.load_gallery_embeddings(gallery_sources, cfg.get("id_aliases"))
+            print(f"[ReID] OSNet-x0.25 preloaded on CPU; body_gallery={loaded}, mode={cfg.get('mode', 'body_only')}")
         except Exception as exc:
             self.errors["reid"] = f"{type(exc).__name__}: {exc}"
             print(f"[ReID] preload failed: {self.errors['reid']}")

@@ -17,13 +17,24 @@ class YoloPoseTracker:
         device=None,
         classes=None,
         tracking_cfg=None,
+        fallback_weights=None,
     ):
         self.weights = Path(weights)
         if not self.weights.exists():
-            raise FileNotFoundError(
-                f"YOLO pose weights not found: {self.weights}\n"
-                "Download yolo11n-pose.pt and set [pose].weights in configs/system/pipeline.yaml."
-            )
+            fallback = Path(fallback_weights) if fallback_weights else None
+            if fallback and fallback.exists():
+                logger.warning(
+                    f"YOLO pose weights not found: {self.weights}; using fallback: {fallback}"
+                )
+                self.weights = fallback
+            else:
+                msg = (
+                    f"YOLO pose weights not found: {self.weights}\n"
+                    "Download yolo11n-pose.pt and set [pose].weights in configs/system/pipeline.yaml."
+                )
+                if fallback_weights:
+                    msg += f"\nFallback also not found: {fallback_weights}"
+                raise FileNotFoundError(msg)
         self.conf = float(conf)
         self.iou = float(iou)
         self.tracker = tracker

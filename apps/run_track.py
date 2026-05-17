@@ -11,10 +11,10 @@ if str(ROOT) not in sys.path:
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.detectors.pedestrian_yolo import PedestrianYoloTracker
 from src.trackers.bytetrack import ByteTrackWrapper
-from src.utils.config import load_pipeline_cfg
+from src.utils.config import get_module_source, load_pipeline_cfg
 from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
-from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
+from src.utils.video import create_video_writer, destroy_all_windows, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
 from src.utils.vis import FPSCounter, draw_detection, draw_info_panel
 
 logger = get_logger(__name__)
@@ -39,8 +39,11 @@ def main():
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
 
     if cfg["tracking"].get("model_type") == "pedestrian":
+        tracking_weights = cfg["tracking"].get("weights", ROOT / "models/yolo11n.pt")
+        if not Path(tracking_weights).exists() and cfg["tracking"].get("fallback_weights"):
+            tracking_weights = cfg["tracking"]["fallback_weights"]
         detector = PedestrianYoloTracker(
-            weights=cfg["tracking"].get("weights", ROOT / "models/yolo11n.pt"),
+            weights=tracking_weights,
             conf=cfg["tracking"].get("conf", 0.40),
             iou=cfg["tracking"].get("iou", 0.5),
             tracker=cfg["tracking"]["tracker_yaml"],
@@ -59,9 +62,9 @@ def main():
         )
     tracker = ByteTrackWrapper(detector)
 
-    source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
+    source = args.source or get_module_source(cfg, "track") or find_default_video_source(ROOT)
     if source is None:
-        raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
+        raise RuntimeError("No video source found. Set sources.track or pass --source.")
 
     logger.info(f"Opening video source: {source}")
     show = not args.no_show
@@ -142,7 +145,7 @@ def main():
         cap.release()
         if writer is not None:
             writer.release()
-        cv2.destroyAllWindows()
+        destroy_all_windows()
 
 
 if __name__ == "__main__":

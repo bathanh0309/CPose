@@ -4,8 +4,6 @@ mode:
 
 reid:
   realtime: "osnet_x0_25"
-  research: "fastreid_resnet50"
 
 adl:
   realtime: "efficientgcn"
-  research: "posec3d"

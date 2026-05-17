@@ -14,11 +14,9 @@ PATH_FIELDS = {
     ("tracking", "fallback_weights"),
     ("reid", "weights"),
     ("reid", "fallback_weights"),
-    ("reid", "research_weights"),
     ("reid", "output_dir"),
-    ("reid", "gallery_dir"),
-    ("reid", "fastreid_root"),
     ("adl", "weights"),
+    ("adl", "fallback_weights"),
     ("adl", "export_dir"),
     ("adl", "work_dir"),
     ("adl", "label_map_path"),
@@ -95,17 +93,28 @@ def resolve_cfg_paths(cfg: dict, root: Path) -> dict:
     if "system" in cfg:
         cfg["system"]["device"] = normalize_device(cfg["system"].get("device"))
 
+    if "sources" in cfg:
+        cfg["sources"] = {
+            key: resolve_project_path(value, root) if value else value
+            for key, value in cfg.get("sources", {}).items()
+        }
+
     tracker_yaml = cfg.get("tracking", {}).get("tracker_yaml")
     if tracker_yaml:
         cfg["tracking"]["tracker_yaml"] = resolve_tracker_yaml(tracker_yaml, root)
 
-    embedding_dirs = cfg.get("reid", {}).get("embedding_dirs")
-    if embedding_dirs:
-        cfg["reid"]["embedding_dirs"] = [
-            resolve_project_path(path, root) for path in embedding_dirs
-        ]
+    for key in ("embedding_dirs", "body_embedding_dirs", "body_embedding_pkls", "face_embedding_dirs", "legacy_embedding_dirs"):
+        dirs = cfg.get("reid", {}).get(key)
+        if dirs:
+            cfg["reid"][key] = [resolve_project_path(path, root) for path in dirs]
 
     return cfg
+
+
+def get_module_source(cfg: dict, module_name: str) -> str | None:
+    """Return the configured video source for one app/module."""
+    sources = cfg.get("sources", {}) or {}
+    return sources.get(module_name) or cfg.get("system", {}).get("default_source")
 
 
 def load_pipeline_cfg(path: Path, root: Path) -> dict:
@@ -164,6 +173,7 @@ def normalize_cfg(cfg: dict) -> dict:
     cfg.setdefault("logging", {})
     cfg["logging"].setdefault("save_events", False)
     cfg["logging"].setdefault("level", "INFO")
+    cfg.setdefault("sources", {})
     cfg.setdefault("adl", {})
     cfg["adl"].setdefault("export_dir", "data/output/clips_pkl")
     cfg["adl"].setdefault("work_dir", cfg["adl"]["export_dir"])
@@ -177,8 +187,8 @@ def validate_cfg(cfg: dict):
 
     required = {
         "pose": ["weights", "conf", "iou"],
-        "reid": ["weights", "gallery_dir", "threshold", "reid_interval"],
-        "adl": ["posec3d_config", "weights", "seq_len", "stride", "export_dir"],
+        "reid": ["weights", "threshold", "reid_interval"],
+        "adl": ["weights", "seq_len", "stride", "export_dir"],
         "system": ["device", "event_log", "vis_dir"],
         "tracking": ["person_conf", "iou", "min_box_area", "min_keypoints", "min_keypoint_score", "tracker_yaml"],
     }

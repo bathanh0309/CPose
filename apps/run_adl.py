@@ -1,5 +1,6 @@
 import argparse
 import sys
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -9,11 +10,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.action.efficientgcn_adl import EfficientGCNADL
+from src.action.rule_adl import classify_rule_adl
 from src.detectors.yolo_pose import YoloPoseTracker
-from src.utils.config import load_pipeline_cfg
+from src.utils.config import get_module_source, load_pipeline_cfg
 from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
-from src.utils.video import create_video_writer, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
+from src.utils.video import create_video_writer, destroy_all_windows, find_default_video_source, get_video_meta, open_video_source, safe_imshow, toggle_video_recording
 from src.utils.vis import FPSCounter, draw_adl_status, draw_detection, draw_info_panel
 
 logger = get_logger(__name__)
@@ -67,6 +69,29 @@ def adl_text(status):
     return f"ADL: {state}"
 
 
+def update_rule_window(rule_windows, track_id, keypoints, keypoint_scores, maxlen):
+    if keypoints is None:
+        return None
+    window = rule_windows.setdefault(int(track_id), {"keypoints": deque(maxlen=maxlen), "scores": deque(maxlen=maxlen)})
+    window["keypoints"].append(keypoints)
+    if keypoint_scores is None:
+        import numpy as np
+        keypoint_scores = np.ones((len(keypoints),), dtype="float32")
+    window["scores"].append(keypoint_scores)
+    return window
+
+
+def infer_rule_status(rule_window, min_len):
+    if rule_window is None or len(rule_window["keypoints"]) < min_len:
+        return None
+    return classify_rule_adl(
+        {
+            "keypoints": list(rule_window["keypoints"]),
+            "scores": list(rule_window["scores"]),
+        }
+    )
+
+
 def main():
     args = parse_args()
     cfg = load_pipeline_cfg(Path(args.config), ROOT)
@@ -104,9 +129,9 @@ def main():
     if adl_model.load_error:
         logger.warning(f"EfficientGCN fallback=unknown: {adl_model.load_error}")
 
-    source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
+    source = args.source or get_module_source(cfg, "adl") or find_default_video_source(ROOT)
     if source is None:
-        raise RuntimeError("No video source found. Put a video at data/sample.mp4 or data/input/, or pass --source.")
+        raise RuntimeError("No video source found. Set sources.adl or pass --source.")
 
     logger.info(f"Opening video source: {source}")
     show = not args.no_show
@@ -125,6 +150,7 @@ def main():
         logger.info("ADL JSON disabled by config")
 
     track_status = {}
+    rule_windows = {}
     fps_counter = FPSCounter()
     frame_idx = -1
     try:
@@ -148,12 +174,27 @@ def main():
                 if tid < 0:
                     draw_detection(frame, det, label="track=-1 ADL: waiting")
                     continue
+                rule_window = update_rule_window(
+                    rule_windows,
+                    tid,
+                    det.get("keypoints"),
+                    det.get("keypoint_scores"),
+                    maxlen=adl_model.window,
+                )
                 label, score = adl_model.update(tid, det.get("keypoints"), frame_idx)
                 current_len = len(adl_model.buffers.get(tid, []))
+                method = "efficientgcn"
+                if label == "unknown":
+                    rule_status = infer_rule_status(rule_window, min_len=min(10, adl_model.window))
+                    if rule_status and rule_status.get("status") == "inferred":
+                        label = rule_status.get("label", "unknown")
+                        score = float(rule_status.get("score", 0.0))
+                        method = rule_status.get("method", "rule")
                 status = {
                     "status": "inferred" if label != "unknown" else "collecting",
                     "label": label,
                     "score": score,
+                    "method": method if label != "unknown" else None,
                     "current_len": current_len,
                     "seq_len": adl_model.window,
                 }
@@ -179,6 +220,9 @@ def main():
                 interval=int(cfg.get("ui", {}).get("metrics_interval_frames", 5)),
                 persons=len(detections),
                 adl_status=first_status.get("status", "waiting"),
+                action_label=first_status.get("label", "unknown"),
+                action_score=f"{float(first_status.get('score', 0.0)):.2f}",
+                action_method=first_status.get("method", ""),
                 sequence_len=first_status.get("current_len", 0),
                 seq_len_required=first_status.get("seq_len", adl_model.window),
             )
@@ -196,7 +240,7 @@ def main():
         cap.release()
         if writer is not None:
             writer.release()
-        cv2.destroyAllWindows()
+        destroy_all_windows()
 
 
 if __name__ == "__main__":

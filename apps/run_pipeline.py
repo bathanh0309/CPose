@@ -1,13 +1,11 @@
 """
-apps/run_pipeline.py — CPose Full Pipeline (Multi-Modal ReID)
+apps/run_pipeline.py - CPose Full Pipeline (Body-only ReID)
 
 Luồng mỗi frame:
   1. YOLO11-Pose → Bbox + 17 Keypoints
   2. ByteTrack   → local_track_id (ổn định, không nhảy)
-  3. (Parallel)  ArcFace/FaceDetector → face_feat + face_conf  (nếu thấy mặt)
-                 BodyExtractor        → body_feat              (luôn trích xuất)
-  4. GlobalIDManager (Face+Body Fusion) → global_id
-  5. PoseSequenceBuffer → khi đủ 48 frame → PoseC3D → action_label
+  3. OSNet body ReID -> global_id (body_only realtime mode)
+  5. PoseSequenceBuffer → khi đủ frame → EfficientGCN → action_label
   6. Metrics + UI log
 
 Không hard-code đường dẫn tuyệt đối. Dùng --source để truyền vào.
@@ -15,6 +13,7 @@ Không hard-code đường dẫn tuyệt đối. Dùng --source để truyền v
 
 import argparse
 import sys
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -24,14 +23,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.action.efficientgcn_adl import EfficientGCNADL
+from src.action.rule_adl import classify_rule_adl
 from src.core.event import EventBus, NullEventBus
 from src.detectors.yolo_pose import YoloPoseTracker
 from src.trackers.bytetrack import ByteTrackWrapper
-from src.utils.config import load_pipeline_cfg
+from src.utils.config import get_module_source, load_pipeline_cfg
 from src.utils.logger import get_logger, log_frame_metrics
 from src.utils.naming import make_video_output_name, resolve_output_path
 from src.utils.video import (
     create_video_writer,
+    destroy_all_windows,
     find_default_video_source,
     get_video_meta,
     open_video_source,
@@ -115,18 +116,64 @@ def adl_label(status: dict | None) -> str:
     return f"ADL: {s}"
 
 
+def update_rule_window(rule_windows, track_id, keypoints, keypoint_scores, maxlen):
+    if keypoints is None:
+        return None
+    window = rule_windows.setdefault(
+        int(track_id),
+        {"keypoints": deque(maxlen=maxlen), "scores": deque(maxlen=maxlen)},
+    )
+    window["keypoints"].append(keypoints)
+    if keypoint_scores is None:
+        import numpy as np
+        keypoint_scores = np.ones((len(keypoints),), dtype="float32")
+    window["scores"].append(keypoint_scores)
+    return window
+
+
+def infer_rule_status(rule_window, min_len):
+    if rule_window is None or len(rule_window["keypoints"]) < min_len:
+        return None
+    return classify_rule_adl(
+        {
+            "keypoints": list(rule_window["keypoints"]),
+            "scores": list(rule_window["scores"]),
+        }
+    )
+
+
 def build_overlay_label(tid, gid, score, weights, adl_status) -> str:
     mode = weights.get("mode", "")
     mode_short = {"face_dominant": "F↑", "body_dominant": "B↑", "balanced": "FB",
                   "face_only": "F", "body_only": "B", "no_modal": "??"}.get(mode, mode[:4])
+    identity = (
+        f"ID={gid}"
+        if gid and gid not in {"unknown", "too_small"} and not str(gid).startswith("track_")
+        else f"track={tid} UNK"
+    )
     return (
-        f"t={tid} gid={gid} "
+        f"{identity} "
         f"r={score:.2f}[{mode_short}] "
         f"{adl_label(adl_status)}"
     )
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
+def draw_object(frame, bbox, label):
+    x1, y1, x2, y2 = map(int, bbox)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (60, 180, 255), 2)
+    cv2.putText(
+        frame,
+        label,
+        (x1, max(20, y1 - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (60, 180, 255),
+        2,
+        cv2.LINE_AA,
+    )
+
 
 def main():
     args = parse_args()
@@ -154,6 +201,7 @@ def main():
     # ── Detector + Tracker ───────────────────────────────────────────────────
     detector = YoloPoseTracker(
         weights=cfg["pose"]["weights"],
+        fallback_weights=cfg["pose"].get("fallback_weights"),
         conf=cfg["pose"]["conf"],
         iou=cfg["pose"]["iou"],
         tracker=cfg["tracking"]["tracker_yaml"],
@@ -169,17 +217,23 @@ def main():
     try:
         from src.reid.osnet_reid import OSNetReID
 
+        reid_weights = cfg["reid"]["weights"]
+        if not Path(reid_weights).exists() and cfg["reid"].get("fallback_weights"):
+            reid_weights = cfg["reid"]["fallback_weights"]
         osnet_reid = OSNetReID(
-            weight_path=cfg["reid"]["weights"],
+            weight_path=reid_weights,
             threshold=cfg["reid"].get("threshold", 0.65),
             reid_interval=cfg["reid"].get("reid_interval", 15),
             max_gallery=cfg["reid"].get("max_gallery", 10),
             min_crop_area=cfg["reid"].get("min_crop_area", 2500),
+            min_gallery_size=cfg["reid"].get("min_gallery_size", 1),
         )
-        loaded = osnet_reid.load_gallery_embeddings(
-            cfg["reid"].get("embedding_dirs"),
-            cfg["reid"].get("id_aliases"),
+        gallery_sources = (
+            cfg["reid"].get("body_embedding_pkls")
+            or cfg["reid"].get("body_embedding_dirs")
+            or cfg["reid"].get("embedding_dirs")
         )
+        loaded = osnet_reid.load_gallery_embeddings(gallery_sources, cfg["reid"].get("id_aliases"))
         if loaded <= 0:
             reid_warning = "OSNet gallery empty"
         else:
@@ -189,15 +243,36 @@ def main():
         reid_warning = f"OSNet ReID unavailable: {exc}"
         logger.warning(reid_warning)
 
-    # ── ADL buffer + PoseC3D ─────────────────────────────────────────────────
+    # ── ADL buffer + EfficientGCN ────────────────────────────────────────────
+    adl_weights = cfg["adl"].get("weights", "models/2015_EfficientGCN-B0_ntu-xsub120.pth.tar")
+    if not Path(adl_weights).exists() and cfg["adl"].get("fallback_weights"):
+        adl_weights = cfg["adl"]["fallback_weights"]
     adl_model = EfficientGCNADL(
-        weight_path=cfg["adl"].get("weights", "models/2015_EfficientGCN-B0_ntu-xsub120.pth.tar"),
+        weight_path=adl_weights,
         window=cfg["adl"].get("min_frames", 30),
         stride=cfg["adl"].get("infer_every_n_frames", 15),
         device="cpu",
     )
     if adl_model.load_error:
         logger.warning(f"EfficientGCN fallback=unknown: {adl_model.load_error}")
+
+    object_model = None
+    object_warning = None
+    obj_cfg = cfg.get("object", {})
+    if obj_cfg.get("enabled", False):
+        try:
+            from ultralytics import YOLO
+
+            obj_weights = Path(obj_cfg.get("weights", ""))
+            if not obj_weights.is_absolute():
+                obj_weights = ROOT / obj_weights
+            if not obj_weights.exists():
+                raise FileNotFoundError(f"Object detector weights not found: {obj_weights}")
+            object_model = YOLO(str(obj_weights))
+            logger.info(f"Object detector loaded: {obj_weights}")
+        except Exception as exc:
+            object_warning = f"Object detector unavailable: {exc}"
+            logger.warning(object_warning)
 
     # ── Event bus ────────────────────────────────────────────────────────────
     save_events = bool(args.save_events)
@@ -216,10 +291,10 @@ def main():
             logger.warning(f"UILogger unavailable: {exc}")
 
     # ── Video source ─────────────────────────────────────────────────────────
-    source = args.source or cfg["system"].get("default_source") or find_default_video_source(ROOT)
+    source = args.source or get_module_source(cfg, "pipeline") or find_default_video_source(ROOT)
     if source is None:
         raise RuntimeError(
-            "No video source. Pass --source or put a video at data/input/ or data/sample.mp4"
+            "No video source. Set sources.pipeline or pass --source."
         )
 
     logger.info(f"Opening video source: {source}")
@@ -247,6 +322,7 @@ def main():
     # ── State ────────────────────────────────────────────────────────────────
     fps_counter = FPSCounter()
     track_status: dict[int, dict] = {}
+    rule_windows: dict[int, dict] = {}
     prev_track_ids: set[int] = set()
     last_query_crop = None
     last_matches: list = []
@@ -272,12 +348,38 @@ def main():
                 logger.warning(f"[frame {frame_idx}] tracking failed: {exc}", exc_info=True)
                 continue
 
+            object_count = 0
+            if object_model is not None:
+                try:
+                    obj_results = object_model.predict(
+                        source=frame,
+                        conf=float(obj_cfg.get("conf", 0.45)),
+                        iou=float(obj_cfg.get("iou", 0.5)),
+                        device=device,
+                        verbose=False,
+                    )
+                    obj_result = obj_results[0]
+                    if obj_result.boxes is not None:
+                        for box in obj_result.boxes:
+                            cls_id = int(box.cls.item())
+                            name = obj_result.names.get(cls_id, str(cls_id))
+                            score = float(box.conf.item())
+                            object_count += 1
+                            draw_object(
+                                frame,
+                                box.xyxy[0].cpu().numpy().tolist(),
+                                f"{name} {score:.2f}",
+                            )
+                except Exception as exc:
+                    logger.warning(f"[frame {frame_idx}] object detection failed: {exc}", exc_info=True)
+
             curr_ids = {int(d.get("track_id", -1)) for d in detections if d.get("track_id", -1) >= 0}
             lost_ids = prev_track_ids - curr_ids
 
             # Cleanup lost tracks
             for tid in lost_ids:
                 adl_model.cleanup_track(tid)
+                rule_windows.pop(tid, None)
                 if ui_logger:
                     ui_logger.log(args.camera_id, "INFO", "pipeline", f"Lost track id={tid}")
             for tid in lost_ids:
@@ -290,9 +392,8 @@ def main():
                 crop, bbox_clipped = clip_bbox(frame, det["bbox"])
 
                 # ── Face embedding (placeholder — connect ArcFace khi có) ───
-                # face_feat, face_conf = arcface.extract(crop) nếu mặt nhìn thấy
-                face_feat = None
-                face_conf = 0.0
+                # No ArcFace branch is active in realtime yet.
+                # body_only mode: ArcFace is not implemented in realtime yet.
 
                 # ── Assign GlobalID ──────────────────────────────────────────
                 if osnet_reid is not None and tid >= 0 and crop is not None:
@@ -319,11 +420,26 @@ def main():
                 adl_status = {"status": "waiting", "current_len": 0,
                               "seq_len": adl_model.window, "pkl_path": None}
                 if tid >= 0:
+                    rule_window = update_rule_window(
+                        rule_windows,
+                        tid,
+                        det.get("keypoints"),
+                        det.get("keypoint_scores"),
+                        maxlen=adl_model.window,
+                    )
                     label_name, action_score = adl_model.update(tid, det.get("keypoints"), frame_idx)
+                    method = "efficientgcn"
+                    if label_name == "unknown":
+                        rule_status = infer_rule_status(rule_window, min_len=min(10, adl_model.window))
+                        if rule_status and rule_status.get("status") == "inferred":
+                            label_name = rule_status.get("label", "unknown")
+                            action_score = float(rule_status.get("score", 0.0))
+                            method = rule_status.get("method", "rule")
                     adl_status = {
                         "status": "inferred" if label_name != "unknown" else "collecting",
                         "label": label_name,
                         "score": float(action_score),
+                        "method": method if label_name != "unknown" else None,
                         "current_len": len(adl_model.buffers.get(tid, [])),
                         "seq_len": adl_model.window,
                         "pkl_path": None,
@@ -368,9 +484,14 @@ def main():
                 interval=metrics_interval,
                 persons=len(detections),
                 tracked=len(curr_ids),
+                objects=object_count,
                 reid_available=osnet_reid is not None,
                 adl_status=first_status.get("status", "waiting"),
+                action_label=first_status.get("label", "unknown"),
+                action_score=f"{float(first_status.get('score', 0.0)):.2f}",
+                action_method=first_status.get("method", ""),
                 sequence_len=first_status.get("current_len", 0),
+                seq_len_required=first_status.get("seq_len", adl_model.window),
             )
             if ui_logger and frame_idx % metrics_interval == 0:
                 ui_logger.metric(args.camera_id, {
@@ -381,6 +502,7 @@ def main():
                     "device": device,
                     "persons": len(detections),
                     "tracked": len(curr_ids),
+                    "objects": object_count,
                     "reid_assigned": sum(
                         1 for s in track_status.values()
                         if s is not None
@@ -403,12 +525,15 @@ def main():
                 "Camera": args.camera_id,
                 "Frame": f"{frame_idx}/{total}" if total else frame_idx,
                 "Persons": len(detections),
+                "Objects": object_count,
                 "Gallery": gallery_count,
                 "Device": device,
                 "FPS": f"{current_fps:.1f}",
             }
             if reid_warning:
                 info["Warning"] = reid_warning[:48]
+            if object_warning:
+                info["Object"] = object_warning[:48]
 
             draw_info_panel(frame, info)
 
@@ -432,7 +557,7 @@ def main():
         cap.release()
         if writer is not None:
             writer.release()
-        cv2.destroyAllWindows()
+        destroy_all_windows()
         logger.info(f"Pipeline finished. Processed {frame_idx + 1} frames.")
 
 

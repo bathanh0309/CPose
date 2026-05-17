@@ -198,7 +198,7 @@ class WebAIProcessor:
                     return yaml.safe_load(handle) or {}
         except Exception as exc:
             print(f"[Config] pipeline_mode.yaml unavailable: {exc}")
-        return {"adl": {"realtime": "efficientgcn", "research": "posec3d"}}
+        return {"adl": {"realtime": "efficientgcn", "research": "efficientgcn"}}
 
     def _print_device_allocation_header(self) -> None:
         gpu_state = "enabled" if self.use_gpu else "disabled"
@@ -249,13 +249,7 @@ class WebAIProcessor:
         mode_adl = self.mode_cfg.get("adl", {}).get(self.mode)
         backend = str(mode_adl or adl_cfg.get("model_type", "efficientgcn")).lower()
 
-        if self.mode == "realtime" and backend == "posec3d":
-            raise RuntimeError(
-                "PoseC3D không được phép chạy realtime. "
-                "Dùng CPOSE_MODE=research để chạy offline."
-            )
-
-        if backend == "disabled" or backend == "posec3d":
+        if backend == "disabled":
             self.adl_error = f"ADL backend={backend} not supported in web runtime"
             print(f"[ADL] {self.adl_error}")
             return False

@@ -40,9 +40,9 @@ def _median_leg_angle(points, scores):
 def classify_rule_adl(window):
     """Classify coarse ADL from COCO-17 keypoint geometry.
 
-    This is a fallback for live demos when the PoseC3D stack or pkl inference is
-    unavailable. It intentionally returns only the three coarse labels used by
-    the app: standing, sitting, walking.
+    This is a fallback for live demos when learned ADL inference is unavailable.
+    It intentionally returns only the three coarse labels used by the app:
+    standing, sitting, walking.
     """
     if not window:
         return {"status": "failed", "label": "unknown", "score": 0.0, "method": "rule"}

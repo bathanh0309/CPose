@@ -1,15 +1,15 @@
 """
 src/core/global_id.py
 
-Stage 3 — Multi-Modal GlobalIDManager
+Stage 3 — Legacy GlobalIDManager
 
-Thay thế logic cấp ID tĩnh thành quản lý ID toàn cục xuyên camera,
-kết hợp Face + Body embedding với Dynamic Weighted Fusion.
+Kept for older experiments. The realtime apps now use OSNetReID directly
+for body-only matching.
 
 Luồng xử lý mỗi lần assign():
   1. Kiểm tra cache (track đã biết + chưa đến reid_interval) → trả cache.
-  2. Trích xuất face_feat (nếu thấy mặt) + body_feat từ bbox.
-  3. MultiModalGallery.query_top1() với face_conf động.
+  2. Trích xuất feature từ matcher được truyền vào.
+  3. Query gallery theo API legacy.
   4. Nếu score >= MATCH_THRESHOLD → trả global_id đã biết + EMA update.
   5. Nếu người mới → tạo global_id mới + lưu vào EMA cache.
 """
@@ -30,10 +30,10 @@ MIN_CROP_W        = 16
 
 class GlobalIDManager:
     """
-    Quản lý Global ID xuyên camera bằng Face + Body fusion.
+    Legacy manager for gallery-based global IDs.
 
     Args:
-        gallery:        MultiModalGallery (face + body)
+        gallery:        Legacy gallery object with query_top1/update_ema.
         threshold:      fusion score để nhận dạng (default MATCH_THRESHOLD)
         reid_interval:  tính ReID mỗi N frame (default 10)
         new_prefix:     prefix cho global_id mới (default "gid")
@@ -74,7 +74,7 @@ class GlobalIDManager:
         frame_idx: int = 0,
         face_feat=None,                     # np.ndarray | None  (từ ArcFace)
         face_conf: float = 0.0,             # confidence mặt hợp lệ
-        body_extractor=None,                # BodyExtractor instance | None
+        body_extractor=None,                # legacy extractor with extract_from_bbox()
     ) -> tuple[str, float, str, dict]:
         """
         Gán global_id cho (camera_id, local_track_id).
@@ -87,7 +87,7 @@ class GlobalIDManager:
             frame_idx:       index frame hiện tại.
             face_feat:       embedding khuôn mặt (None nếu không nhìn thấy mặt).
             face_conf:       confidence khuôn mặt (0–1).
-            body_extractor:  BodyExtractor để lấy body embedding từ bbox.
+            body_extractor:  Legacy extractor for body embedding from bbox.
 
         Returns:
             (global_id, fusion_score, status, weights_dict)
@@ -184,3 +184,46 @@ class GlobalIDManager:
         gid = f"{self.new_prefix}_{self._next_id:05d}"
         self._next_id += 1
         return gid
+
+
+class GlobalIDFusionManager:
+    """Decision-level identity fusion.
+
+    This class fuses matcher outputs, not raw embeddings. Face and body feature
+    spaces remain separate.
+    """
+
+    def __init__(
+        self,
+        face_threshold: float = 0.55,
+        body_threshold: float = 0.45,
+        min_face_conf: float = 0.70,
+    ):
+        self.face_threshold = float(face_threshold)
+        self.body_threshold = float(body_threshold)
+        self.min_face_conf = float(min_face_conf)
+
+    def decide(self, body_match: dict | None, face_match: dict | None) -> dict:
+        body = body_match or {}
+        face = face_match or {}
+        face_available = bool(face.get("available", False))
+        body_available = bool(body.get("available", False))
+        face_conf = float(face.get("face_conf", 0.0) or 0.0)
+        face_score = float(face.get("score", 0.0) or 0.0)
+        body_score = float(body.get("score", 0.0) or 0.0)
+
+        if face_available and face_conf >= self.min_face_conf and face_score >= self.face_threshold:
+            return {
+                "gid": face.get("gid", "unknown"),
+                "score": face_score,
+                "mode": "face_dominant",
+                "available": True,
+            }
+        if body_available and body_score >= self.body_threshold:
+            return {
+                "gid": body.get("gid", "unknown"),
+                "score": body_score,
+                "mode": "body_only",
+                "available": True,
+            }
+        return {"gid": "unknown", "score": max(face_score, body_score), "mode": "unknown", "available": False}

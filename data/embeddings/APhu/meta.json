@@ -1,0 +1,14 @@
+{
+  "person_id": "APhu",
+  "created_at": "2026-01-30T17:23:54.652433",
+  "num_embeddings": 12,
+  "face_embeddings_existing": 12,
+  "body_embeddings": 80,
+  "body_embeddings_added": 80,
+  "body_source_dir": "D:\\Capstone_Project\\data\\body\\APhu",
+  "body_sample_every": 15,
+  "body_updated_at": "2026-05-17T15:33:56",
+  "body_embedding_type": "body",
+  "body_model": "osnet_x0_25",
+  "body_dim": 512
+}

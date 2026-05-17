@@ -18,7 +18,7 @@ class PersonGateDetector:
     It answers:
         Is there any person in the frame?
 
-    It should not run ReID, ADL, PoseC3D, or heavy module logic.
+    It should not run ReID, ADL, or heavy module logic.
     """
 
     def __init__(

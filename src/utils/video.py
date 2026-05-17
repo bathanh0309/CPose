@@ -70,5 +70,16 @@ def toggle_video_recording(writer, output_path, fps, width, height, logger=None)
 
 
 def safe_imshow(window_name, frame, delay=1):
-    cv2.imshow(window_name, frame)
-    return cv2.waitKey(delay) & 0xFF
+    try:
+        cv2.imshow(window_name, frame)
+        return cv2.waitKey(delay) & 0xFF
+    except cv2.error as exc:
+        print(f"[WARN] OpenCV GUI unavailable; disable display with --no-show. {exc}")
+        return ord("q")
+
+
+def destroy_all_windows():
+    try:
+        cv2.destroyAllWindows()
+    except cv2.error:
+        pass

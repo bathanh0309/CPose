@@ -261,21 +261,48 @@ def main():
                             gid, score, status = cached["gid"], cached["score"], "cache_hit"
                             weights = cached.get("weights", BODY_ONLY_WEIGHTS)
                         else:
-                            x1, y1, x2, y2 = map(float, det["bbox"])
-                            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-                            gid, score = extractor.identify(crop, area)
-                            status = "gallery_match" if gid != "unknown" else "gallery_miss"
-                            sim_body = score if gid not in {"unknown", "too_small"} else None
-                            face_feat = extract_face_feat(face_model, crop)
-                            face_proto = face_prototypes.get(gid)
-                            sim_face = cosine_sim(face_feat, face_proto)
-                            weights = modality_weights(sim_face, sim_body)
-                            gid_cache[tid] = {
-                                "gid": gid,
-                                "score": score,
-                                "frame_idx": frame_idx,
-                                "weights": weights,
-                            }
+                                x1, y1, x2, y2 = map(float, det["bbox"])
+                                area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                                # Use top matches and modality thresholds (configurable)
+                                matches = extractor.get_top_matches(crop, topk=3)
+                                best_pid = None
+                                best_body_sim = None
+                                if matches:
+                                    best_pid, best_body_sim, _ = matches[0]
+                                    best_body_sim = float(best_body_sim)
+
+                                face_feat = extract_face_feat(face_model, crop)
+                                sim_face = None
+                                if face_feat is not None and best_pid is not None:
+                                    proto = face_prototypes.get(str(best_pid))
+                                    if proto is not None:
+                                        sim_face = cosine_sim(face_feat, proto)
+
+                                body_thresh = float(cfg["reid"].get("threshold_body", cfg["reid"].get("threshold", extractor.threshold)))
+                                face_thresh = float(cfg["reid"].get("threshold_face", cfg["reid"].get("threshold", extractor.threshold)))
+
+                                # Prefer face match when available and above face_thresh
+                                if sim_face is not None and sim_face >= face_thresh:
+                                    gid = str(best_pid)
+                                    score = float(sim_face)
+                                    status = "gallery_match_face"
+                                elif best_body_sim is not None and best_body_sim >= body_thresh:
+                                    gid = str(best_pid)
+                                    score = float(best_body_sim)
+                                    status = "gallery_match"
+                                else:
+                                    gid = "unknown"
+                                    score = float(best_body_sim) if best_body_sim is not None else 0.0
+                                    status = "gallery_miss"
+
+                                sim_body = best_body_sim
+                                weights = modality_weights(sim_face, sim_body)
+                                gid_cache[tid] = {
+                                    "gid": gid,
+                                    "score": score,
+                                    "frame_idx": frame_idx,
+                                    "weights": weights,
+                                }
                         last_matches = extractor.get_top_matches(crop, topk=3)
                         last_crop = crop.copy()
                     except Exception as exc:

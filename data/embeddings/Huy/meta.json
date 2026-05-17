@@ -5,13 +5,15 @@
   "source": "./video/Huy1.mp4",
   "gender": "Male",
   "age_group": "Adult",
-  "face_embeddings_existing": 12,
+  "face_embeddings_existing": 80,
   "body_embeddings": 80,
-  "body_embeddings_added": 80,
+  "body_embeddings_added": 0,
   "body_source_dir": "D:\\Capstone_Project\\data\\body\\Huy",
   "body_sample_every": 15,
   "body_embedding_type": "body",
   "body_model": "osnet_x0_25",
   "body_dim": 512,
-  "body_updated_at": "2026-05-17T16:41:30"
+  "body_updated_at": "2026-05-17T17:30:04",
+  "face_embeddings_added": 68,
+  "face_embeddings": 80
 }

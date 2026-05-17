@@ -7,3 +7,28 @@ reid:
 
 adl:
   realtime: "efficientgcn"
+
+realtime:
+  pose:
+    primary:
+      type:       "rtmpose"
+      onnx:       "D:/Capstone_Project/models/pose/rtmpose-t_256x192.onnx"
+      input_size: [192, 256]
+      device:     "cpu"
+    fallback:
+      type:       "yolo11n-pose"
+      model:      "D:/Capstone_Project/models/yolo11n-pose.pt"
+      imgsz:      640
+      conf:       0.55
+      device:     "cpu"
+    fail_threshold:  3
+    reset_interval:  300
+
+research:
+  pose:
+    primary:
+      type:       "rtmpose"
+      onnx:       "D:/Capstone_Project/models/pose/rtmpose-s_256x192.onnx"
+    fallback:
+      type:       "yolo11n-pose"
+      model:      "D:/Capstone_Project/models/yolo11n-pose.pt"

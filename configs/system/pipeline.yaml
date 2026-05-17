@@ -8,12 +8,14 @@ system:
 sources:
   pose: "data/test/cam2_2026-01-29_16-26-40.mp4"
   track: "data/test/cam2_2026-01-29_16-26-40.mp4"
-  reid: "data/test/cam2_2026-01-29_16-26-40.mp4"
+  #reid: "data/test/cam2_2026-01-29_16-26-40.mp4"
+  reid: "data/test/thanh-huy-2.mp4"
   adl: "data/test/cam2_2026-01-29_16-26-40.mp4"
   object: "data/test/cam2_2026-01-29_16-26-40.mp4"
-  pipeline: "data/test/cam2_2026-01-29_16-26-40.mp4" # APhu
+  #pipeline: "data/test/cam2_2026-01-29_16-26-40.mp4" # APhu
   #pipeline: "data/body/Thanh/7799042247298.mp4" #(Thành)
   #pipeline: "data/body/Huy/cam2_Huy.mp4" #(huy)
+  pipeline: "data/test/thanh-huy-2.mp4"
 logging:
   enabled: false
   level: "INFO"
@@ -121,7 +123,23 @@ reid:
   body_embedding_dirs: []
   face_embedding_dirs: []
   legacy_embedding_dirs: []
-  threshold: 0.45
+ 
+  threshold: 0.5
+  # Modality-specific base thresholds (set higher for body to avoid false positives)
+  threshold_body: 0.65
+  threshold_face: 0.75
+
+  # Threshold required when changing from one known gallery ID to another
+  threshold_known_to_known: 0.85
+  # When switching away from a recently-held ID (below min_hold_frames),
+  # require an even higher threshold to protect against flapping.
+  threshold_known_to_known_protect: 0.95
+  threshold_unknown_to_known: 0.45
+  threshold_known_to_unknown: 0.45
+  # If true, use per-transition thresholds (known->known, unknown->known, ...)
+  use_transition_thresholds: true
+  # Minimum consecutive frames to hold an assigned ID before allowing a switch
+  min_hold_frames: 10
   min_gallery_size: 1
   reid_interval: 45
   reid_log_interval: 45

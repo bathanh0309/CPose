@@ -273,9 +273,10 @@ function handleJsonMessage(camId, data) {
     case "metric": {
       const m = data.metrics || {};
       const modules = Array.isArray(m.modules) ? m.modules.join(",") : (m.module || "");
+      const idText = formatMetricReidMatches(m.tracks || []);
       addLog(
         camId,
-        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} live=${m.live_tracked ?? m.tracked ?? "-"} display=${m.display_tracked ?? m.tracked ?? "-"} id_max=${m.id_max ?? "-"}${m.skip_ai ? " skip_ai=1" : ""}`,
+        `METRIC ${modules}: fps=${m.fps ?? "-"} det=${m.detections ?? "-"} live=${m.live_tracked ?? m.tracked ?? "-"} display=${m.display_tracked ?? m.tracked ?? "-"} id_max=${m.id_max ?? "-"}${idText ? ` ${idText}` : ""}${m.skip_ai ? " skip_ai=1" : ""}`,
         "metric"
       );
       break;
@@ -509,12 +510,21 @@ function addGalleryItem(camId, data) {
   const conf = Number(data.conf || 0).toFixed(2);
   const adlLabel = data.adl_label || "";
   const reidScore = data.reid_score ? Number(data.reid_score).toFixed(2) : null;
+  const topMatches = Array.isArray(data.reid_top_matches) ? data.reid_top_matches : [];
+  const topHtml = topMatches.length
+    ? `<div class="match-list">${topMatches.map((item, idx) => {
+        const pid = escapeHtml(String(item.person_id || "unknown"));
+        const score = Number(item.score || 0).toFixed(2);
+        return `<span class="match-row">#${idx + 1} ${pid} ${escapeHtml(score)}</span>`;
+      }).join("")}</div>`
+    : "";
   const ts = data.ts || new Date().toLocaleTimeString();
 
   meta.innerHTML = `
     <div>track=${escapeHtml(String(track))}</div>
     <div>gid=${escapeHtml(String(gid))}</div>
     ${reidScore ? `<div>reid=${escapeHtml(reidScore)}</div>` : ""}
+    ${topHtml}
     <div>conf=${escapeHtml(conf)}</div>
     ${adlLabel ? `<div>ADL=${escapeHtml(String(adlLabel))}</div>` : ""}
     <div>${escapeHtml(ts)}</div>
@@ -526,6 +536,28 @@ function addGalleryItem(camId, data) {
 
   // Cap at max_gallery_items
   while (box.children.length > 20) box.removeChild(box.lastChild);
+}
+
+function formatMetricReidMatches(tracks) {
+  const parts = [];
+  for (const track of tracks || []) {
+    const tid = track.track_id ?? "-";
+    const gid = track.gid || "unknown";
+    const score = Number(track.reid_score || 0);
+    if (gid !== "unknown" && score > 0) {
+      parts.push(`track=${tid} ID=${gid} r=${score.toFixed(2)}`);
+      continue;
+    }
+    const matches = Array.isArray(track.reid_top_matches) ? track.reid_top_matches : [];
+    if (matches.length) {
+      const top = matches
+        .slice(0, 3)
+        .map((m) => `${m.person_id || "unknown"}=${Number(m.score || 0).toFixed(2)}`)
+        .join(",");
+      parts.push(`track=${tid} top=[${top}]`);
+    }
+  }
+  return parts.join(" ");
 }
 
 function clearGallery(camId) {

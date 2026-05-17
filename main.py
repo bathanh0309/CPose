@@ -35,6 +35,7 @@ from src.core.model_registry import ModelRegistry
 from src.core.sequential_camera import SequentialFileCamera
 from src.core.web_runtime import WebAIProcessor
 from src.utils.config import load_pipeline_cfg
+from src.core.pose.rtmpose_onnx import RTMPoseONNX
 
 BASE_DIR        = Path(__file__).resolve().parent
 CONFIG_FILE     = BASE_DIR / "data" / "config" / "resources.txt"
@@ -280,7 +281,11 @@ async def startup_event():
     cfg = get_pipeline_cfg()
     web_cfg = cfg.get("web", {})
     app.state.model_registry = ModelRegistry(cfg)
-    app.state.model_registry.preload({"detect", "pose", "reid"})
+    app.state.model_registry.preload({"detect"})
+    
+    # Preload RTMPose ONNX
+    app.state.pose_model = RTMPoseONNX("models/pose/rtmpose-t_256x192.onnx")
+    
     app.state.ai_executor = ThreadPoolExecutor(max_workers=int(web_cfg.get("ai_workers", 2)))
     app.state.encode_executor = ThreadPoolExecutor(max_workers=int(web_cfg.get("encode_workers", 1)))
 
@@ -654,6 +659,7 @@ async def stream_video(
         modules=active_modules,
         cfg=cfg,
         model_registry=getattr(app.state, "model_registry", None),
+        pose_model=getattr(app.state, "pose_model", None),
     )
 
     if not session_id:

@@ -87,6 +87,7 @@ class WebAIProcessor:
         modules: set[str],
         cfg: dict[str, Any],
         model_registry: ModelRegistry | None = None,
+        pose_model=None,
     ):
         self.camera_id = str(camera_id)
         self.cfg = cfg
@@ -116,10 +117,16 @@ class WebAIProcessor:
         tracking_cfg = cfg.get("tracking", {})
         self.detector = self.registry.get_detector()
         need_pose_at_start = bool({"pose", "adl"} & self.modules)
-        self.pose_model: YOLOPoseUltralytics | None = (
-            self.registry.get_pose_model() if need_pose_at_start else getattr(self.registry, "pose_model", None)
-        )
-        self._pose_model_error: str | None = self.registry.error_for("pose")
+        self.pose_model = pose_model
+        infer_every = int(cfg.get("pose", {}).get("infer_every_n_frames", 2))
+        print("  ╔══════════════════════════════════════════════════════╗")
+        print("  ║             CPose Pose Estimation Config             ║")
+        print("  ╠═════════════════╦══════════════════════╦════════════╣")
+        print("  ║ Role            ║ Model                ║ Status     ║")
+        print("  ╠═════════════════╬══════════════════════╬════════════╣")
+        print(f"  ║ Primary         ║ RTMPose ONNX         ║ {'OK' if self.pose_model else 'FAIL':<10} ║")
+        print("  ╚═════════════════╩══════════════════════╩════════════╝")
+        print(f"  OneEuroFilter: enabled | infer_every_n: {infer_every}")
 
         self.tracker = ByteTrackNumpy(
             high_thresh=float(tracking_cfg.get("track_thresh", tracking_cfg.get("conf", 0.45))),
@@ -302,7 +309,15 @@ class WebAIProcessor:
         tid = int(det.get("track_id", -1))
         cached = bool(det.get("cached", False))
         conf = float(det.get("score", 0.0))
-        parts = [f"track={tid}"]
+        reid_info = self.reid_gid_cache.get(tid, {})
+        gid = str(reid_info.get("gid", "unknown"))
+        reid_score = float(reid_info.get("score", 0.0) or 0.0)
+        if gid and gid not in {"unknown", "too_small"} and not gid.startswith("gid_"):
+            parts = [f"ID={gid}", f"r={reid_score:.2f}[B]"]
+        else:
+            parts = [f"track={tid}"]
+            if reid_score > 0:
+                parts.append(f"r={reid_score:.2f}[B]")
         if cached:
             parts.append("cached")
         parts.append(f"conf={conf:.2f}")
@@ -330,6 +345,7 @@ class WebAIProcessor:
                 "age": int(det.get("age", 0)),
                 "gid": self.reid_gid_cache.get(tid, {}).get("gid", "unknown"),
                 "reid_score": round(float(self.reid_gid_cache.get(tid, {}).get("score", 0.0)), 3),
+                "reid_top_matches": self.reid_gid_cache.get(tid, {}).get("top_matches", []),
                 "adl_label": adl_status.get("label") if adl_status else "collecting",
                 "adl_score": round(float(adl_status.get("score", 0.0)), 3) if adl_status else 0.0,
             })
@@ -431,19 +447,17 @@ class WebAIProcessor:
         pose_interval = max(1, int(self.cfg.get("pose", {}).get("infer_every_n_frames", 4)))
         run_pose = need_pose and fresh_tracked and (self.frame_idx % pose_interval == 0)
         if run_pose:
-            if self._ensure_pose_model():
-                try:
-                    t1 = time.perf_counter()
-                    with self.registry.locks["pose"]:
-                        fresh_detections: list[dict[str, Any]] = self.pose_model.estimate(frame, fresh_tracked)
-                    fresh_detections = self._smooth_pose_keypoints(fresh_detections)
-                    pose_ms = (time.perf_counter() - t1) * 1000.0
-                except Exception as exc:
-                    logs.append(("warning", f"Pose failed: {type(exc).__name__}: {exc}"))
-                    fresh_detections = fresh_tracked
-            else:
+            try:
+                t1 = time.perf_counter()
+                for track in fresh_tracked:
+                    kps = self.pose_manager.estimate(frame, track["bbox"])
+                    if kps is not None:
+                        track["keypoints"] = kps
+                fresh_detections = self._smooth_pose_keypoints(fresh_tracked)
+                pose_ms = (time.perf_counter() - t1) * 1000.0
+            except Exception as exc:
+                logs.append(("warning", f"Pose failed: {type(exc).__name__}: {exc}"))
                 fresh_detections = fresh_tracked
-                logs.append(("warning", f"Pose model unavailable: {self._pose_model_error}"))
         else:
             fresh_detections = fresh_tracked
 
@@ -572,7 +586,7 @@ class WebAIProcessor:
             print(
                 f"[METRIC] fps={fps:.1f} | det={len(bboxes)} | live={live_tracked} display={display_tracked} | "
                 f"id_max={id_max} | pose={avg_pose:.1f}ms | reid={avg_reid:.1f}ms | "
-                f"adl={avg_adl:.1f}ms | total={avg_total:.1f}ms"
+                f"adl={avg_adl:.1f}ms | total={avg_total:.1f}ms | pose_backend={self.pose_manager.active_backend}"
             )
 
         return frame, logs, base_metrics
@@ -632,24 +646,38 @@ class WebAIProcessor:
 
             if gallery_empty:
                 gid, score = self._next_temp_gid(tid), 0.0
-                self.reid_gid_cache[tid] = {"gid": "unknown", "score": score}
+                self.reid_gid_cache[tid] = {"gid": "unknown", "score": score, "top_matches": []}
                 self.reid_last_frame[f"reid_{tid}"] = self.frame_idx
             else:
                 try:
                     prev_gid = self.reid_gid_cache.get(tid, {}).get("gid")
                     gid, score = self.reid.identify(crop, area)
-                    self.reid_gid_cache[tid] = {"gid": gid, "score": score}
+                    top_matches = [
+                        {"person_id": str(pid), "score": round(float(match_score), 3)}
+                        for pid, match_score, _ in self.reid.get_top_matches(crop, topk=3)
+                    ]
+                    self.reid_gid_cache[tid] = {
+                        "gid": gid,
+                        "score": score,
+                        "top_matches": top_matches,
+                    }
                     self.reid_last_frame[f"reid_{tid}"] = self.frame_idx
 
                     # Log only on gid change or every 30 frames
                     last_log = self._reid_gid_log_frame.get(tid, -999999)
                     if prev_gid != gid or self.frame_idx - last_log >= log_interval:
-                        logs.append(("ai", f"ReID: track={tid} gid={gid} score={score:.2f}"))
+                        top_text = ", ".join(
+                            f"{item['person_id']}={float(item['score']):.2f}"
+                            for item in top_matches
+                        )
+                        suffix = f" top=[{top_text}]" if top_text else ""
+                        logs.append(("ai", f"ReID: track={tid} gid={gid} score={score:.2f}{suffix}"))
                         self._reid_gid_log_frame[tid] = self.frame_idx
 
                 except Exception as exc:
                     gid = self._next_temp_gid(tid)
                     score = 0.0
+                    self.reid_gid_cache[tid] = {"gid": "unknown", "score": score, "top_matches": []}
                     logs.append(("warning", f"ReID error track={tid}: {exc}"))
 
             self.reid_last_frame[tid] = self.frame_idx
@@ -806,6 +834,7 @@ class WebAIProcessor:
             "track_id": tid,
             "global_id": reid_info.get("gid", "unknown"),
             "reid_score": round(float(reid_info.get("score", 0.0)), 3),
+            "reid_top_matches": reid_info.get("top_matches", []),
             "conf": round(float(det.get("score", 0.0)), 2),
             "track_conf": round(float(det.get("score", 0.0)), 2),
             "adl_label": adl_status.get("label") if adl_status else None,

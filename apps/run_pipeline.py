@@ -17,6 +17,7 @@ from collections import deque
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -116,6 +117,117 @@ def adl_label(status: dict | None) -> str:
     return f"ADL: {s}"
 
 
+def l2_normalize(vec):
+    if vec is None:
+        return None
+    arr = np.asarray(vec, dtype=np.float32).reshape(-1)
+    norm = np.linalg.norm(arr) + 1e-12
+    return arr / norm
+
+
+def cosine_sim(a, b):
+    if a is None or b is None:
+        return None
+    a = l2_normalize(a)
+    b = l2_normalize(b)
+    if a is None or b is None:
+        return None
+    if a.shape != b.shape:
+        return None
+    return float(np.dot(a, b))
+
+
+def load_face_prototypes(gallery_sources):
+    """Load face prototypes from gallery paths (face_*.npy or .pkl with face.prototype).
+
+    Returns dict: person_id -> l2-normalized prototype (np.ndarray).
+    """
+    prototypes = {}
+    if not gallery_sources:
+        return prototypes
+    import pickle
+    for src in gallery_sources or []:
+        try:
+            p = Path(src)
+            if p.is_file():
+                if p.suffix.lower() == ".pkl":
+                    try:
+                        with p.open("rb") as fh:
+                            data = pickle.load(fh)
+                        face = data.get("face") if isinstance(data, dict) else None
+                        proto = face.get("prototype") if isinstance(face, dict) else None
+                        if proto is not None:
+                            pid = str(data.get("person_id") or p.stem.replace("_embeddings", ""))
+                            prototypes[pid] = l2_normalize(proto)
+                    except Exception:
+                        continue
+                continue
+            if p.is_dir():
+                arrs = []
+                for f in sorted(p.glob("face_*.npy")):
+                    try:
+                        arr = np.load(str(f)).astype(np.float32).reshape(-1)
+                        arrs.append(arr)
+                    except Exception:
+                        continue
+                if arrs:
+                    proto = np.mean(np.stack(arrs, axis=0), axis=0)
+                    proto = proto / (np.linalg.norm(proto) + 1e-12)
+                    prototypes[p.name] = proto.astype(np.float32)
+                    continue
+                # fallback: check for pkl inside dir
+                for f in sorted(p.glob("*.pkl")):
+                    try:
+                        with f.open("rb") as fh:
+                            data = pickle.load(fh)
+                        face = data.get("face") if isinstance(data, dict) else None
+                        proto = face.get("prototype") if isinstance(face, dict) else None
+                        if proto is not None:
+                            pid = str(data.get("person_id") or f.stem.replace("_embeddings", ""))
+                            prototypes[pid] = l2_normalize(proto)
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+    return prototypes
+
+
+def load_face_model(enabled: bool):
+    if not enabled:
+        return None
+    try:
+        from insightface.app import FaceAnalysis
+    except Exception:
+        logger.warning("Face model (insightface) not available.")
+        return None
+    try:
+        app = FaceAnalysis(name="buffalo_s", providers=["CPUExecutionProvider"])
+        app.prepare(ctx_id=-1, det_size=(640, 640))
+        return app
+    except Exception as exc:
+        logger.warning(f"Init face model failed: {exc}")
+        return None
+
+
+def extract_face_feat(face_model, crop_bgr):
+    if face_model is None or crop_bgr is None or crop_bgr.size == 0:
+        return None
+    try:
+        faces = face_model.get(crop_bgr)
+        if not faces:
+            return None
+        face = max(faces, key=lambda item: (item.bbox[2] - item.bbox[0]) * (item.bbox[3] - item.bbox[1]))
+        proto = getattr(face, "normed_embedding", None)
+        if proto is None:
+            return None
+        arr = np.asarray(proto, dtype=np.float32).reshape(-1)
+        norm = np.linalg.norm(arr) + 1e-12
+        return (arr / norm).astype(np.float32)
+    except Exception:
+        return None
+
+
 def update_rule_window(rule_windows, track_id, keypoints, keypoint_scores, maxlen):
     if keypoints is None:
         return None
@@ -173,6 +285,117 @@ def draw_object(frame, bbox, label):
         2,
         cv2.LINE_AA,
     )
+
+
+def assign_unique_reid_matches(
+    reid_candidates,
+    threshold: float,
+    prev_gid_map: dict | None = None,
+    thresholds_overrides: dict | None = None,
+    prev_hold_map: dict | None = None,
+    min_hold_frames: int = 0,
+):
+    """Greedily assign at most one gallery ID to one bbox per frame.
+
+    Supports candidate tuples in two formats:
+      - legacy: (score, tid, person_id)
+      - extended: (sort_score, tid, person_id, body_score, face_score)
+
+    thresholds_overrides may include modality-specific keys:
+      - 'body', 'face' (base thresholds)
+      - 'known_to_known', 'unknown_to_known', 'known_to_unknown' (fallbacks)
+      - 'body_known_to_known', 'face_known_to_known', etc. (optional)
+    """
+    assignments: dict[int, tuple[str, float]] = {}
+    used_ids: set[str] = set()
+    overrides = thresholds_overrides or {}
+    known_to_known = float(overrides.get("known_to_known", threshold))
+    unknown_to_known = float(overrides.get("unknown_to_known", threshold))
+    known_to_unknown = float(overrides.get("known_to_unknown", threshold))
+
+    body_base = float(overrides.get("body", overrides.get("threshold_body", threshold)))
+    face_base = float(overrides.get("face", overrides.get("threshold_face", threshold)))
+
+    body_known_to_known = float(overrides.get("body_known_to_known", overrides.get("known_to_known", body_base)))
+    face_known_to_known = float(overrides.get("face_known_to_known", overrides.get("known_to_known", face_base)))
+    body_unknown_to_known = float(overrides.get("body_unknown_to_known", overrides.get("unknown_to_known", body_base)))
+    face_unknown_to_known = float(overrides.get("face_unknown_to_known", overrides.get("unknown_to_known", face_base)))
+    body_known_to_unknown = float(overrides.get("body_known_to_unknown", overrides.get("known_to_unknown", body_base)))
+    face_known_to_unknown = float(overrides.get("face_known_to_unknown", overrides.get("known_to_unknown", face_base)))
+
+    # Protective threshold if a track's current gid has not yet been held
+    known_to_known_protect = float(overrides.get("known_to_known_protect", min(0.999, known_to_known + 0.15)))
+
+    for item in sorted(reid_candidates, key=lambda item: item[0], reverse=True):
+        # Parse candidate tuple
+        try:
+            if len(item) >= 5:
+                sort_score, tid, person_id, body_score, face_score = item
+                body_score = None if body_score is None else float(body_score)
+                face_score = None if face_score is None else float(face_score)
+                score = float(sort_score)
+            else:
+                score, tid, person_id = item
+                body_score = float(score)
+                face_score = None
+        except Exception:
+            continue
+
+        tid_int = int(tid)
+        person_id_str = str(person_id)
+
+        prev_gid = None
+        if prev_gid_map is not None:
+            pg = prev_gid_map.get(tid_int)
+            if isinstance(pg, dict):
+                prev_gid = pg.get("gid")
+            else:
+                prev_gid = pg
+
+        # Decide modality to use for thresholding (prefer face when available and strong)
+        modality = "body"
+        used_score = body_score
+        if face_score is not None:
+            # prefer face if it is at least as strong as body or above face_base
+            if face_score >= face_base or (body_score is None or face_score >= body_score):
+                modality = "face"
+                used_score = face_score
+            else:
+                modality = "body"
+                used_score = body_score if body_score is not None else face_score
+
+        # Pick applicable threshold depending on transition and modality
+        if prev_gid and prev_gid not in {"unknown", "too_small"} and person_id_str not in {"unknown", "too_small"} and person_id_str != prev_gid:
+            applicable_threshold = face_known_to_known if modality == "face" else body_known_to_known
+            # If the previous gid was held for fewer frames than configured, protect against switching
+            try:
+                hold_count = 0
+                if prev_hold_map is not None:
+                    hold_count = int(prev_hold_map.get(tid_int, 0))
+            except Exception:
+                hold_count = 0
+            min_hold = int(min_hold_frames or int(overrides.get("min_hold_frames", 0)))
+            if hold_count < min_hold:
+                applicable_threshold = max(applicable_threshold, known_to_known_protect)
+        elif (prev_gid in {None, "unknown"} and person_id_str not in {"unknown", "too_small"}):
+            applicable_threshold = face_unknown_to_known if modality == "face" else body_unknown_to_known
+        elif (prev_gid and prev_gid not in {"unknown", "too_small"} and person_id_str in {"unknown"}):
+            applicable_threshold = face_known_to_unknown if modality == "face" else body_known_to_unknown
+        else:
+            applicable_threshold = face_base if modality == "face" else body_base
+
+        applicable_threshold = max(0.0, min(0.999, float(applicable_threshold)))
+
+        if used_score is None or used_score < applicable_threshold:
+            continue
+
+        if tid_int in assignments or person_id_str in used_ids:
+            continue
+
+        assignments[tid_int] = (person_id_str, float(used_score))
+        used_ids.add(person_id_str)
+
+    return assignments
 
 
 def main():
@@ -238,10 +461,25 @@ def main():
             reid_warning = "OSNet gallery empty"
         else:
             logger.info(f"OSNet gallery loaded: {loaded} persons")
+            # Try to load face prototypes (face_*.npy or pkl) from the same gallery sources
+            try:
+                face_prototypes = load_face_prototypes(gallery_sources)
+                face_model = load_face_model(bool(face_prototypes))
+                if face_prototypes:
+                    logger.info(f"Loaded face prototypes: {len(face_prototypes)} persons")
+                else:
+                    face_prototypes = {}
+                    face_model = None
+            except Exception as exc:
+                logger.warning(f"Face prototypes unavailable: {exc}")
+                face_prototypes = {}
+                face_model = None
 
     except Exception as exc:
         reid_warning = f"OSNet ReID unavailable: {exc}"
         logger.warning(reid_warning)
+        face_prototypes = {}
+        face_model = None
 
     # ── ADL buffer + EfficientGCN ────────────────────────────────────────────
     adl_weights = cfg["adl"].get("weights", "models/2015_EfficientGCN-B0_ntu-xsub120.pth.tar")
@@ -324,6 +562,10 @@ def main():
     track_status: dict[int, dict] = {}
     rule_windows: dict[int, dict] = {}
     prev_track_ids: set[int] = set()
+    # Mapping local track id -> last assigned global id (e.g., gallery person id or 'unknown')
+    track_gid_map: dict[int, str] = {}
+    # How many consecutive frames the current gid has been held for each track
+    track_gid_hold_count: dict[int, int] = {}
     last_query_crop = None
     last_matches: list = []
     frame_idx = -1
@@ -384,7 +626,154 @@ def main():
                     ui_logger.log(args.camera_id, "INFO", "pipeline", f"Lost track id={tid}")
             for tid in lost_ids:
                 track_status.pop(tid, None)
+                # cleanup reid maps for dead tracks
+                try:
+                    track_gid_map.pop(tid, None)
+                except Exception:
+                    pass
+                try:
+                    track_gid_hold_count.pop(tid, None)
+                except Exception:
+                    pass
             prev_track_ids = curr_ids
+
+            reid_frame_data: dict[int, dict] = {}
+            reid_candidates: list = []
+            if osnet_reid is not None:
+                for det_reid in detections:
+                    tid_reid = int(det_reid.get("track_id", -1))
+                    crop_reid, bbox_reid = clip_bbox(frame, det_reid["bbox"])
+                    if tid_reid < 0 or crop_reid is None:
+                        continue
+                    try:
+                        x1, y1, x2, y2 = map(float, det_reid["bbox"])
+                        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                        if area < osnet_reid.min_crop_area:
+                            reid_frame_data[tid_reid] = {
+                                "gid": "too_small",
+                                "score": 0.0,
+                                "status": "too_small",
+                                "matches": [],
+                                "crop": crop_reid,
+                                "bbox_clipped": bbox_reid,
+                            }
+                            continue
+                        matches = osnet_reid.get_top_matches(crop_reid, topk=3)
+                        reid_frame_data[tid_reid] = {
+                            "gid": "unknown",
+                            "score": 0.0,
+                            "status": "gallery_miss",
+                            "matches": matches,
+                            "crop": crop_reid,
+                            "bbox_clipped": bbox_reid,
+                        }
+                        # Extract face feature once per detection (if face model available)
+                        face_feat = None
+                        try:
+                            if "face_model" in globals() and face_model is not None:
+                                face_feat = extract_face_feat(face_model, crop_reid)
+                        except Exception:
+                            face_feat = None
+
+                        for person_id, score, _ in matches:
+                            # Compute face similarity to gallery prototype if available
+                            face_sim = None
+                            try:
+                                proto = None
+                                if "face_prototypes" in globals() and face_feat is not None:
+                                    proto = face_prototypes.get(str(person_id))
+                                if proto is not None and face_feat is not None:
+                                    face_sim = cosine_sim(face_feat, proto)
+                            except Exception:
+                                face_sim = None
+                            # sort by face when available, else by body score
+                            sort_score = float(face_sim) if face_sim is not None else float(score)
+                            reid_candidates.append((float(sort_score), tid_reid, str(person_id), float(score), None if face_sim is None else float(face_sim)))
+                    except Exception as exc:
+                        logger.warning(f"[frame {frame_idx}] ReID failed tid={tid_reid}: {exc}", exc_info=True)
+                        reid_frame_data[tid_reid] = {
+                            "gid": f"track_{tid_reid}",
+                            "score": 0.0,
+                            "status": "reid_failed",
+                            "matches": [],
+                            "crop": crop_reid,
+                            "bbox_clipped": bbox_reid,
+                        }
+
+                # Determine whether to apply transition thresholds
+                base_threshold = float(getattr(osnet_reid, "threshold", cfg["reid"].get("threshold", 0.65)))
+                use_transitions = bool(cfg.get("reid", {}).get("use_transition_thresholds", True))
+                if use_transitions:
+                    unique_assignments = assign_unique_reid_matches(
+                        reid_candidates,
+                        threshold=base_threshold,
+                        prev_gid_map=track_gid_map,
+                        thresholds_overrides={
+                            "known_to_known": cfg["reid"].get("threshold_known_to_known", base_threshold),
+                            "unknown_to_known": cfg["reid"].get("threshold_unknown_to_known", base_threshold),
+                            "known_to_unknown": cfg["reid"].get("threshold_known_to_unknown", base_threshold),
+                            "body": cfg["reid"].get("threshold_body", cfg["reid"].get("threshold", base_threshold)),
+                            "face": cfg["reid"].get("threshold_face", cfg["reid"].get("threshold", base_threshold)),
+                            "body_known_to_known": cfg["reid"].get("threshold_body_known_to_known", cfg["reid"].get("threshold_known_to_known", base_threshold)),
+                            "face_known_to_known": cfg["reid"].get("threshold_face_known_to_known", cfg["reid"].get("threshold_known_to_known", base_threshold)),
+                            "body_unknown_to_known": cfg["reid"].get("threshold_body_unknown_to_known", cfg["reid"].get("threshold_unknown_to_known", base_threshold)),
+                            "face_unknown_to_known": cfg["reid"].get("threshold_face_unknown_to_known", cfg["reid"].get("threshold_unknown_to_known", base_threshold)),
+                            "body_known_to_unknown": cfg["reid"].get("threshold_body_known_to_unknown", cfg["reid"].get("threshold_known_to_unknown", base_threshold)),
+                            "face_known_to_unknown": cfg["reid"].get("threshold_face_known_to_unknown", cfg["reid"].get("threshold_known_to_unknown", base_threshold)),
+                            "known_to_known_protect": cfg["reid"].get("threshold_known_to_known_protect", None),
+                        },
+                        prev_hold_map=track_gid_hold_count,
+                        min_hold_frames=int(cfg["reid"].get("min_hold_frames", 0)),
+                    )
+                else:
+                    # Simple greedy assignment using base threshold (preferred for stable UI)
+                    unique_assignments = assign_unique_reid_matches(
+                        reid_candidates,
+                        threshold=base_threshold,
+                        thresholds_overrides={
+                            "body": cfg["reid"].get("threshold_body", cfg["reid"].get("threshold", base_threshold)),
+                            "face": cfg["reid"].get("threshold_face", cfg["reid"].get("threshold", base_threshold)),
+                            "known_to_known_protect": cfg["reid"].get("threshold_known_to_known_protect", None),
+                        },
+                        prev_hold_map=track_gid_hold_count,
+                        min_hold_frames=int(cfg["reid"].get("min_hold_frames", 0)),
+                    )
+
+                # Apply assignments and also reorder the per-track matches so the
+                # ReID panel shows the assigned gallery id first (keeps UI in sync)
+                for tid_assigned, (gid_assigned, score_assigned) in unique_assignments.items():
+                    if tid_assigned in reid_frame_data:
+                        info = reid_frame_data[tid_assigned]
+                        info["gid"] = gid_assigned
+                        info["score"] = score_assigned
+                        info["status"] = "gallery_match"
+                        matches = info.get("matches") or []
+                        # Move assigned gid to front of matches list if present
+                        try:
+                            idx = next(i for i, (pid, _, _) in enumerate(matches) if str(pid) == str(gid_assigned))
+                        except StopIteration:
+                            idx = None
+                        if idx is not None and idx != 0:
+                            m = matches.pop(idx)
+                            matches.insert(0, m)
+                        info["matches"] = matches
+
+                # Update per-track last assigned global id mapping so next-frame matching
+                # can apply per-transition thresholds (ID->ID harder, unknown<->ID easier).
+                for tid_upd, info in reid_frame_data.items():
+                    try:
+                        gid_now = info.get("gid", "unknown")
+                        if gid_now is None:
+                            gid_now = "unknown"
+                        tid_key = int(tid_upd)
+                        old_gid = track_gid_map.get(tid_key)
+                        if old_gid == gid_now:
+                            track_gid_hold_count[tid_key] = int(track_gid_hold_count.get(tid_key, 0)) + 1
+                        else:
+                            track_gid_hold_count[tid_key] = 1
+                        track_gid_map[tid_key] = str(gid_now)
+                    except Exception:
+                        pass
 
             # ── 3+4: Body+Face ReID → GlobalID ──────────────────────────────
             for det in detections:
@@ -396,20 +785,16 @@ def main():
                 # body_only mode: ArcFace is not implemented in realtime yet.
 
                 # ── Assign GlobalID ──────────────────────────────────────────
-                if osnet_reid is not None and tid >= 0 and crop is not None:
-                    try:
-                        x1, y1, x2, y2 = map(float, det["bbox"])
-                        area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-                        gid, reid_score = osnet_reid.identify(crop, area)
-                        reid_status = "gallery_match" if gid != "unknown" else "gallery_miss"
-                        weights = {"mode": "body_only"}
-                        last_matches = osnet_reid.get_top_matches(crop, topk=3)
-                        last_query_crop = crop.copy()
-                    except Exception as exc:
-                        logger.warning(f"[frame {frame_idx}] ReID failed tid={tid}: {exc}", exc_info=True)
-                        gid, reid_score, reid_status, weights = f"track_{tid}", 0.0, "reid_failed", {}
-
-                    # Top-K matches cho panel (nếu gallery có data)
+                if osnet_reid is not None and tid >= 0 and tid in reid_frame_data:
+                    info = reid_frame_data[tid]
+                    gid = info.get("gid", "unknown")
+                    reid_score = float(info.get("score", 0.0))
+                    reid_status = info.get("status", "gallery_miss")
+                    weights = {"mode": "body_only"}
+                    if info.get("matches"):
+                        last_matches = info["matches"]
+                    if info.get("crop") is not None:
+                        last_query_crop = info["crop"].copy()
                 else:
                     gid = f"track_{tid}" if tid >= 0 else "unknown"
                     reid_score, reid_status, weights = 0.0, "reid_unavailable", {}
